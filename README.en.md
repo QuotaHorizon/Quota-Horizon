@@ -31,21 +31,21 @@ These previews use actual product components with synthetic data.
 
 **Menu-bar popover**: quota, reset countdowns and access to accounts.
 
-![Menu-bar popover](docs/images/menu-popover-preview.png)
+<img src="docs/images/menu-popover-preview.en.png" alt="Menu-bar popover" width="460">
 
 **Account overview**: quota, plan type and reset times for each account.
 
-![Account overview](docs/images/accounts-preview.png)
+![Account overview](docs/images/accounts-preview.en.png)
 
 **Reset radar**: source probabilities, related posts and reply context.
 
-![Reset radar](docs/images/reset-radar-preview.png)
+![Reset radar](docs/images/reset-radar-preview.en.png)
 
 **Quota history**: usage trends and an activity heatmap.
 
-![Quota history](docs/images/history-light.png)
+![Quota history](docs/images/history-light.en.png)
 
-[View the dark interface](docs/images/history-dark.png)
+[View the dark interface](docs/images/history-dark.en.png)
 
 ## Data and settings
 

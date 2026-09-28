@@ -31,7 +31,7 @@ QuotaHorizon 还会自动汇集重置预测和相关公开发言，方便随时�
 
 **菜单栏弹窗**：额度、重置倒计时与账号入口。
 
-![菜单栏弹窗](docs/images/menu-popover-preview.png)
+<img src="docs/images/menu-popover-preview.png" alt="菜单栏弹窗" width="460">
 
 **多账号总览**：各账号的额度、套餐和重置时间。
 
