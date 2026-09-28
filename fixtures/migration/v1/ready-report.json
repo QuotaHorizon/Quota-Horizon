@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "1.0",
+  "status": "ready",
+  "reasonCodes": ["legacy_inventory_ready"],
+  "source": {
+    "product": "codex_quota_viewer",
+    "format": "quotaviewer-1.2.0-120",
+    "baselineCommit": "261fe1c",
+    "readOnly": true
+  },
+  "inventory": [
+    {"kind":"settings","state":"present","fileCount":1,"recordCount":1,"sourceBytes":422,"reasonCodes":["legacy_settings_valid"]},
+    {"kind":"account_index","state":"present","fileCount":1,"recordCount":1,"sourceBytes":365,"reasonCodes":["legacy_account_index_valid"]},
+    {"kind":"account_records","state":"present","fileCount":3,"recordCount":1,"sourceBytes":451,"reasonCodes":["legacy_account_records_valid"]},
+    {"kind":"quota_cache","state":"present","fileCount":1,"recordCount":1,"sourceBytes":270,"reasonCodes":["legacy_quota_cache_valid"]},
+    {"kind":"session_manager_settings","state":"present","fileCount":1,"recordCount":1,"sourceBytes":23,"reasonCodes":["legacy_session_settings_valid"]},
+    {"kind":"provider_mode","state":"present","fileCount":1,"recordCount":1,"sourceBytes":168,"reasonCodes":["legacy_provider_mode_valid"]},
+    {"kind":"restore_points","state":"present","fileCount":2,"recordCount":1,"sourceBytes":488,"reasonCodes":["legacy_restore_points_valid"]}
+  ],
+  "plan": [
+    {"target":"monitor_settings","disposition":"import","sourceItemCount":1,"expectedTargetCount":1,"reasonCode":"legacy_monitor_settings_ready"},
+    {"target":"shell_preferences","disposition":"import","sourceItemCount":1,"expectedTargetCount":1,"reasonCode":"legacy_shell_preferences_ready"},
+    {"target":"work_plan","disposition":"import","sourceItemCount":1,"expectedTargetCount":1,"reasonCode":"legacy_work_plan_ready"},
+    {"target":"account_vault","disposition":"review","sourceItemCount":1,"expectedTargetCount":1,"reasonCode":"legacy_account_identity_resolution_required"},
+    {"target":"quota_cache","disposition":"review","sourceItemCount":1,"expectedTargetCount":1,"reasonCode":"legacy_quota_binding_review_required"},
+    {"target":"session_preferences","disposition":"import","sourceItemCount":1,"expectedTargetCount":1,"reasonCode":"legacy_session_preferences_ready"},
+    {"target":"provider_mode_state","disposition":"review","sourceItemCount":1,"expectedTargetCount":1,"reasonCode":"legacy_provider_state_review_required"},
+    {"target":"restore_point_ledger","disposition":"review","sourceItemCount":1,"expectedTargetCount":1,"reasonCode":"legacy_restore_point_review_required"}
+  ],
+  "conflicts": [],
+  "spaceEstimate": {
+    "sourceBytes": 2187,
+    "minimumFreeBytes": 1052950,
+    "status": "target_preflight_required"
+  }
+}

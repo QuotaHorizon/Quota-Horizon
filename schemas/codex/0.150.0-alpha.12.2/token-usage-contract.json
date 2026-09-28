@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/codex/0.150.0-alpha.12.2/token-usage-contract.json",
+  "title": "Codex app-server token usage contract subset",
+  "description": "Reviewed account token-activity subset extracted from this exact Codex version's non-experimental generated schema. Per-thread usage is intentionally excluded from the product contract.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "summary"
+  ],
+  "properties": {
+    "summary": {
+      "$ref": "#/$defs/tokenUsageSummary"
+    },
+    "dailyUsageBuckets": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/dailyUsageBucket"
+      }
+    }
+  },
+  "$defs": {
+    "tokenUsageSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "lifetimeTokens": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "peakDailyTokens": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "longestRunningTurnSec": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "currentStreakDays": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "longestStreakDays": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "dailyUsageBucket": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "startDate",
+        "tokens"
+      ],
+      "properties": {
+        "startDate": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer"
+        }
+      }
+    }
+  }
+}

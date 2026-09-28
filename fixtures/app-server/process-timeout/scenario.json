@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "name": "process-timeout",
+  "steps": [
+    {
+      "expect_method": "initialize",
+      "action": {
+        "type": "no_response",
+        "delay_ms": 15000
+      }
+    }
+  ]
+}

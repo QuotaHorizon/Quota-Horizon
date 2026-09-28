@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "name": "account-updated-during-read",
+  "steps": [
+    {
+      "expect_method": "initialize",
+      "action": {
+        "type": "respond",
+        "result": {
+          "platformFamily": "unix",
+          "platformOs": "macos",
+          "userAgent": "codex-cli/0.150.0-alpha.12.2"
+        }
+      }
+    },
+    {
+      "expect_method": "initialized",
+      "action": {
+        "type": "no_response",
+        "delay_ms": 0
+      }
+    },
+    {
+      "expect_method": "account/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "account": { "type": "chatgpt", "planType": "plus" },
+          "requiresOpenaiAuth": true
+        }
+      }
+    },
+    {
+      "expect_method": "account/rateLimits/read",
+      "action": {
+        "type": "notify_then_respond",
+        "method": "account/updated",
+        "params": {
+          "authMode": "chatgpt",
+          "planType": "pro"
+        },
+        "result": {
+          "rateLimits": { "primary": null, "secondary": null }
+        }
+      }
+    }
+  ]
+}

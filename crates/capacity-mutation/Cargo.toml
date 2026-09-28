@@ -1,0 +1,18 @@
+[package]
+name = "capacity-mutation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+capacity-domain = { path = "../capacity-domain" }
+capacity-store = { path = "../capacity-store" }
+capacity-vault = { path = "../capacity-vault" }
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

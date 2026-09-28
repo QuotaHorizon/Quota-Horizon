@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/codex/0.150.0-alpha.12.2/account-update-contract.json",
+  "title": "Codex app-server account update contract subset",
+  "description": "Reviewed account/updated notification params extracted from this exact Codex version's non-experimental generated schema. Values are validated only to invalidate in-flight and session-cached snapshots; they are not account identifiers.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "authMode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 64
+    },
+    "planType": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 64
+    }
+  }
+}

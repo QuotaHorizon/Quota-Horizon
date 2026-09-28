@@ -1,0 +1,9 @@
+[package]
+name = "capacity-vault"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+capacity-domain = { path = "../capacity-domain" }
+capacity-store = { path = "../capacity-store" }

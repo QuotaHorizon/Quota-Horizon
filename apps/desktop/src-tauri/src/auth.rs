@@ -1,0 +1,440 @@
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine as _,
+};
+use chrono::{DateTime, Utc};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+pub(crate) fn decode_jwt(token: &str) -> Result<Value, String> {
+    let payload = token
+        .split('.')
+        .nth(1)
+        .filter(|part| !part.is_empty())
+        .ok_or_else(|| "auth.json 中的 JWT 格式无效".to_string())?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| "auth.json 中的 JWT 无法解码".to_string())?;
+    serde_json::from_slice(&bytes)
+        .map_err(|_| "auth.json 中的 JWT payload 不是有效 JSON".to_string())
+}
+
+pub(crate) fn token_string<'a>(auth: &'a Value, key: &str) -> Option<&'a str> {
+    auth.get("tokens")?
+        .get(key)?
+        .as_str()
+        .filter(|value| !value.is_empty())
+}
+
+fn auth_claims(auth: &Value) -> Result<Value, String> {
+    let token = token_string(auth, "id_token")
+        .or_else(|| token_string(auth, "access_token"))
+        .ok_or_else(|| "auth.json 缺少 ChatGPT tokens".to_string())?;
+    decode_jwt(token)
+}
+
+fn nested_auth(claims: &Value) -> Option<&Value> {
+    claims.get("https://api.openai.com/auth")
+}
+
+pub(crate) fn subscription_active_until(auth: &Value) -> Option<String> {
+    let claims = decode_jwt(token_string(auth, "id_token")?).ok()?;
+    let value = nested_auth(&claims)?
+        .get("chatgpt_subscription_active_until")?
+        .as_str()?;
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.with_timezone(&Utc).to_rfc3339())
+}
+
+fn token_metadata<'a>(auth: &'a Value, key: &str) -> Option<&'a str> {
+    auth.get("tokens")?
+        .get(key)?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn is_agent_identity_auth(auth: &Value) -> bool {
+    auth.get("auth_mode")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.eq_ignore_ascii_case("agentIdentity"))
+        || auth.get("agent_identity").is_some_and(Value::is_object)
+}
+
+fn agent_identity(auth: &Value) -> Result<&Value, String> {
+    auth.get("agent_identity")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "auth.json 缺少 agent_identity 对象".to_string())
+}
+
+fn required_agent_identity_string<'a>(identity: &'a Value, key: &str) -> Result<&'a str, String> {
+    identity
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("auth.json 缺少 agent_identity.{key}"))
+}
+
+fn agent_identity_account_fields(
+    auth: &Value,
+) -> Result<(String, String, Option<String>, String), String> {
+    let identity = agent_identity(auth)?;
+    required_agent_identity_string(identity, "agent_runtime_id")?;
+    required_agent_identity_string(identity, "agent_private_key")?;
+    let account_id = identity
+        .get("account_id")
+        .or_else(|| identity.get("chatgpt_account_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "auth.json 缺少 agent_identity.account_id".to_string())?
+        .to_string();
+    let user_id = required_agent_identity_string(identity, "chatgpt_user_id")?;
+    let email = identity
+        .get("email")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("未知账户")
+        .to_string();
+    let plan = identity
+        .get("plan_type")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("ChatGPT")
+        .to_string();
+    let mut hasher = Sha256::new();
+    hasher.update(user_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(account_id.as_bytes());
+    let digest = hasher.finalize();
+    let id = digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok((email, plan, Some(account_id), id))
+}
+
+pub(crate) fn account_fields(
+    auth: &Value,
+) -> Result<(String, String, Option<String>, String), String> {
+    if is_agent_identity_auth(auth) {
+        return agent_identity_account_fields(auth);
+    }
+    let claims = auth_claims(auth).ok();
+    let nested = claims.as_ref().and_then(nested_auth);
+    let email = token_metadata(auth, "email")
+        .or_else(|| claims.as_ref()?.get("email")?.as_str())
+        .or_else(|| {
+            claims
+                .as_ref()?
+                .get("https://api.openai.com/profile")?
+                .get("email")?
+                .as_str()
+        })
+        .unwrap_or("未知账户")
+        .to_string();
+    let plan = token_metadata(auth, "plan_type")
+        .or_else(|| nested?.get("chatgpt_plan_type")?.as_str())
+        .unwrap_or("ChatGPT")
+        .to_string();
+    let account_id = token_metadata(auth, "account_id")
+        .or_else(|| token_metadata(auth, "chatgpt_account_id"))
+        .or_else(|| nested?.get("chatgpt_account_id")?.as_str())
+        .map(str::to_string);
+    let identity = token_metadata(auth, "chatgpt_user_id")
+        .or_else(|| token_metadata(auth, "user_id"))
+        .or_else(|| {
+            nested
+                .and_then(|value| {
+                    value
+                        .get("chatgpt_user_id")
+                        .or_else(|| value.get("user_id"))
+                })
+                .and_then(Value::as_str)
+        })
+        .or_else(|| claims.as_ref()?.get("sub")?.as_str())
+        .or_else(|| token_metadata(auth, "email"))
+        .or_else(|| claims.as_ref().map(|_| email.as_str()));
+    let identity = match identity {
+        Some(identity) => identity,
+        None => {
+            // Keep the original malformed-token error for ordinary auth.json files.
+            // sub2api's opaque access tokens instead carry an explicit stable identity.
+            auth_claims(auth)?;
+            unreachable!("decoded auth claims must contain an identity")
+        }
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(identity.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(account_id.as_deref().unwrap_or("personal").as_bytes());
+    let digest = hasher.finalize();
+    let id = digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok((email, plan, account_id, id))
+}
+
+pub(crate) fn validate_auth(auth: &Value) -> Result<(), String> {
+    if !auth.is_object() {
+        return Err("auth.json 顶层必须是对象".to_string());
+    }
+    if is_agent_identity_auth(auth) {
+        let identity = agent_identity(auth)?;
+        let private_key = required_agent_identity_string(identity, "agent_private_key")?;
+        let decoded = STANDARD.decode(private_key).map_err(|_| {
+            "auth.json 中的 agent_identity.agent_private_key 不是有效 Base64".to_string()
+        })?;
+        if decoded.len() < 32 {
+            return Err("auth.json 中的 agent_identity.agent_private_key 格式无效".to_string());
+        }
+        return agent_identity_account_fields(auth).map(|_| ());
+    }
+    token_string(auth, "access_token")
+        .ok_or_else(|| "auth.json 缺少 tokens.access_token".to_string())?;
+    account_fields(auth).map(|_| ())
+}
+
+/// Bring a managed ChatGPT credential up to the shape expected by current Codex builds.
+/// Unknown fields are deliberately preserved so newer Codex metadata can round-trip through
+/// QuotaHorizon without being discarded.
+pub(crate) fn canonicalize_chatgpt_auth(auth: &mut Value) -> Result<bool, String> {
+    if is_agent_identity_auth(auth) {
+        let original = auth.clone();
+        let auth_object = auth
+            .as_object_mut()
+            .ok_or_else(|| "auth.json 顶层必须是对象".to_string())?;
+        auth_object.insert(
+            "auth_mode".to_string(),
+            Value::String("agentIdentity".to_string()),
+        );
+        return Ok(*auth != original);
+    }
+    let original = auth.clone();
+    let access_token = token_string(auth, "access_token").map(str::to_string);
+    let valid_id_token = token_string(auth, "id_token")
+        .filter(|token| decode_jwt(token).is_ok())
+        .map(str::to_string);
+
+    let auth_object = auth
+        .as_object_mut()
+        .ok_or_else(|| "auth.json 顶层必须是对象".to_string())?;
+    let tokens = auth_object
+        .get_mut("tokens")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "auth.json 缺少 tokens 对象".to_string())?;
+
+    if valid_id_token.is_none() {
+        if let Some(access_token) = access_token.filter(|token| decode_jwt(token).is_ok()) {
+            // Compatible account exports sometimes contain only an access JWT. Codex requires
+            // an id_token field to deserialize TokenData, and accepts the same claim layout.
+            tokens.insert("id_token".to_string(), Value::String(access_token));
+        } else if !tokens
+            .get("id_token")
+            .is_some_and(|value| value.is_string())
+        {
+            // Personal access tokens exported by sub2api are intentionally opaque. Codex still
+            // requires the structural field; account identity comes from explicit token metadata.
+            tokens.insert("id_token".to_string(), Value::String(String::new()));
+        }
+    }
+    if !tokens
+        .get("refresh_token")
+        .is_some_and(|value| value.is_string())
+    {
+        // TokenData structurally requires this field. An empty value keeps access-only imports
+        // usable until expiry while still making refresh failure explicit when it is attempted.
+        tokens.insert("refresh_token".to_string(), Value::String(String::new()));
+    }
+
+    auth_object.insert(
+        "auth_mode".to_string(),
+        Value::String("chatgpt".to_string()),
+    );
+    auth_object.insert("OPENAI_API_KEY".to_string(), Value::Null);
+    let last_refresh_is_valid = auth_object
+        .get("last_refresh")
+        .and_then(Value::as_str)
+        .is_some_and(|value| DateTime::parse_from_rfc3339(value).is_ok());
+    if !last_refresh_is_valid {
+        // Codex's structural timestamp must not invent a successful renewal.
+        // The epoch is an unknown-age sentinel, not the time of local parsing.
+        auth_object.insert(
+            "last_refresh".to_string(),
+            Value::String("1970-01-01T00:00:00Z".to_string()),
+        );
+    }
+
+    Ok(*auth != original)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn jwt(payload: Value) -> String {
+        format!(
+            "e30.{}.sig",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap())
+        )
+    }
+
+    #[test]
+    fn parses_account_identity_without_exposing_tokens() {
+        let auth = json!({
+            "tokens": {
+                "id_token": jwt(json!({
+                    "email": "person@example.com",
+                    "sub": "user-1",
+                    "https://api.openai.com/auth": {
+                        "chatgpt_plan_type": "plus",
+                        "chatgpt_account_id": "account-1"
+                    }
+                })),
+                "access_token": "header.payload.signature",
+                "refresh_token": "secret"
+            }
+        });
+        let (email, plan, account_id, id) = account_fields(&auth).unwrap();
+        assert_eq!(email, "person@example.com");
+        assert_eq!(plan, "plus");
+        assert_eq!(account_id.as_deref(), Some("account-1"));
+        assert_eq!(id.len(), 24);
+    }
+
+    #[test]
+    fn canonicalization_never_invents_a_new_credential_refresh_time() {
+        let mut auth = json!({"tokens": {"access_token": "synthetic", "chatgpt_user_id": "user", "account_id": "account"}});
+        assert!(canonicalize_chatgpt_auth(&mut auth).unwrap());
+        assert_eq!(auth["last_refresh"], "1970-01-01T00:00:00Z");
+        assert!(!canonicalize_chatgpt_auth(&mut auth).unwrap());
+        auth["last_refresh"] = json!("2026-09-07T00:00:00Z");
+        canonicalize_chatgpt_auth(&mut auth).unwrap();
+        assert_eq!(auth["last_refresh"], "2026-09-07T00:00:00Z");
+    }
+
+    #[test]
+    fn reads_subscription_active_until_from_id_token() {
+        let auth = json!({
+            "tokens": {
+                "id_token": jwt(json!({
+                    "https://api.openai.com/auth": {
+                        "chatgpt_subscription_active_until": "2026-09-04T15:23:39+00:00"
+                    }
+                }))
+            }
+        });
+
+        assert_eq!(
+            subscription_active_until(&auth).as_deref(),
+            Some("2026-09-04T15:23:39+00:00")
+        );
+    }
+
+    #[test]
+    fn ignores_missing_or_invalid_subscription_active_until() {
+        let missing = json!({ "tokens": { "id_token": jwt(json!({})) } });
+        let invalid = json!({
+            "tokens": {
+                "id_token": jwt(json!({
+                    "https://api.openai.com/auth": {
+                        "chatgpt_subscription_active_until": "not-a-date"
+                    }
+                }))
+            }
+        });
+
+        assert_eq!(subscription_active_until(&missing), None);
+        assert_eq!(subscription_active_until(&invalid), None);
+    }
+
+    #[test]
+    fn canonicalizes_chatgpt_auth_without_discarding_newer_fields() {
+        let access_token = jwt(json!({
+            "email": "person@example.com",
+            "sub": "user-1"
+        }));
+        let mut auth = json!({
+            "tokens": { "access_token": access_token },
+            "newer_codex_field": { "keep": true }
+        });
+
+        assert!(canonicalize_chatgpt_auth(&mut auth).unwrap());
+        assert_eq!(auth["auth_mode"], "chatgpt");
+        assert!(auth["OPENAI_API_KEY"].is_null());
+        assert_eq!(auth["tokens"]["id_token"], auth["tokens"]["access_token"]);
+        assert_eq!(auth["tokens"]["refresh_token"], "");
+        assert!(DateTime::parse_from_rfc3339(auth["last_refresh"].as_str().unwrap()).is_ok());
+        assert_eq!(auth["newer_codex_field"]["keep"], true);
+        validate_auth(&auth).unwrap();
+    }
+
+    #[test]
+    fn accepts_opaque_access_tokens_with_exported_identity_metadata() {
+        let mut auth = json!({
+            "tokens": {
+                "access_token": "at-opaque-personal-access-token",
+                "account_id": "account-1",
+                "chatgpt_user_id": "user-1",
+                "email": "person@example.com",
+                "plan_type": "team"
+            }
+        });
+
+        canonicalize_chatgpt_auth(&mut auth).unwrap();
+        validate_auth(&auth).unwrap();
+        assert_eq!(auth["tokens"]["id_token"], "");
+        assert_eq!(auth["tokens"]["refresh_token"], "");
+
+        let (email, plan, account_id, id) = account_fields(&auth).unwrap();
+        assert_eq!(email, "person@example.com");
+        assert_eq!(plan, "team");
+        assert_eq!(account_id.as_deref(), Some("account-1"));
+        assert_eq!(id.len(), 24);
+    }
+
+    #[test]
+    fn canonicalization_preserves_a_valid_last_refresh() {
+        let timestamp = "2026-07-01T02:03:04.123456Z";
+        let token = jwt(json!({ "email": "person@example.com", "sub": "user-1" }));
+        let mut auth = json!({
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": null,
+            "tokens": {
+                "id_token": token,
+                "access_token": token,
+                "refresh_token": "refresh"
+            },
+            "last_refresh": timestamp
+        });
+
+        assert!(!canonicalize_chatgpt_auth(&mut auth).unwrap());
+        assert_eq!(auth["last_refresh"], timestamp);
+    }
+
+    #[test]
+    fn validates_and_identifies_agent_identity_auth() {
+        let mut auth = json!({
+            "auth_mode": "agentidentity",
+            "agent_identity": {
+                "agent_runtime_id": "agent-runtime",
+                "agent_private_key": STANDARD.encode([7_u8; 48]),
+                "account_id": "workspace-1",
+                "chatgpt_user_id": "user-1",
+                "email": "agent@example.com",
+                "plan_type": "business"
+            }
+        });
+
+        assert!(canonicalize_chatgpt_auth(&mut auth).unwrap());
+        assert_eq!(auth["auth_mode"], "agentIdentity");
+        validate_auth(&auth).unwrap();
+        let (email, plan, account_id, id) = account_fields(&auth).unwrap();
+        assert_eq!(email, "agent@example.com");
+        assert_eq!(plan, "business");
+        assert_eq!(account_id.as_deref(), Some("workspace-1"));
+        assert_eq!(id.len(), 24);
+    }
+}

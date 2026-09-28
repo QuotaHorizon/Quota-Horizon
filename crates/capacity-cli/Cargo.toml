@@ -1,0 +1,14 @@
+[package]
+name = "capacity-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+capacity-domain = { path = "../capacity-domain" }
+capacity-migration = { path = "../capacity-migration" }
+clap.workspace = true
+codex-runtime = { path = "../codex-runtime" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

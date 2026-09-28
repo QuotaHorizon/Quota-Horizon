@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/codex-capacity-planner/desktop/v1/delete-all-envelope.schema.json",
+  "title": "Codex Capacity Planner desktop IPC delete-all envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "reasonCode",
+    "deletedRecordCount",
+    "settingsRevision"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "status": {
+      "enum": [
+        "deleted",
+        "confirmation_required",
+        "revision_conflict",
+        "invalid_request",
+        "failed"
+      ]
+    },
+    "reasonCode": {
+      "enum": [
+        "delete_all_completed",
+        "delete_all_confirmation_required",
+        "delete_all_revision_conflict",
+        "delete_all_request_invalid",
+        "delete_all_store_unavailable",
+        "delete_all_failed"
+      ]
+    },
+    "deletedRecordCount": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "settingsRevision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "deleted"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reasonCode": {
+            "const": "delete_all_completed"
+          },
+          "deletedRecordCount": {
+            "type": "integer"
+          },
+          "settingsRevision": {
+            "type": "integer"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "deletedRecordCount": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "confirmation_required"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reasonCode": {
+            "const": "delete_all_confirmation_required"
+          },
+          "settingsRevision": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "revision_conflict"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reasonCode": {
+            "const": "delete_all_revision_conflict"
+          },
+          "settingsRevision": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "invalid_request",
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "settingsRevision": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "invalid_request"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reasonCode": {
+            "const": "delete_all_request_invalid"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "failed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reasonCode": {
+            "enum": [
+              "delete_all_store_unavailable",
+              "delete_all_failed"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

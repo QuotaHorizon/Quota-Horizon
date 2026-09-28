@@ -1,0 +1,13 @@
+[
+  {
+    "accountID": "account-alpha",
+    "snapshot": {},
+    "poolSnapshots": [],
+    "healthStatus": "healthy",
+    "errorSummary": null,
+    "failureDisposition": null,
+    "fetchedAt": "2026-08-30T00:00:00Z",
+    "authMode": "chatgpt",
+    "isCurrent": true
+  }
+]

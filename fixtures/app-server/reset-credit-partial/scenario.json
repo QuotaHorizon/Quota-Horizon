@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "name": "reset-credit-partial",
+  "steps": [
+    {
+      "expect_method": "initialize",
+      "action": {
+        "type": "respond",
+        "result": {
+          "userAgent": "codex-cli/0.150.0-alpha.12.2",
+          "platformFamily": "unix",
+          "platformOs": "macos"
+        }
+      }
+    },
+    {
+      "expect_method": "initialized",
+      "action": {
+        "type": "no_response",
+        "delay_ms": 0
+      }
+    },
+    {
+      "expect_method": "account/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "account": {
+            "type": "chatgpt",
+            "planType": "pro"
+          }
+        }
+      }
+    },
+    {
+      "expect_method": "account/rateLimits/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "rateLimits": {
+            "limitId": "codex",
+            "primary": {
+              "usedPercent": 15,
+              "windowDurationMins": 300,
+              "resetsAt": 1788066000
+            },
+            "secondary": null
+          },
+          "rateLimitsByLimitId": {
+            "codex": {
+              "limitId": "codex",
+              "primary": {
+                "usedPercent": 15,
+                "windowDurationMins": 300,
+                "resetsAt": 1788066000
+              },
+              "secondary": null
+            }
+          },
+          "rateLimitResetCredits": {
+            "availableCount": 2,
+            "credits": [
+              {
+                "id": "fixture-credit-partial-1",
+                "grantedAt": 1787961600,
+                "expiresAt": 1790726400,
+                "resetType": "codexRateLimits",
+                "status": "available"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "expect_method": "account/usage/read",
+      "action": {
+        "type": "rpc_error",
+        "code": -32601,
+        "message": "Method not available in this fixture"
+      }
+    }
+  ]
+}

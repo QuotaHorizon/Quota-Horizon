@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-capacity-planner/desktop/v1/diagnostics-envelope.schema.json",
+  "title": "Desktop diagnostics preview envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "reasonCode", "preview"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "status": { "enum": ["available", "partial", "failed"] },
+    "reasonCode": { "$ref": "#/$defs/reasonCode" },
+    "preview": {
+      "oneOf": [
+        { "$ref": "#/$defs/preview" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "failed" } } },
+      "then": { "properties": { "preview": { "type": "null" } } },
+      "else": { "properties": { "preview": { "$ref": "#/$defs/preview" } } }
+    }
+  ],
+  "$defs": {
+    "reasonCode": {
+      "type": "string",
+      "pattern": "^[a-z0-9_.]{1,64}$"
+    },
+    "nullableBoolean": { "type": ["boolean", "null"] },
+    "nullableInteger": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generatedAt",
+        "productVersion",
+        "platform",
+        "architecture",
+        "discovery",
+        "monitor",
+        "lastRead",
+        "pathRedacted",
+        "accountRedacted",
+        "quotaValuesRedacted"
+      ],
+      "properties": {
+        "generatedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "productVersion": { "type": "string", "pattern": "^[ -~]{1,64}$" },
+        "platform": { "enum": ["macos", "windows", "linux", "unknown"] },
+        "architecture": { "type": "string", "pattern": "^[ -~]{1,64}$" },
+        "discovery": { "$ref": "#/$defs/discovery" },
+        "monitor": { "$ref": "#/$defs/monitor" },
+        "lastRead": {
+          "oneOf": [
+            { "$ref": "#/$defs/lastRead" },
+            { "type": "null" }
+          ]
+        },
+        "pathRedacted": { "const": true },
+        "accountRedacted": { "const": true },
+        "quotaValuesRedacted": { "const": true }
+      }
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "candidateCount",
+        "selectedSourceCategories",
+        "codexVersion",
+        "identityStrength"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": ["selected", "confirmation_required", "ambiguous", "not_found", "verification_failed"]
+        },
+        "candidateCount": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "selectedSourceCategories": {
+          "type": "array",
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["explicit", "macos_chatgpt_bundle", "macos_bundle_registry", "path"]
+          }
+        },
+        "codexVersion": {
+          "type": ["string", "null"],
+          "pattern": "^[ -~]{1,128}$"
+        },
+        "identityStrength": {
+          "type": ["string", "null"],
+          "enum": ["os_file_id", "metadata_fingerprint", null]
+        }
+      }
+    },
+    "monitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "storeBackendAvailable",
+        "settingsAvailable",
+        "autoRefreshEnabled",
+        "refreshIntervalSeconds",
+        "notificationPrivacy"
+      ],
+      "properties": {
+        "storeBackendAvailable": { "type": "boolean" },
+        "settingsAvailable": { "type": "boolean" },
+        "autoRefreshEnabled": { "$ref": "#/$defs/nullableBoolean" },
+        "refreshIntervalSeconds": {
+          "type": ["integer", "null"],
+          "enum": [60, 300, 900, null]
+        },
+        "notificationPrivacy": {
+          "type": ["string", "null"],
+          "enum": ["generic", "detailed", null]
+        }
+      }
+    },
+    "lastRead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lifecycle",
+        "capturedAt",
+        "availability",
+        "freshness",
+        "compatibility",
+        "quotaWindowCount",
+        "resetCreditSummary",
+        "resetCreditDetails",
+        "usageAvailability",
+        "diagnosticCodes"
+      ],
+      "properties": {
+        "lifecycle": { "enum": ["idle", "ready", "stale", "selection_required", "error"] },
+        "capturedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "availability": { "enum": ["complete", "partial", "unsupported", "failed"] },
+        "freshness": { "enum": ["live", "stale", "not_applicable"] },
+        "compatibility": {
+          "enum": [
+            "tested",
+            "expected_compatible",
+            "not_tested",
+            "unsupported",
+            "known_broken",
+            "not_applicable"
+          ]
+        },
+        "quotaWindowCount": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "resetCreditSummary": { "enum": ["available", "partial", "unavailable"] },
+        "resetCreditDetails": { "enum": ["complete", "partial", "unavailable"] },
+        "usageAvailability": { "enum": ["complete", "partial", "unsupported", "failed"] },
+        "diagnosticCodes": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/reasonCode" }
+        }
+      }
+    }
+  }
+}

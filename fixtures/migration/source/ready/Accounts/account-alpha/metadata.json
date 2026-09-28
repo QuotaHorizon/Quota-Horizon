@@ -1,0 +1,13 @@
+{
+  "id": "account-alpha",
+  "displayName": "person@example.com",
+  "authMode": "chatgpt",
+  "providerID": null,
+  "baseURL": null,
+  "model": null,
+  "createdAt": "2026-08-29T00:00:00Z",
+  "lastUsedAt": "2026-08-30T00:00:00Z",
+  "source": "currentRuntime",
+  "runtimeKey": "runtime-account-alpha",
+  "isImportedFromCCSwitch": false
+}

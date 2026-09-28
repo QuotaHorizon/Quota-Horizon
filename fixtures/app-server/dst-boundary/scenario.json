@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0",
+  "name": "dst-boundary",
+  "steps": [
+    {
+      "expect_method": "initialize",
+      "action": {
+        "type": "respond",
+        "result": {
+          "userAgent": "codex-cli/0.150.0-alpha.12.2",
+          "platformFamily": "unix",
+          "platformOs": "macos"
+        }
+      }
+    },
+    {
+      "expect_method": "initialized",
+      "action": {
+        "type": "no_response",
+        "delay_ms": 0
+      }
+    },
+    {
+      "expect_method": "account/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "account": {
+            "type": "chatgpt",
+            "planType": "plus"
+          }
+        }
+      }
+    },
+    {
+      "expect_method": "account/rateLimits/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "rateLimits": {
+            "limitId": "codex",
+            "primary": {
+              "usedPercent": 25,
+              "windowDurationMins": 300,
+              "resetsAt": 1793511000
+            },
+            "secondary": {
+              "usedPercent": 45,
+              "windowDurationMins": 10080,
+              "resetsAt": 1794115800
+            }
+          },
+          "rateLimitsByLimitId": {
+            "codex": {
+              "limitId": "codex",
+              "primary": {
+                "usedPercent": 25,
+                "windowDurationMins": 300,
+                "resetsAt": 1793511000
+              },
+              "secondary": {
+                "usedPercent": 45,
+                "windowDurationMins": 10080,
+                "resetsAt": 1794115800
+              }
+            }
+          },
+          "rateLimitResetCredits": null
+        }
+      }
+    },
+    {
+      "expect_method": "account/usage/read",
+      "action": {
+        "type": "rpc_error",
+        "code": -32601,
+        "message": "Method not available in this fixture"
+      }
+    }
+  ]
+}

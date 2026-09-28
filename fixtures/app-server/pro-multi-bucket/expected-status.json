@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.0",
+  "captured_at": "2026-08-30T00:00:00Z",
+  "environment": {
+    "environment_id": "fixture:pro-multi-bucket",
+    "platform": "fixture",
+    "architecture": "fixture",
+    "boundary": "fixture"
+  },
+  "codex_executable": {
+    "executable_id": "fixture-codex",
+    "source": "fixture",
+    "canonical_path": null,
+    "file_identity": null,
+    "version": "codex-cli 0.150.0-alpha.12.2"
+  },
+  "account": {
+    "auth_mode": "chatgpt",
+    "plan_type": "pro",
+    "binding_status": "ephemeral"
+  },
+  "quota": {
+    "windows": [
+      {
+        "limit_id": "codex:primary",
+        "label": "5-hour",
+        "window_minutes": 300,
+        "used_percent": 20.0,
+        "remaining_percent": 80.0,
+        "resets_at": "2026-08-30T05:00:00Z"
+      },
+      {
+        "limit_id": "codex:secondary",
+        "label": "weekly",
+        "window_minutes": 10080,
+        "used_percent": 40.0,
+        "remaining_percent": 60.0,
+        "resets_at": "2026-09-05T00:00:00Z"
+      },
+      {
+        "limit_id": "codex_future:primary",
+        "label": "Future bucket primary",
+        "window_minutes": 60,
+        "used_percent": 12.5,
+        "remaining_percent": 87.5,
+        "resets_at": "2026-08-30T04:00:00Z"
+      }
+    ],
+    "reset_credit_summary": {
+      "summary_status": "available",
+      "available_count": 2,
+      "details_status": "complete",
+      "credits": [
+        {
+          "opaque_id": "fixture-credit-pro-1",
+          "reset_type": "codexRateLimits",
+          "status": "available",
+          "granted_at": "2026-08-29T00:00:00Z",
+          "expires_at": "2026-09-30T00:00:00Z",
+          "title": null,
+          "description": null
+        },
+        {
+          "opaque_id": "fixture-credit-pro-2",
+          "reset_type": "codexRateLimits",
+          "status": "available",
+          "granted_at": "2026-08-29T00:01:40Z",
+          "expires_at": null,
+          "title": null,
+          "description": null
+        }
+      ]
+    },
+    "usage_credit_summary": {
+      "summary_status": "available",
+      "entries": [
+        {
+          "limit_id": "codex_future",
+          "has_credits": true,
+          "unlimited": false,
+          "balance": "12.50"
+        }
+      ],
+      "captured_at": "2026-08-30T00:00:00Z",
+      "upstream_schema_fingerprint": null
+    }
+  },
+  "usage": {
+    "availability": "complete",
+    "summary": {
+      "lifetime_tokens": 123456,
+      "peak_daily_tokens": 4567,
+      "longest_running_turn_sec": 321,
+      "current_streak_days": 5,
+      "longest_streak_days": 12
+    },
+    "reason_codes": [
+      "usage_summary_available"
+    ]
+  },
+  "data_status": {
+    "availability": "complete",
+    "freshness": "live",
+    "compatibility": "expected_compatible",
+    "reason_codes": [
+      "live_app_server",
+      "compatibility_expected",
+      "unknown_notifications_ignored"
+    ]
+  },
+  "diagnostics": [
+    {
+      "code": "unknown_notifications_ignored",
+      "severity": "info",
+      "message": "Unknown app-server notifications were ignored without recording their payloads."
+    }
+  ]
+}

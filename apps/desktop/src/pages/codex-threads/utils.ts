@@ -1,0 +1,116 @@
+import type { Language } from "../../i18n";
+import type {
+  CodexThreadEntry, CodexThreadKind, CodexThreadStatus,
+} from "../../types";
+
+export interface ThreadGroup {
+  cwd: string;
+  items: CodexThreadEntry[];
+  updatedAt: number;
+}
+
+export const UNKNOWN_WORKSPACE = "未知工作目录";
+const RECENT_SESSION_WORKSPACE_PATTERN = /(?:^|[\\/])Codex[\\/]\d{4}-\d{2}-\d{2}(?:[\\/]|$)/i;
+
+export function formatSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+export function formatTokenAmount(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
+  return value.toLocaleString();
+}
+
+export function relativeTime(timestamp: number | null, language: Language, now = Date.now()) {
+  if (!timestamp) return "—";
+  const seconds = Math.max(0, Math.floor(now / 1000 - timestamp));
+  if (seconds < 60) return language === "zh" ? "刚刚" : "Just now";
+  if (seconds < 3600) {
+    const minutes = Math.max(1, Math.floor(seconds / 60));
+    return language === "zh" ? `${minutes} 分钟前` : `${minutes}m ago`;
+  }
+  if (seconds < 86400) {
+    const hours = Math.floor(seconds / 3600);
+    return language === "zh" ? `${hours} 小时前` : `${hours}h ago`;
+  }
+  if (seconds < 604800) {
+    const days = Math.floor(seconds / 86400);
+    return language === "zh" ? `${days} 天前` : `${days}d ago`;
+  }
+  const weeks = Math.floor(seconds / 604800);
+  return language === "zh" ? `${weeks} 周前` : `${weeks}w ago`;
+}
+
+export function threadActivityDate(timestamp: number | null, language: Language) {
+  if (!timestamp || !Number.isFinite(timestamp)) return "—";
+  return new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en-US", {
+    month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).format(timestamp * 1_000);
+}
+
+export function groupLabel(cwd: string) {
+  const normalized = cwd.replace(/\\/g, "/").replace(/\/$/, "");
+  const parts = normalized.split("/").filter(Boolean);
+  return parts[parts.length - 1] || cwd;
+}
+
+export function isUnassignedWorkspace(cwd: string) {
+  return cwd === UNKNOWN_WORKSPACE || RECENT_SESSION_WORKSPACE_PATTERN.test(cwd);
+}
+
+export function workspaceDisplayName(group: ThreadGroup, untitled: string) {
+  const titles = group.items
+    .map((item) => item.title.trim())
+    .filter(Boolean);
+  if (isUnassignedWorkspace(group.cwd)) return titles.join("、") || untitled;
+  return groupLabel(group.cwd);
+}
+
+export function interpolate(value: string, values: Record<string, string | number>) {
+  return Object.entries(values).reduce(
+    (text, [key, replacement]) => text.replace(`{${key}}`, String(replacement)),
+    value,
+  );
+}
+
+export function groupThreads(threads: CodexThreadEntry[]): ThreadGroup[] {
+  const grouped = new Map<string, CodexThreadEntry[]>();
+  for (const item of threads) grouped.set(item.cwd, [...(grouped.get(item.cwd) ?? []), item]);
+  return [...grouped.entries()]
+    .map(([cwd, items]) => ({
+      cwd,
+      items: items.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)),
+      updatedAt: Math.max(...items.map((item) => item.updatedAt ?? 0)),
+    }))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export function filterThreads(
+  threads: CodexThreadEntry[],
+  kind: CodexThreadKind | "all",
+  status: CodexThreadStatus | "all",
+) {
+  return threads.filter((item) => (
+    (kind === "all" || item.sessionKind === kind)
+      && (status === "all" || item.status === status)
+  ));
+}
+
+export function canArchiveThreads(threads: CodexThreadEntry[], selected: Set<string>) {
+  return selected.size > 0 && [...selected].every((id) => (
+    threads.some((item) => item.sessionId === id && item.status === "active")
+  ));
+}
+
+export function retainVisibleThreadSelection(
+  threads: CodexThreadEntry[],
+  selected: Set<string>,
+) {
+  const visibleIds = new Set(threads.map((item) => item.sessionId));
+  const next = new Set([...selected].filter((id) => visibleIds.has(id)));
+  return next.size === selected.size ? selected : next;
+}

@@ -1,0 +1,11 @@
+body { min-width: 0; margin: 0; }
+.product-preview { max-width: 1200px; margin: 36px auto; padding: 0 28px; color: var(--ink); }
+.preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 28px; margin-bottom: 26px; }
+.preview-heading small { color: var(--muted); font-size: 12px; letter-spacing: .05em; }
+.preview-heading h1 { margin: 7px 0 0; font-size: 28px; font-weight: 650; letter-spacing: -.03em; }
+.preview-heading p { color: var(--muted); font-size: 12px; max-width: 310px; line-height: 1.7; }
+.product-preview--menu { max-width: 460px; }
+.product-preview--menu .preview-heading { display: block; margin-bottom: 18px; }
+.product-preview--menu .preview-heading p { max-width: none; }
+.preview-popover { width: 388px; height: 452px; margin: 0 auto; }
+.product-preview--radar { max-width: 1050px; }

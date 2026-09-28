@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/codex-capacity-planner/soak/v1/soak.schema.json",
+  "title": "Codex Capacity Planner internal soak report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "outcome",
+    "requested_duration_seconds",
+    "elapsed_milliseconds",
+    "interval_seconds",
+    "concurrent_requests",
+    "request_responses",
+    "source_generations",
+    "coalesced_responses",
+    "current_responses",
+    "stale_responses",
+    "error_responses",
+    "maximum_round_latency_ms",
+    "final_availability",
+    "final_freshness",
+    "final_compatibility",
+    "final_window_count",
+    "shutdown_clean",
+    "path_redacted"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "outcome": {
+      "enum": [
+        "pass",
+        "failed"
+      ]
+    },
+    "requested_duration_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 28800
+    },
+    "elapsed_milliseconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "interval_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600
+    },
+    "concurrent_requests": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16
+    },
+    "request_responses": {
+      "$ref": "#/$defs/count"
+    },
+    "source_generations": {
+      "$ref": "#/$defs/count"
+    },
+    "coalesced_responses": {
+      "$ref": "#/$defs/count"
+    },
+    "current_responses": {
+      "$ref": "#/$defs/count"
+    },
+    "stale_responses": {
+      "$ref": "#/$defs/count"
+    },
+    "error_responses": {
+      "$ref": "#/$defs/count"
+    },
+    "maximum_round_latency_ms": {
+      "$ref": "#/$defs/count"
+    },
+    "final_availability": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "complete",
+        "partial",
+        "unsupported",
+        "failed",
+        null
+      ]
+    },
+    "final_freshness": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "live",
+        "stale",
+        "not_applicable",
+        null
+      ]
+    },
+    "final_compatibility": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "tested",
+        "expected_compatible",
+        "not_tested",
+        "unsupported",
+        "known_broken",
+        "not_applicable",
+        null
+      ]
+    },
+    "final_window_count": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/count"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "shutdown_clean": {
+      "type": "boolean"
+    },
+    "path_redacted": {
+      "const": true
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/codex/0.150.0-alpha.12.2/quota-contract.json",
+  "title": "Codex app-server quota contract subset",
+  "description": "Reviewed subset extracted from this exact Codex version's non-experimental generated schema. The manifest stores source hashes.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "rateLimits"
+  ],
+  "properties": {
+    "rateLimits": {
+      "$ref": "#/$defs/rateLimitSnapshot"
+    },
+    "rateLimitsByLimitId": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/rateLimitSnapshot"
+      }
+    },
+    "rateLimitResetCredits": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/resetCreditSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "creditsSnapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "hasCredits",
+        "unlimited"
+      ],
+      "properties": {
+        "hasCredits": {
+          "type": "boolean"
+        },
+        "unlimited": {
+          "type": "boolean"
+        },
+        "balance": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "rateLimitSnapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "credits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/creditsSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limitId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limitName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "planType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "primary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rateLimitWindow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secondary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rateLimitWindow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "rateLimitWindow": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "usedPercent"
+      ],
+      "properties": {
+        "usedPercent": {
+          "type": "integer"
+        },
+        "windowDurationMins": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "resetsAt": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "resetCreditSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "availableCount"
+      ],
+      "properties": {
+        "availableCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "credits": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/resetCredit"
+          }
+        }
+      }
+    },
+    "resetCredit": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "grantedAt",
+        "resetType",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "grantedAt": {
+          "type": "integer"
+        },
+        "expiresAt": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "resetType": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "1.0",
+  "status": "unsupported",
+  "reasonCodes": ["legacy_artifacts_not_found"],
+  "source": {
+    "product": "codex_quota_viewer",
+    "format": null,
+    "baselineCommit": "261fe1c",
+    "readOnly": true
+  },
+  "inventory": [
+    {"kind":"settings","state":"missing","fileCount":0,"recordCount":0,"sourceBytes":0,"reasonCodes":["legacy_artifact_not_present"]},
+    {"kind":"account_index","state":"missing","fileCount":0,"recordCount":0,"sourceBytes":0,"reasonCodes":["legacy_artifact_not_present"]},
+    {"kind":"account_records","state":"missing","fileCount":0,"recordCount":0,"sourceBytes":0,"reasonCodes":["legacy_artifact_not_present"]},
+    {"kind":"quota_cache","state":"missing","fileCount":0,"recordCount":0,"sourceBytes":0,"reasonCodes":["legacy_artifact_not_present"]},
+    {"kind":"session_manager_settings","state":"missing","fileCount":0,"recordCount":0,"sourceBytes":0,"reasonCodes":["legacy_artifact_not_present"]},
+    {"kind":"provider_mode","state":"missing","fileCount":0,"recordCount":0,"sourceBytes":0,"reasonCodes":["legacy_artifact_not_present"]},
+    {"kind":"restore_points","state":"missing","fileCount":0,"recordCount":0,"sourceBytes":0,"reasonCodes":["legacy_artifact_not_present"]}
+  ],
+  "plan": [
+    {"target":"monitor_settings","disposition":"skip","sourceItemCount":0,"expectedTargetCount":0,"reasonCode":"legacy_source_not_present"},
+    {"target":"shell_preferences","disposition":"skip","sourceItemCount":0,"expectedTargetCount":0,"reasonCode":"legacy_source_not_present"},
+    {"target":"work_plan","disposition":"skip","sourceItemCount":0,"expectedTargetCount":0,"reasonCode":"legacy_source_not_present"},
+    {"target":"account_vault","disposition":"skip","sourceItemCount":0,"expectedTargetCount":0,"reasonCode":"legacy_source_not_present"},
+    {"target":"quota_cache","disposition":"skip","sourceItemCount":0,"expectedTargetCount":0,"reasonCode":"legacy_source_not_present"},
+    {"target":"session_preferences","disposition":"skip","sourceItemCount":0,"expectedTargetCount":0,"reasonCode":"legacy_source_not_present"},
+    {"target":"provider_mode_state","disposition":"skip","sourceItemCount":0,"expectedTargetCount":0,"reasonCode":"legacy_source_not_present"},
+    {"target":"restore_point_ledger","disposition":"skip","sourceItemCount":0,"expectedTargetCount":0,"reasonCode":"legacy_source_not_present"}
+  ],
+  "conflicts": [],
+  "spaceEstimate": {
+    "sourceBytes": 0,
+    "minimumFreeBytes": 1048576,
+    "status": "target_preflight_required"
+  }
+}

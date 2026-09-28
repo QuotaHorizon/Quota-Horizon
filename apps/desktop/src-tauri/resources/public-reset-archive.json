@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-09-07T04:24:34Z",
+  "entries": [
+    {
+      "id": "openai-banked-reset-september-rollout",
+      "familyId": "help:20001498",
+      "kind": "global_banked_reset_grant",
+      "scope": "broad_codex",
+      "semantics": "confirmed_reset",
+      "sourceClass": "official_documentation",
+      "review": "primary_reviewed",
+      "sourceUrl": "https://help.openai.com/en/articles/20001498-how-banked-codex-resets-work",
+      "author": "OpenAI Help Center",
+      "publishedAt": null,
+      "discoveredVia": [],
+      "title": {
+        "en": "September 3–4 banked-reset grants",
+        "zh": "9 月 3–4 日重置卡发放说明"
+      },
+      "summary": {
+        "en": "OpenAI documents banked-reset grants for eligible Plus, Pro and Business accounts during the Astra rollout. Eligibility and delivery can differ by account.",
+        "zh": "OpenAI 已说明 Astra 推送期间面向符合条件的 Plus、Pro 和 Business 账号发放重置卡；资格与到账时间可能因账号而异。"
+      },
+      "interpretation": {
+        "en": "This confirms a grant programme, not an automatic refill of your quota. It does not establish an exact delivery time for either batch or for this account.",
+        "zh": "这是重置卡发放方案的确认，不是你的额度已经自动恢复；它也不能证明任一批次或当前账号的确切到账时间。"
+      }
+    },
+    {
+      "id": "openai-banked-reset-usage-rules",
+      "familyId": "help:20001498",
+      "kind": "unclassified",
+      "scope": "broad_codex",
+      "semantics": "context_only",
+      "sourceClass": "official_documentation",
+      "review": "primary_reviewed",
+      "sourceUrl": "https://help.openai.com/en/articles/20001498-how-banked-codex-resets-work",
+      "author": "OpenAI Help Center",
+      "publishedAt": null,
+      "discoveredVia": [],
+      "title": {
+        "en": "A saved reset is different from an automatic reset",
+        "zh": "保存的重置卡与自动重置不是同一回事"
+      },
+      "summary": {
+        "en": "A banked reset remains available until used or expired. Using a full reset can refresh eligible short and weekly windows and change the weekly reset date.",
+        "zh": "重置卡可保留至使用或到期；使用完整重置卡可刷新适用的短周期和周窗口，并改变周重置日期。"
+      },
+      "interpretation": {
+        "en": "A later reset date alone is not proof of a forced global reset. Normal rollover and manual credit use must also be considered.",
+        "zh": "重置日期延后本身不证明官方强制重置；还应排除正常周期到期和主动使用重置卡。"
+      }
+    },
+    {
+      "id": "tracker-august31-reset-announcement",
+      "familyId": "x:2094252447271366730",
+      "kind": "global_full_reset",
+      "scope": "unknown",
+      "semantics": "confirmed_reset",
+      "sourceClass": "official_social",
+      "review": "indirect",
+      "sourceUrl": "https://x.com/thsottiaux/status/2094252447271366730",
+      "author": "@thsottiaux",
+      "publishedAt": "2026-08-31T02:34:27Z",
+      "discoveredVia": [
+        "https://quotaresets.com/api/v1/events.json",
+        "https://codex-reset.com/api/timeline"
+      ],
+      "title": {
+        "en": "August 31 broad-reset announcement lead",
+        "zh": "8 月 31 日广泛重置公告线索"
+      },
+      "summary": {
+        "en": "Two public trackers point to the same statement about a broad reset for paid subscriptions. The primary post could not be read during this review.",
+        "zh": "两个公开追踪站点指向同一条付费订阅广泛重置公告；本次核对未能读取原帖。"
+      },
+      "interpretation": {
+        "en": "Retained for review, not displayed as independently verified confirmation. Two mirrors of one post are one evidence family.",
+        "zh": "保留线索供核实，不显示为已独立核实的官方确认；同一条原帖的两次转载仍只算一个证据族。"
+      }
+    },
+    {
+      "id": "tracker-september7-usage-observation",
+      "familyId": "quotaresets:473c57b9fd",
+      "kind": "global_full_reset",
+      "scope": "personal",
+      "semantics": "confirmed_reset",
+      "sourceClass": "provider_ui_observation",
+      "review": "indirect",
+      "sourceUrl": "https://quotaresets.com/events/2026-09-07-openai-hard-reset-473c57b9fd/",
+      "author": "QuotaResets",
+      "publishedAt": "2026-09-07T03:51:16Z",
+      "discoveredVia": ["https://quotaresets.com/api/v1/events.json"],
+      "title": {
+        "en": "September 7 usage-dashboard observation",
+        "zh": "9 月 7 日用量页面变化线索"
+      },
+      "summary": {
+        "en": "A tracker marked a reset as confirmed using a usage-dashboard observation. Its record does not provide a public broad-reset announcement.",
+        "zh": "追踪站点依据用量页面观测将一次变化标为已重置，但记录没有提供面向广泛用户的公开重置公告。"
+      },
+      "interpretation": {
+        "en": "An account-level observation cannot establish a global forced reset or whether this device's account received one.",
+        "zh": "账号层面的观测不能确认全局强制重置，也不能证明本机账号已获得重置。"
+      }
+    }
+  ]
+}

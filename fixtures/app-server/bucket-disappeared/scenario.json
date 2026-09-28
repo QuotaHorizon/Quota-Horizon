@@ -1,0 +1,119 @@
+{
+  "schema_version": "1.0",
+  "name": "bucket-disappeared",
+  "steps": [
+    {
+      "expect_method": "initialize",
+      "action": {
+        "type": "respond",
+        "result": {
+          "userAgent": "codex-cli/0.150.0-alpha.12.2",
+          "platformFamily": "unix",
+          "platformOs": "macos"
+        }
+      }
+    },
+    {
+      "expect_method": "initialized",
+      "action": {
+        "type": "no_response",
+        "delay_ms": 0
+      }
+    },
+    {
+      "expect_method": "account/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "account": {
+            "type": "chatgpt",
+            "planType": "pro"
+          }
+        }
+      }
+    },
+    {
+      "expect_method": "account/rateLimits/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "rateLimits": {
+            "limitId": "codex",
+            "primary": {
+              "usedPercent": 10,
+              "windowDurationMins": 300,
+              "resetsAt": 1788066000
+            },
+            "secondary": null
+          },
+          "rateLimitsByLimitId": {
+            "codex": {
+              "limitId": "codex",
+              "primary": {
+                "usedPercent": 10,
+                "windowDurationMins": 300,
+                "resetsAt": 1788066000
+              },
+              "secondary": null
+            },
+            "codex_temporary": {
+              "limitId": "codex_temporary",
+              "primary": {
+                "usedPercent": 50,
+                "windowDurationMins": 60,
+                "resetsAt": 1788062400
+              },
+              "secondary": null
+            }
+          },
+          "rateLimitResetCredits": null
+        }
+      }
+    },
+    {
+      "expect_method": "account/usage/read",
+      "action": {
+        "type": "notify_then_respond",
+        "method": "account/rateLimits/updated",
+        "params": {
+          "rateLimits": {
+            "limitId": "codex"
+          }
+        },
+        "result": {
+          "summary": null,
+          "dailyUsageBuckets": null
+        }
+      }
+    },
+    {
+      "expect_method": "account/rateLimits/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "rateLimits": {
+            "limitId": "codex",
+            "primary": {
+              "usedPercent": 11,
+              "windowDurationMins": 300,
+              "resetsAt": 1788066000
+            },
+            "secondary": null
+          },
+          "rateLimitsByLimitId": {
+            "codex": {
+              "limitId": "codex",
+              "primary": {
+                "usedPercent": 11,
+                "windowDurationMins": 300,
+                "resetsAt": 1788066000
+              },
+              "secondary": null
+            }
+          },
+          "rateLimitResetCredits": null
+        }
+      }
+    }
+  ]
+}

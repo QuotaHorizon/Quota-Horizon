@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "name": "early-eof",
+  "steps": [
+    {
+      "expect_method": "initialize",
+      "action": {
+        "type": "raw_fragment_then_close",
+        "fragment": "{\"id\":0,\"result\":"
+      }
+    }
+  ]
+}

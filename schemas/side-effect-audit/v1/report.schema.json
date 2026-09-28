@@ -1,0 +1,325 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/codex-capacity-planner/side-effect-audit/v1/report.schema.json",
+  "title": "Codex Capacity Planner internal side-effect audit report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "outcome",
+    "captured_at",
+    "control_seconds",
+    "runtime",
+    "categories",
+    "max_fingerprint_file_bytes",
+    "fingerprint_budget_bytes_per_category",
+    "protected_active_change_count",
+    "runtime_cache_active_change_count",
+    "writer_attribution",
+    "paths_redacted",
+    "fingerprints_redacted"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "outcome": {
+      "enum": [
+        "pass",
+        "protected_change_observed",
+        "read_failed"
+      ]
+    },
+    "captured_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "(?:Z|\\+00:00)$"
+    },
+    "control_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 60
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtime"
+    },
+    "categories": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/categoryDelta"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "category": {
+                "const": "auth"
+              }
+            },
+            "required": [
+              "category"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "category": {
+                "const": "config"
+              }
+            },
+            "required": [
+              "category"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "category": {
+                "const": "thread"
+              }
+            },
+            "required": [
+              "category"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "category": {
+                "const": "state"
+              }
+            },
+            "required": [
+              "category"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "category": {
+                "const": "runtime_cache"
+              }
+            },
+            "required": [
+              "category"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    },
+    "max_fingerprint_file_bytes": {
+      "const": 1048576
+    },
+    "fingerprint_budget_bytes_per_category": {
+      "const": 8388608
+    },
+    "protected_active_change_count": {
+      "$ref": "#/$defs/count"
+    },
+    "runtime_cache_active_change_count": {
+      "$ref": "#/$defs/count"
+    },
+    "writer_attribution": {
+      "const": "snapshot_diff_does_not_identify_writer"
+    },
+    "paths_redacted": {
+      "const": true
+    },
+    "fingerprints_redacted": {
+      "const": true
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "availability": {
+      "enum": [
+        "complete",
+        "partial",
+        "unsupported",
+        "failed"
+      ]
+    },
+    "freshness": {
+      "enum": [
+        "live",
+        "stale",
+        "not_applicable"
+      ]
+    },
+    "compatibility": {
+      "enum": [
+        "tested",
+        "expected_compatible",
+        "not_tested",
+        "unsupported",
+        "known_broken",
+        "not_applicable"
+      ]
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "availability",
+        "freshness",
+        "compatibility",
+        "window_count",
+        "shutdown_clean"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": [
+            "read_succeeded",
+            "read_failed"
+          ]
+        },
+        "availability": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/availability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freshness": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/freshness"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "compatibility": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/compatibility"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "window_count": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/count"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shutdown_clean": {
+          "type": "boolean"
+        }
+      }
+    },
+    "categoryDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category",
+        "tracked_before",
+        "tracked_after",
+        "control_changes",
+        "active_changes",
+        "active_only_changes",
+        "overlapping_changes",
+        "active_created",
+        "active_removed",
+        "active_content_changed",
+        "active_metadata_changed",
+        "content_fingerprinted_before",
+        "content_fingerprinted_after",
+        "metadata_only_before",
+        "metadata_only_after",
+        "metadata_only_bytes_before",
+        "metadata_only_bytes_after"
+      ],
+      "properties": {
+        "category": {
+          "enum": [
+            "auth",
+            "config",
+            "thread",
+            "state",
+            "runtime_cache"
+          ]
+        },
+        "tracked_before": {
+          "$ref": "#/$defs/count"
+        },
+        "tracked_after": {
+          "$ref": "#/$defs/count"
+        },
+        "control_changes": {
+          "$ref": "#/$defs/count"
+        },
+        "active_changes": {
+          "$ref": "#/$defs/count"
+        },
+        "active_only_changes": {
+          "$ref": "#/$defs/count"
+        },
+        "overlapping_changes": {
+          "$ref": "#/$defs/count"
+        },
+        "active_created": {
+          "$ref": "#/$defs/count"
+        },
+        "active_removed": {
+          "$ref": "#/$defs/count"
+        },
+        "active_content_changed": {
+          "$ref": "#/$defs/count"
+        },
+        "active_metadata_changed": {
+          "$ref": "#/$defs/count"
+        },
+        "content_fingerprinted_before": {
+          "$ref": "#/$defs/count"
+        },
+        "content_fingerprinted_after": {
+          "$ref": "#/$defs/count"
+        },
+        "metadata_only_before": {
+          "$ref": "#/$defs/count"
+        },
+        "metadata_only_after": {
+          "$ref": "#/$defs/count"
+        },
+        "metadata_only_bytes_before": {
+          "$ref": "#/$defs/count"
+        },
+        "metadata_only_bytes_after": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    }
+  }
+}

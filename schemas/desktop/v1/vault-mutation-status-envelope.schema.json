@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-capacity-planner/desktop/v1/vault-mutation-status-envelope.schema.json",
+  "title": "Desktop vault mutation status envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "reasonCode",
+    "coordination",
+    "catalog",
+    "mutationCommandsEnabled",
+    "identifiersRedacted",
+    "pathsRedacted"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "status": {
+      "enum": ["available", "recovery_required", "blocked", "failed"]
+    },
+    "reasonCode": {
+      "type": "string",
+      "pattern": "^[a-z0-9_.]{1,64}$"
+    },
+    "coordination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lockState", "legacyViewerState"],
+      "properties": {
+        "lockState": {
+          "enum": ["unlocked", "active", "stale", "unverifiable", "unavailable"]
+        },
+        "legacyViewerState": {
+          "enum": ["not_running", "running", "unavailable"]
+        }
+      }
+    },
+    "catalog": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "managedAccountCount",
+            "pendingAccountOperationCount",
+            "pendingKeyRotationCount",
+            "needsReviewCount"
+          ],
+          "properties": {
+            "managedAccountCount": { "$ref": "#/$defs/boundedCount" },
+            "pendingAccountOperationCount": { "$ref": "#/$defs/boundedCount" },
+            "pendingKeyRotationCount": { "$ref": "#/$defs/boundedCount" },
+            "needsReviewCount": { "$ref": "#/$defs/boundedCount" }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
+    "mutationCommandsEnabled": { "const": false },
+    "identifiersRedacted": { "const": true },
+    "pathsRedacted": { "const": true }
+  },
+  "$defs": {
+    "boundedCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    }
+  }
+}

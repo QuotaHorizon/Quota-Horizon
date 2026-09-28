@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "1.0",
+  "sequence": 1,
+  "lifecycle": "ready",
+  "status": {
+    "schemaVersion": "1.0",
+    "capturedAt": "2026-08-30T00:00:00Z",
+    "codexVersion": "codex-cli 0.150.0-alpha.12.2",
+    "account": {
+      "authMode": "chatgpt",
+      "planType": "prolite",
+      "bindingStatus": "ephemeral"
+    },
+    "dataStatus": {
+      "availability": "complete",
+      "freshness": "live",
+      "compatibility": "expected_compatible",
+      "reasonCodes": [
+        "live_app_server",
+        "compatibility_expected"
+      ]
+    },
+    "quotaWindows": [
+      {
+        "limitId": "codex:primary",
+        "label": "5-hour",
+        "windowMinutes": 300,
+        "usedPercent": 35.0,
+        "remainingPercent": 65.0,
+        "resetsAt": "2026-08-30T05:00:00Z"
+      },
+      {
+        "limitId": "codex:secondary",
+        "label": "Weekly",
+        "windowMinutes": 10080,
+        "usedPercent": 52.0,
+        "remainingPercent": 48.0,
+        "resetsAt": "2026-09-03T16:29:44Z"
+      }
+    ],
+    "resetCredits": {
+      "summaryStatus": "available",
+      "availableCount": 1,
+      "detailsStatus": "complete"
+    },
+    "usage": {
+      "availability": "complete",
+      "hasSummary": true,
+      "reasonCodes": [
+        "usage_available"
+      ]
+    },
+    "diagnosticCodes": []
+  },
+  "candidates": [],
+  "selectedExecutableId": "codex-executable-1234",
+  "issue": null,
+  "persistenceEnabled": false
+}

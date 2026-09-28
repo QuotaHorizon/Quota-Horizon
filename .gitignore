@@ -1,0 +1,37 @@
+.DS_Store
+target/
+node_modules/
+dist/
+apps/capacity-preview/src-tauri/gen/schemas/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/target/
+apps/desktop/node_modules/
+apps/desktop/dist/
+playwright-report/
+test-results/
+.local/
+
+# Local configuration, logs, and caches
+.env
+.env.*
+!.env.example
+*.log
+__pycache__/
+*.py[cod]
+coverage/
+
+# Private runtime data and signing material
+private-data/
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.db-wal
+*.db-shm
+*.p12
+*.pfx
+*.key
+*.pem

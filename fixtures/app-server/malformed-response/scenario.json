@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "name": "malformed-response",
+  "steps": [
+    {
+      "expect_method": "initialize",
+      "action": {
+        "type": "raw_line",
+        "line": "{\"id\":1,\"result\":"
+      }
+    }
+  ]
+}

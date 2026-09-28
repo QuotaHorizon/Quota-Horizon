@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0",
+  "name": "weekly-only",
+  "steps": [
+    {
+      "expect_method": "initialize",
+      "action": {
+        "type": "respond",
+        "result": {
+          "userAgent": "codex-cli/0.150.0-alpha.12.2",
+          "platformFamily": "unix",
+          "platformOs": "linux"
+        }
+      }
+    },
+    {
+      "expect_method": "initialized",
+      "action": {
+        "type": "no_response",
+        "delay_ms": 0
+      }
+    },
+    {
+      "expect_method": "account/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "account": {
+            "type": "chatgpt",
+            "planType": "plus"
+          },
+          "requiresOpenaiAuth": true
+        }
+      }
+    },
+    {
+      "expect_method": "account/rateLimits/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "rateLimits": {
+            "limitId": "codex_weekly",
+            "limitName": "Weekly only",
+            "planType": "plus",
+            "primary": {
+              "usedPercent": 62,
+              "windowDurationMins": 10080,
+              "resetsAt": 1788566400
+            },
+            "secondary": null
+          },
+          "rateLimitsByLimitId": null,
+          "rateLimitResetCredits": null
+        }
+      }
+    },
+    {
+      "expect_method": "account/usage/read",
+      "action": {
+        "type": "rpc_error",
+        "code": -32601,
+        "message": "Method not available in this fixture"
+      }
+    }
+  ]
+}

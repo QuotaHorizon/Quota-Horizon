@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "1.0",
+  "sequence": 1,
+  "lifecycle": "selection_required",
+  "status": null,
+  "candidates": [
+    {
+      "executableId": "codex-executable-bundled",
+      "canonicalPath": "/Applications/ChatGPT.app/Contents/Resources/codex",
+      "version": "codex-cli 0.150.0-alpha.12.2",
+      "sources": [
+        "macos_chatgpt_bundle"
+      ],
+      "verification": "verified",
+      "requiresConfirmation": false
+    },
+    {
+      "executableId": "codex-executable-path",
+      "canonicalPath": "/opt/homebrew/bin/codex",
+      "version": "codex-cli 0.133.0",
+      "sources": [
+        "path"
+      ],
+      "verification": "confirmation_required",
+      "requiresConfirmation": true
+    }
+  ],
+  "selectedExecutableId": null,
+  "issue": {
+    "code": "codex_selection_required",
+    "message": "Choose one verified Codex installation before reading capacity.",
+    "retryAfterMs": null
+  },
+  "persistenceEnabled": false
+}

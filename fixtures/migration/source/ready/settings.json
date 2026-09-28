@@ -1,0 +1,21 @@
+{
+  "refreshIntervalPreset": "fiveMinutes",
+  "launchAtLoginEnabled": false,
+  "statusItemStyle": "meter",
+  "appLanguage": "system",
+  "lastResolvedLanguage": "en",
+  "preferredAccountID": "account-alpha",
+  "quotaWorkPlan": {
+    "isEnabled": true,
+    "offPeriods": [
+      {
+        "startMinuteOfDay": 0,
+        "endMinuteOfDay": 480
+      }
+    ],
+    "hourlyModes": [
+      "normal",
+      "intensive"
+    ]
+  }
+}

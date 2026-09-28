@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "status": "recovery_required",
+  "reasonCode": "vault_review_required",
+  "coordination": {
+    "lockState": "unlocked",
+    "legacyViewerState": "not_running"
+  },
+  "catalog": {
+    "managedAccountCount": 3,
+    "pendingAccountOperationCount": 1,
+    "pendingKeyRotationCount": 0,
+    "needsReviewCount": 1
+  },
+  "mutationCommandsEnabled": false,
+  "identifiersRedacted": true,
+  "pathsRedacted": true
+}

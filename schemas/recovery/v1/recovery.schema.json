@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/codex-capacity-planner/recovery/v1/recovery.schema.json",
+  "title": "Codex Capacity Planner recovery acceptance report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "outcome",
+    "scenario_count",
+    "passed_scenarios",
+    "scenarios",
+    "path_redacted"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "outcome": {
+      "enum": [
+        "pass",
+        "failed"
+      ]
+    },
+    "scenario_count": {
+      "$ref": "#/$defs/count"
+    },
+    "passed_scenarios": {
+      "$ref": "#/$defs/count"
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "items": {
+        "$ref": "#/$defs/scenario"
+      }
+    },
+    "path_redacted": {
+      "const": true
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "outcome",
+        "checks_total",
+        "checks_passed",
+        "checks"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "process_crash",
+            "network_timeout",
+            "protocol_failure",
+            "account_change",
+            "invalid_account_boundary",
+            "idle_gap",
+            "executable_changed"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "pass",
+            "failed"
+          ]
+        },
+        "checks_total": {
+          "$ref": "#/$defs/count"
+        },
+        "checks_passed": {
+          "$ref": "#/$defs/count"
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/check"
+          }
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "passed"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

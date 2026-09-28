@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/codex-capacity-planner/desktop/v1/settings-envelope.schema.json",
+  "title": "Codex Capacity Planner desktop IPC settings envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "reasonCode",
+    "settings"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "status": {
+      "enum": [
+        "available",
+        "updated",
+        "revision_conflict",
+        "invalid_request",
+        "failed"
+      ]
+    },
+    "reasonCode": {
+      "enum": [
+        "settings_available",
+        "settings_updated",
+        "settings_revision_conflict",
+        "settings_request_invalid",
+        "settings_store_unavailable",
+        "settings_query_failed",
+        "settings_update_failed"
+      ]
+    },
+    "settings": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/settings"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "available",
+              "updated",
+              "revision_conflict"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "settings": {
+            "$ref": "#/$defs/settings"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "settings": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "available"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reasonCode": {
+            "const": "settings_available"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "updated"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reasonCode": {
+            "const": "settings_updated"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "revision_conflict"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reasonCode": {
+            "const": "settings_revision_conflict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "invalid_request"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reasonCode": {
+            "const": "settings_request_invalid"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "failed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reasonCode": {
+            "enum": [
+              "settings_store_unavailable",
+              "settings_query_failed",
+              "settings_update_failed"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "utcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "(?:Z|\\+00:00)$"
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "autoRefreshEnabled",
+        "refreshIntervalSeconds",
+        "notificationThresholdBasisPoints",
+        "resetCreditNoticeHours",
+        "quietHoursEnabled",
+        "quietHoursStartMinute",
+        "quietHoursEndMinute",
+        "language",
+        "lockScreenPrivacy",
+        "launchAtLogin",
+        "historyRetentionDays",
+        "updatedAt"
+      ],
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "autoRefreshEnabled": {
+          "type": "boolean"
+        },
+        "refreshIntervalSeconds": {
+          "enum": [
+            60,
+            300,
+            900
+          ]
+        },
+        "notificationThresholdBasisPoints": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "resetCreditNoticeHours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 720
+        },
+        "quietHoursEnabled": {
+          "type": "boolean"
+        },
+        "quietHoursStartMinute": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1439
+        },
+        "quietHoursEndMinute": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1439
+        },
+        "language": {
+          "enum": [
+            "system",
+            "en",
+            "zh-CN"
+          ]
+        },
+        "lockScreenPrivacy": {
+          "type": "boolean"
+        },
+        "launchAtLogin": {
+          "type": "boolean"
+        },
+        "historyRetentionDays": {
+          "type": "integer",
+          "minimum": 7,
+          "maximum": 730
+        },
+        "updatedAt": {
+          "$ref": "#/$defs/utcTimestamp"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "quietHoursEnabled": {
+                "const": false
+              }
+            },
+            "required": [
+              "quietHoursEnabled"
+            ]
+          },
+          "then": {
+            "properties": {
+              "quietHoursStartMinute": {
+                "type": "null"
+              },
+              "quietHoursEndMinute": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "quietHoursStartMinute": {
+                "type": "integer"
+              },
+              "quietHoursEndMinute": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/codex-capacity-planner/migration/v1/dry-run.schema.json",
+  "title": "Codex Capacity Planner QuotaViewer migration dry-run report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "reasonCodes",
+    "source",
+    "inventory",
+    "plan",
+    "conflicts",
+    "spaceEstimate"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "1.0"},
+    "status": {
+      "enum": ["ready", "partial", "unsupported", "failed"]
+    },
+    "reasonCodes": {"$ref": "#/$defs/reasonCodes"},
+    "source": {"$ref": "#/$defs/source"},
+    "inventory": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/artifact"},
+      "allOf": [
+        {"$ref": "#/$defs/containsSettings"},
+        {"$ref": "#/$defs/containsAccountIndex"},
+        {"$ref": "#/$defs/containsAccountRecords"},
+        {"$ref": "#/$defs/containsQuotaCache"},
+        {"$ref": "#/$defs/containsSessionManagerSettings"},
+        {"$ref": "#/$defs/containsProviderMode"},
+        {"$ref": "#/$defs/containsRestorePoints"}
+      ]
+    },
+    "plan": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/action"},
+      "allOf": [
+        {"$ref": "#/$defs/containsMonitorSettings"},
+        {"$ref": "#/$defs/containsShellPreferences"},
+        {"$ref": "#/$defs/containsWorkPlan"},
+        {"$ref": "#/$defs/containsAccountVault"},
+        {"$ref": "#/$defs/containsQuotaCacheTarget"},
+        {"$ref": "#/$defs/containsSessionPreferences"},
+        {"$ref": "#/$defs/containsProviderModeState"},
+        {"$ref": "#/$defs/containsRestorePointLedger"}
+      ]
+    },
+    "conflicts": {
+      "type": "array",
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/conflict"}
+    },
+    "spaceEstimate": {"$ref": "#/$defs/spaceEstimate"}
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "byteCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "reasonCode": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,127}$"
+    },
+    "reasonCodes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/reasonCode"}
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product", "format", "baselineCommit", "readOnly"],
+      "properties": {
+        "product": {"const": "codex_quota_viewer"},
+        "format": {
+          "type": ["string", "null"],
+          "enum": ["quotaviewer-1.2.0-120", null]
+        },
+        "baselineCommit": {"const": "261fe1c"},
+        "readOnly": {"const": true}
+      }
+    },
+    "artifactKind": {
+      "enum": [
+        "settings",
+        "account_index",
+        "account_records",
+        "quota_cache",
+        "session_manager_settings",
+        "provider_mode",
+        "restore_points"
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "state",
+        "fileCount",
+        "recordCount",
+        "sourceBytes",
+        "reasonCodes"
+      ],
+      "properties": {
+        "kind": {"$ref": "#/$defs/artifactKind"},
+        "state": {
+          "enum": ["present", "missing", "invalid", "unsafe", "limit_exceeded"]
+        },
+        "fileCount": {"$ref": "#/$defs/count"},
+        "recordCount": {"$ref": "#/$defs/count"},
+        "sourceBytes": {"$ref": "#/$defs/byteCount"},
+        "reasonCodes": {"$ref": "#/$defs/reasonCodes"}
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "disposition",
+        "sourceItemCount",
+        "expectedTargetCount",
+        "reasonCode"
+      ],
+      "properties": {
+        "target": {
+          "enum": [
+            "monitor_settings",
+            "shell_preferences",
+            "work_plan",
+            "account_vault",
+            "quota_cache",
+            "session_preferences",
+            "provider_mode_state",
+            "restore_point_ledger"
+          ]
+        },
+        "disposition": {"enum": ["import", "skip", "review", "blocked"]},
+        "sourceItemCount": {"$ref": "#/$defs/count"},
+        "expectedTargetCount": {"$ref": "#/$defs/count"},
+        "reasonCode": {"$ref": "#/$defs/reasonCode"}
+      }
+    },
+    "conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "count", "reasonCode"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "duplicate_account_id",
+            "missing_account_record",
+            "orphan_account_record",
+            "invalid_account_record",
+            "invalid_restore_point",
+            "provider_restore_point_missing"
+          ]
+        },
+        "count": {"$ref": "#/$defs/count"},
+        "reasonCode": {"$ref": "#/$defs/reasonCode"}
+      }
+    },
+    "spaceEstimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceBytes", "minimumFreeBytes", "status"],
+      "properties": {
+        "sourceBytes": {"$ref": "#/$defs/byteCount"},
+        "minimumFreeBytes": {"$ref": "#/$defs/byteCount"},
+        "status": {"enum": ["target_preflight_required", "unavailable"]}
+      }
+    },
+    "containsSettings": {"$ref": "#/$defs/containsArtifact/settings"},
+    "containsAccountIndex": {"$ref": "#/$defs/containsArtifact/account_index"},
+    "containsAccountRecords": {"$ref": "#/$defs/containsArtifact/account_records"},
+    "containsQuotaCache": {"$ref": "#/$defs/containsArtifact/quota_cache"},
+    "containsSessionManagerSettings": {"$ref": "#/$defs/containsArtifact/session_manager_settings"},
+    "containsProviderMode": {"$ref": "#/$defs/containsArtifact/provider_mode"},
+    "containsRestorePoints": {"$ref": "#/$defs/containsArtifact/restore_points"},
+    "containsMonitorSettings": {"$ref": "#/$defs/containsTarget/monitor_settings"},
+    "containsShellPreferences": {"$ref": "#/$defs/containsTarget/shell_preferences"},
+    "containsWorkPlan": {"$ref": "#/$defs/containsTarget/work_plan"},
+    "containsAccountVault": {"$ref": "#/$defs/containsTarget/account_vault"},
+    "containsQuotaCacheTarget": {"$ref": "#/$defs/containsTarget/quota_cache"},
+    "containsSessionPreferences": {"$ref": "#/$defs/containsTarget/session_preferences"},
+    "containsProviderModeState": {"$ref": "#/$defs/containsTarget/provider_mode_state"},
+    "containsRestorePointLedger": {"$ref": "#/$defs/containsTarget/restore_point_ledger"},
+    "containsArtifact": {
+      "settings": {"contains":{"properties":{"kind":{"const":"settings"}},"required":["kind"]},"minContains":1,"maxContains":1},
+      "account_index": {"contains":{"properties":{"kind":{"const":"account_index"}},"required":["kind"]},"minContains":1,"maxContains":1},
+      "account_records": {"contains":{"properties":{"kind":{"const":"account_records"}},"required":["kind"]},"minContains":1,"maxContains":1},
+      "quota_cache": {"contains":{"properties":{"kind":{"const":"quota_cache"}},"required":["kind"]},"minContains":1,"maxContains":1},
+      "session_manager_settings": {"contains":{"properties":{"kind":{"const":"session_manager_settings"}},"required":["kind"]},"minContains":1,"maxContains":1},
+      "provider_mode": {"contains":{"properties":{"kind":{"const":"provider_mode"}},"required":["kind"]},"minContains":1,"maxContains":1},
+      "restore_points": {"contains":{"properties":{"kind":{"const":"restore_points"}},"required":["kind"]},"minContains":1,"maxContains":1}
+    },
+    "containsTarget": {
+      "monitor_settings": {"contains":{"properties":{"target":{"const":"monitor_settings"}},"required":["target"]},"minContains":1,"maxContains":1},
+      "shell_preferences": {"contains":{"properties":{"target":{"const":"shell_preferences"}},"required":["target"]},"minContains":1,"maxContains":1},
+      "work_plan": {"contains":{"properties":{"target":{"const":"work_plan"}},"required":["target"]},"minContains":1,"maxContains":1},
+      "account_vault": {"contains":{"properties":{"target":{"const":"account_vault"}},"required":["target"]},"minContains":1,"maxContains":1},
+      "quota_cache": {"contains":{"properties":{"target":{"const":"quota_cache"}},"required":["target"]},"minContains":1,"maxContains":1},
+      "session_preferences": {"contains":{"properties":{"target":{"const":"session_preferences"}},"required":["target"]},"minContains":1,"maxContains":1},
+      "provider_mode_state": {"contains":{"properties":{"target":{"const":"provider_mode_state"}},"required":["target"]},"minContains":1,"maxContains":1},
+      "restore_point_ledger": {"contains":{"properties":{"target":{"const":"restore_point_ledger"}},"required":["target"]},"minContains":1,"maxContains":1}
+    }
+  }
+}

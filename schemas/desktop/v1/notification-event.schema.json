@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-capacity-planner/desktop/v1/notification-event.schema.json",
+  "title": "Desktop notification event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "templateId", "observedAt", "details"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "templateId": {
+      "enum": [
+        "capacity_state_changed",
+        "quota_threshold_crossed",
+        "reset_credits_expiring",
+        "live_status_restored"
+      ]
+    },
+    "observedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+    "details": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "affectedWindowCount",
+            "lowestRemainingBasisPoints",
+            "resetCreditCount",
+            "earliestExpiresAt"
+          ],
+          "properties": {
+            "affectedWindowCount": {
+              "type": ["integer", "null"],
+              "minimum": 1,
+              "maximum": 64
+            },
+            "lowestRemainingBasisPoints": {
+              "type": ["integer", "null"],
+              "minimum": 0,
+              "maximum": 10000
+            },
+            "resetCreditCount": {
+              "type": ["integer", "null"],
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "earliestExpiresAt": {
+              "type": ["string", "null"],
+              "format": "date-time",
+              "maxLength": 64
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "templateId": { "const": "capacity_state_changed" } } },
+      "then": { "properties": { "details": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "templateId": { "const": "live_status_restored" } } },
+      "then": { "properties": { "details": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "templateId": { "const": "quota_threshold_crossed" } } },
+      "then": {
+        "properties": {
+          "details": {
+            "type": "object",
+            "properties": {
+              "affectedWindowCount": { "type": "integer" },
+              "lowestRemainingBasisPoints": { "type": "integer" },
+              "resetCreditCount": { "type": "null" },
+              "earliestExpiresAt": { "type": "null" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "templateId": { "const": "reset_credits_expiring" } } },
+      "then": {
+        "properties": {
+          "details": {
+            "type": "object",
+            "properties": {
+              "affectedWindowCount": { "type": "null" },
+              "lowestRemainingBasisPoints": { "type": "null" },
+              "resetCreditCount": { "type": "integer" },
+              "earliestExpiresAt": { "type": "string", "format": "date-time" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+{
+  "schema_version": "1.0",
+  "captured_at": "2026-08-30T00:00:00Z",
+  "environment": {
+    "environment_id": "fixture:plus-normal",
+    "platform": "fixture",
+    "architecture": "fixture",
+    "boundary": "fixture"
+  },
+  "codex_executable": {
+    "executable_id": "fixture-codex",
+    "source": "fixture",
+    "canonical_path": null,
+    "file_identity": null,
+    "version": "codex-cli 0.150.0-alpha.12.2"
+  },
+  "account": {
+    "auth_mode": "chatgpt",
+    "plan_type": "plus",
+    "binding_status": "ephemeral"
+  },
+  "quota": {
+    "windows": [
+      {
+        "limit_id": "codex:primary",
+        "label": "5-hour",
+        "window_minutes": 300,
+        "used_percent": 35.0,
+        "remaining_percent": 65.0,
+        "resets_at": "2026-08-30T05:00:00Z"
+      },
+      {
+        "limit_id": "codex:secondary",
+        "label": "weekly",
+        "window_minutes": 10080,
+        "used_percent": 58.0,
+        "remaining_percent": 42.0,
+        "resets_at": "2026-09-05T00:00:00Z"
+      }
+    ],
+    "reset_credit_summary": {
+      "summary_status": "available",
+      "available_count": 1,
+      "details_status": "complete",
+      "credits": [
+        {
+          "opaque_id": "fixture-credit-1",
+          "reset_type": "codexRateLimits",
+          "status": "available",
+          "granted_at": "2026-08-29T00:00:00Z",
+          "expires_at": "2026-09-30T00:00:00Z",
+          "title": "Reset Codex limits",
+          "description": null
+        }
+      ]
+    },
+    "usage_credit_summary": {
+      "summary_status": "unavailable",
+      "entries": [],
+      "captured_at": "2026-08-30T00:00:00Z",
+      "upstream_schema_fingerprint": null
+    }
+  },
+  "usage": {
+    "availability": "unsupported",
+    "summary": null,
+    "reason_codes": [
+      "usage_capability_unavailable"
+    ]
+  },
+  "data_status": {
+    "availability": "complete",
+    "freshness": "live",
+    "compatibility": "not_tested",
+    "reason_codes": [
+      "fixture_data",
+      "compatibility_not_tested"
+    ]
+  },
+  "diagnostics": [
+    {
+      "code": "fixture_data",
+      "severity": "info",
+      "message": "Loaded deterministic plus-normal fixture."
+    }
+  ]
+}

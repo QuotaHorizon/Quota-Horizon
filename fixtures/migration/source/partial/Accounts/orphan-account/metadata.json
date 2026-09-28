@@ -1,0 +1,7 @@
+{
+  "id": "orphan-account",
+  "displayName": "private@example.com",
+  "authMode": "chatgpt",
+  "createdAt": "2026-08-29T00:00:00Z",
+  "runtimeKey": "runtime-orphan"
+}

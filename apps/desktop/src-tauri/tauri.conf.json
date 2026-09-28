@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "QuotaHorizon",
+  "version": "0.1.4",
+  "identifier": "io.github.halfmelon.quotahorizon",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "beforeBundleCommand": "node ../../scripts/verify-tauri-assets.mjs",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "title": "QuotaHorizon",
+        "width": 1370,
+        "height": 760,
+        "minWidth": 960,
+        "minHeight": 680,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: http: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "quota-horizon"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": false,
+    "targets": [
+      "app"
+    ],
+    "icon": [
+      "icons/icon.png"
+    ],
+    "resources": {
+      "../../../LICENSE": "LICENSE",
+      "../../../NOTICE": "NOTICE"
+    },
+    "category": "DeveloperTool",
+    "shortDescription": "Turn usage limits into a work plan",
+    "longDescription": "A local-first Codex quota planner and account workspace.",
+    "windows": {
+      "wix": {
+        "version": "0.1.4"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "signingIdentity": "-"
+    }
+  }
+}

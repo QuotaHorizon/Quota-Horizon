@@ -1,0 +1,567 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/capacity-planner/status/v1/status.schema.json",
+  "title": "Capacity Planner status JSON v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "captured_at",
+    "environment",
+    "codex_executable",
+    "account",
+    "quota",
+    "usage",
+    "data_status",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "captured_at": {
+      "$ref": "#/$defs/utcTimestamp"
+    },
+    "environment": {
+      "$ref": "#/$defs/environment"
+    },
+    "codex_executable": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/codexExecutable"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "account": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/account"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "quota": {
+      "$ref": "#/$defs/quota"
+    },
+    "usage": {
+      "$ref": "#/$defs/usage"
+    },
+    "data_status": {
+      "$ref": "#/$defs/dataStatus"
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    }
+  },
+  "$defs": {
+    "reasonCode": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9_.]+$"
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "(?:Z|\\+00:00)$"
+    },
+    "availability": {
+      "enum": [
+        "complete",
+        "partial",
+        "unsupported",
+        "failed"
+      ]
+    },
+    "summaryStatus": {
+      "enum": [
+        "available",
+        "partial",
+        "unavailable"
+      ]
+    },
+    "freshness": {
+      "enum": [
+        "live",
+        "stale",
+        "not_applicable"
+      ]
+    },
+    "compatibility": {
+      "enum": [
+        "tested",
+        "expected_compatible",
+        "not_tested",
+        "unsupported",
+        "known_broken",
+        "not_applicable"
+      ]
+    },
+    "dataStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "availability",
+        "freshness",
+        "compatibility",
+        "reason_codes"
+      ],
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/availability"
+        },
+        "freshness": {
+          "$ref": "#/$defs/freshness"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/compatibility"
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reasonCode"
+          }
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "severity",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/reasonCode"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 512
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "environment_id",
+        "platform",
+        "architecture",
+        "boundary"
+      ],
+      "properties": {
+        "environment_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "type": "string"
+        },
+        "architecture": {
+          "type": "string"
+        },
+        "boundary": {
+          "type": "string"
+        }
+      }
+    },
+    "codexExecutable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executable_id",
+        "source",
+        "canonical_path",
+        "file_identity",
+        "version"
+      ],
+      "properties": {
+        "executable_id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "canonical_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file_identity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "account": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "auth_mode",
+        "plan_type",
+        "binding_status"
+      ],
+      "properties": {
+        "auth_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plan_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding_status": {
+          "enum": [
+            "stable",
+            "ephemeral",
+            "unavailable"
+          ]
+        }
+      }
+    },
+    "quotaWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limit_id",
+        "label",
+        "window_minutes",
+        "used_percent",
+        "remaining_percent",
+        "resets_at"
+      ],
+      "properties": {
+        "limit_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "window_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "used_percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "remaining_percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "resets_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/utcTimestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "resetCredit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "opaque_id",
+        "reset_type",
+        "status",
+        "granted_at",
+        "expires_at",
+        "title",
+        "description"
+      ],
+      "properties": {
+        "opaque_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reset_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "granted_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/utcTimestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/utcTimestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 512
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 512
+        }
+      }
+    },
+    "resetCreditSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary_status",
+        "available_count",
+        "details_status",
+        "credits"
+      ],
+      "properties": {
+        "summary_status": {
+          "$ref": "#/$defs/summaryStatus"
+        },
+        "available_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "details_status": {
+          "enum": [
+            "complete",
+            "partial",
+            "unavailable"
+          ]
+        },
+        "credits": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/resetCredit"
+          }
+        }
+      }
+    },
+    "quota": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "windows",
+        "reset_credit_summary",
+        "usage_credit_summary"
+      ],
+      "properties": {
+        "windows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/quotaWindow"
+          }
+        },
+        "reset_credit_summary": {
+          "$ref": "#/$defs/resetCreditSummary"
+        },
+        "usage_credit_summary": {
+          "$ref": "#/$defs/usageCreditSummary"
+        }
+      }
+    },
+    "usageCreditEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limit_id",
+        "has_credits",
+        "unlimited",
+        "balance"
+      ],
+      "properties": {
+        "limit_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "has_credits": {
+          "type": "boolean"
+        },
+        "unlimited": {
+          "type": "boolean"
+        },
+        "balance": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        }
+      }
+    },
+    "usageCreditSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary_status",
+        "entries",
+        "captured_at",
+        "upstream_schema_fingerprint"
+      ],
+      "properties": {
+        "summary_status": {
+          "$ref": "#/$defs/summaryStatus"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/usageCreditEntry"
+          }
+        },
+        "captured_at": {
+          "$ref": "#/$defs/utcTimestamp"
+        },
+        "upstream_schema_fingerprint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        }
+      }
+    },
+    "tokenUsageSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lifetime_tokens",
+        "peak_daily_tokens",
+        "longest_running_turn_sec",
+        "current_streak_days",
+        "longest_streak_days"
+      ],
+      "properties": {
+        "lifetime_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "peak_daily_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "longest_running_turn_sec": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "current_streak_days": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "longest_streak_days": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "availability",
+        "summary",
+        "reason_codes"
+      ],
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/availability"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/tokenUsageSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reasonCode"
+          }
+        }
+      }
+    }
+  }
+}

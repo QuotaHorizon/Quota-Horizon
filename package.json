@@ -1,0 +1,21 @@
+{
+  "name": "quota-horizon-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "dev": "npm --prefix apps/desktop run dev --",
+    "dev:app": "npm --prefix apps/desktop run dev:app --",
+    "lint": "npm --prefix apps/desktop run typecheck",
+    "typecheck": "npm --prefix apps/desktop run typecheck",
+    "test": "npm --prefix apps/desktop test --",
+    "test:scripts": "node --test scripts/*.test.mjs",
+    "check:source": "node scripts/check-source.mjs",
+    "check:rust": "npm --prefix apps/desktop run check:rust",
+    "build": "npm --prefix apps/desktop run build",
+    "build:app": "npm --prefix apps/desktop run build:app --",
+    "package:mac": "node scripts/package-macos.mjs"
+  }
+}

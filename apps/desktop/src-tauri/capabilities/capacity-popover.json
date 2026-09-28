@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "capacity-popover",
+  "description": "The local quota popover can receive account/quota updates and hide itself",
+  "windows": ["capacity-popover"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
+    "core:window:allow-hide",
+    "core:window:allow-is-visible"
+  ]
+}

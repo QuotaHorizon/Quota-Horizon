@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1.0",
+  "status": "available",
+  "reasonCode": "diagnostics_available",
+  "preview": {
+    "generatedAt": "2026-08-30T00:05:00Z",
+    "productVersion": "0.1.0",
+    "platform": "macos",
+    "architecture": "aarch64",
+    "discovery": {
+      "outcome": "selected",
+      "candidateCount": 1,
+      "selectedSourceCategories": ["macos_chatgpt_bundle"],
+      "codexVersion": "codex-cli 0.150.0",
+      "identityStrength": "os_file_id"
+    },
+    "monitor": {
+      "storeBackendAvailable": true,
+      "settingsAvailable": true,
+      "autoRefreshEnabled": true,
+      "refreshIntervalSeconds": 300,
+      "notificationPrivacy": "generic"
+    },
+    "lastRead": {
+      "lifecycle": "ready",
+      "capturedAt": "2026-08-30T00:00:00Z",
+      "availability": "complete",
+      "freshness": "live",
+      "compatibility": "expected_compatible",
+      "quotaWindowCount": 1,
+      "resetCreditSummary": "available",
+      "resetCreditDetails": "complete",
+      "usageAvailability": "complete",
+      "diagnosticCodes": ["compatibility_expected"]
+    },
+    "pathRedacted": true,
+    "accountRedacted": true,
+    "quotaValuesRedacted": true
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "name": "no-fixed-window",
+  "steps": [
+    {
+      "expect_method": "initialize",
+      "action": {
+        "type": "respond",
+        "result": {
+          "userAgent": "codex-cli/0.150.0-alpha.12.2",
+          "platformFamily": "windows",
+          "platformOs": "windows"
+        }
+      }
+    },
+    {
+      "expect_method": "initialized",
+      "action": {
+        "type": "no_response",
+        "delay_ms": 0
+      }
+    },
+    {
+      "expect_method": "account/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "account": {
+            "type": "chatgpt",
+            "planType": "business"
+          }
+        }
+      }
+    },
+    {
+      "expect_method": "account/rateLimits/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "rateLimits": {
+            "limitId": "workspace_credits",
+            "limitName": "Workspace credits",
+            "planType": "business",
+            "primary": null,
+            "secondary": null
+          },
+          "rateLimitsByLimitId": {
+            "workspace_credits": {
+              "limitId": "workspace_credits",
+              "limitName": "Workspace credits",
+              "planType": "business",
+              "primary": null,
+              "secondary": null
+            }
+          },
+          "rateLimitResetCredits": null
+        }
+      }
+    },
+    {
+      "expect_method": "account/usage/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "summary": null,
+          "dailyUsageBuckets": null
+        }
+      }
+    }
+  ]
+}

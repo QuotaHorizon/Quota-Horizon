@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "codex_version": "codex-cli 0.150.0-alpha.12.2",
+  "generated_at": "2026-08-29T17:17:15Z",
+  "generator": "codex app-server generate-json-schema --out <temporary-directory>",
+  "experimental_api": false,
+  "transport": "stdio",
+  "observed_client_methods": [
+    "initialize",
+    "initialized",
+    "account/read",
+    "account/rateLimits/read",
+    "account/usage/read"
+  ],
+  "source_schema_sha256": {
+    "v1/InitializeParams.json": "6f0094be9a65242ec779a40794cbd4fdfa32fca1e45084a16adfb50501d33ea2",
+    "v1/InitializeResponse.json": "62ad689c2cb6379913c1d72749cfd8de5089d35760214123518eb92eef11acc9",
+    "v2/GetAccountResponse.json": "08a7dd8c570c905b0bb6998d43ed133e72e2445f08125f86dfc96887e288701a",
+    "v2/GetAccountRateLimitsResponse.json": "c102f41b28ee782008b0fc98adb2cefe172bfe6c347770a0896453f23e3d812a",
+    "v2/GetAccountTokenUsageResponse.json": "a58e58c852c888e5de925d99a66688d55ebb2fff038e795aadf04f8a8426dff8",
+    "v2/AccountUpdatedNotification.json": "9bf450d9d9ea23a2bac9c9cb0a68c2de8f89a97bdeb4485c91762bb4d43295b8",
+    "ClientRequest.json": "43eef76f725d863dc191bcf86b1a8070884aabcd779a82f821978e1885828c2c",
+    "ClientNotification.json": "706cf248d75027c84a3c63348d0ed507182e8eba40069dd17541793de029145a"
+  }
+}

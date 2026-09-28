@@ -1,0 +1,47 @@
+{
+  "name": "@quota-horizon/desktop",
+  "description": "Modified by QuotaHorizon from Codex Switch v1.3.5",
+  "private": true,
+  "version": "0.1.4",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run build",
+    "check:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo test --manifest-path src-tauri/Cargo.toml",
+    "test": "vitest run",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "dev:app": "tauri dev",
+    "build:app": "node ../../scripts/build-desktop-app.mjs",
+    "build:app:mac": "node ../../scripts/build-desktop-app.mjs --target aarch64-apple-darwin",
+    "build:app:win-arm64": "node ../../scripts/build-desktop-app.mjs --target aarch64-pc-windows-msvc"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-opener": "^2.5.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "antd": "^5.29.3",
+    "dayjs": "^1.11.21",
+    "echarts": "^6.1.0",
+    "jsqr": "^1.4.0",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.0",
+    "@types/node": "^22.10.7",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "create-dmg": "8.1.0",
+    "less": "^4.9.0",
+    "typescript": "~5.6.3",
+    "vite": "^6.0.5",
+    "vitest": "4.1.9"
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "schema_version": "1.0",
+  "name": "plus-normal",
+  "steps": [
+    {
+      "expect_method": "initialize",
+      "action": {
+        "type": "respond",
+        "result": {
+          "codexHome": "/fixture/codex-home",
+          "platformFamily": "unix",
+          "platformOs": "macos",
+          "userAgent": "codex-cli/0.150.0-alpha.12.2"
+        }
+      }
+    },
+    {
+      "expect_method": "initialized",
+      "action": {
+        "type": "no_response",
+        "delay_ms": 0
+      }
+    },
+    {
+      "expect_method": "account/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "account": {
+            "type": "chatgpt",
+            "email": null,
+            "planType": "plus"
+          },
+          "requiresOpenaiAuth": true
+        }
+      }
+    },
+    {
+      "expect_method": "account/rateLimits/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "rateLimits": {
+            "limitId": "codex",
+            "limitName": "Codex",
+            "planType": "plus",
+            "primary": {
+              "usedPercent": 35,
+              "windowDurationMins": 300,
+              "resetsAt": 1788066000
+            },
+            "secondary": {
+              "usedPercent": 58,
+              "windowDurationMins": 10080,
+              "resetsAt": 1788566400
+            },
+            "credits": null,
+            "individualLimit": null,
+            "rateLimitReachedType": null,
+            "spendControlReached": null
+          },
+          "rateLimitsByLimitId": {
+            "codex": {
+              "limitId": "codex",
+              "limitName": "Codex",
+              "planType": "plus",
+              "primary": {
+                "usedPercent": 35,
+                "windowDurationMins": 300,
+                "resetsAt": 1788066000
+              },
+              "secondary": {
+                "usedPercent": 58,
+                "windowDurationMins": 10080,
+                "resetsAt": 1788566400
+              },
+              "credits": null,
+              "individualLimit": null,
+              "rateLimitReachedType": null,
+              "spendControlReached": null
+            }
+          },
+          "rateLimitResetCredits": {
+            "availableCount": 1,
+            "credits": [
+              {
+                "id": "fixture-credit-1",
+                "title": "Reset Codex limits",
+                "description": null,
+                "grantedAt": 1787961600,
+                "expiresAt": 1790726400,
+                "resetType": "codexRateLimits",
+                "status": "available"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "expect_method": "account/usage/read",
+      "action": {
+        "type": "rpc_error",
+        "code": -32601,
+        "message": "Method not available in this fixture"
+      }
+    }
+  ]
+}

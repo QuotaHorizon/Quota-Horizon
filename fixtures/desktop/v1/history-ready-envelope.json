@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0",
+  "status": "available",
+  "reasonCode": "history_available",
+  "points": [
+    {
+      "snapshotId": "018f47a2-8a71-4f4a-9c35-1f4234a73311",
+      "capturedAt": "2026-08-30T03:30:00Z",
+      "limitId": "codex:primary",
+      "label": "Weekly",
+      "windowMinutes": 10080,
+      "usedPercent": 5.0,
+      "remainingPercent": 95.0,
+      "resetsAt": "2026-09-05T21:22:43Z",
+      "availability": "complete",
+      "compatibility": "not_tested"
+    }
+  ]
+}

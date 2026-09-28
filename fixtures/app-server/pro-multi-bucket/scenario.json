@@ -1,0 +1,145 @@
+{
+  "schema_version": "1.0",
+  "name": "pro-multi-bucket",
+  "steps": [
+    {
+      "expect_method": "initialize",
+      "action": {
+        "type": "respond",
+        "result": {
+          "userAgent": "codex-cli/0.150.0-alpha.12.2",
+          "platformFamily": "unix",
+          "platformOs": "macos",
+          "futureInitializeField": "ignored"
+        }
+      }
+    },
+    {
+      "expect_method": "initialized",
+      "action": {
+        "type": "no_response",
+        "delay_ms": 0
+      }
+    },
+    {
+      "expect_method": "account/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "account": {
+            "type": "chatgpt",
+            "email": null,
+            "planType": "pro",
+            "futureAccountField": true
+          },
+          "requiresOpenaiAuth": true
+        }
+      }
+    },
+    {
+      "expect_method": "account/rateLimits/read",
+      "action": {
+        "type": "respond",
+        "result": {
+          "rateLimits": {
+            "limitId": "codex",
+            "limitName": "Codex",
+            "planType": "pro",
+            "primary": {
+              "usedPercent": 20,
+              "windowDurationMins": 300,
+              "resetsAt": 1788066000
+            },
+            "secondary": {
+              "usedPercent": 40,
+              "windowDurationMins": 10080,
+              "resetsAt": 1788566400
+            }
+          },
+          "rateLimitsByLimitId": {
+            "codex": {
+              "limitId": "codex",
+              "limitName": "Codex",
+              "planType": "pro",
+              "primary": {
+                "usedPercent": 20,
+                "windowDurationMins": 300,
+                "resetsAt": 1788066000
+              },
+              "secondary": {
+                "usedPercent": 40,
+                "windowDurationMins": 10080,
+                "resetsAt": 1788566400
+              }
+            },
+            "codex_future": {
+              "limitId": "codex_future",
+              "limitName": "Future bucket",
+              "planType": "pro",
+              "primary": {
+                "usedPercent": 12.5,
+                "windowDurationMins": 60,
+                "resetsAt": 1788062400,
+                "futureWindowField": "ignored"
+              },
+              "secondary": null,
+              "credits": {
+                "hasCredits": true,
+                "unlimited": false,
+                "balance": "12.50"
+              },
+              "futureBucketField": 1
+            }
+          },
+          "rateLimitResetCredits": {
+            "availableCount": 2,
+            "credits": [
+              {
+                "id": "fixture-credit-pro-1",
+                "grantedAt": 1787961600,
+                "expiresAt": 1790726400,
+                "resetType": "codexRateLimits",
+                "status": "available"
+              },
+              {
+                "id": "fixture-credit-pro-2",
+                "grantedAt": 1787961700,
+                "expiresAt": null,
+                "resetType": "codexRateLimits",
+                "status": "available"
+              }
+            ]
+          },
+          "futureTopLevelField": {
+            "ignored": true
+          }
+        }
+      }
+    },
+    {
+      "expect_method": "account/usage/read",
+      "action": {
+        "type": "notify_then_respond",
+        "method": "future/notification",
+        "params": {
+          "privatePayload": "fixture-only"
+        },
+        "result": {
+          "summary": {
+            "lifetimeTokens": 123456,
+            "peakDailyTokens": 4567,
+            "longestRunningTurnSec": 321,
+            "currentStreakDays": 5,
+            "longestStreakDays": 12
+          },
+          "dailyUsageBuckets": [
+            {
+              "startDate": "2026-08-29",
+              "tokens": 4567
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

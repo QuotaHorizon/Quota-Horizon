@@ -1,0 +1,31 @@
+.briefing { display: grid; gap: 14px; min-width: 0; }
+.briefing h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 17px; font-weight: 650; }
+.forecast { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); padding: 16px 20px; min-width: 0; }
+.forecast { background: linear-gradient(140deg, rgba(var(--green-rgb), .10), var(--panel) 70%); }
+.forecast[data-stale] { background: var(--panel); }
+.byline { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 11px; }
+.byline h3 { font-size: 14px; margin: 0; color: var(--ink); }
+.byline a { color: var(--green-dark); }
+.byline > span:last-child { margin-left: auto; }
+.probabilities { display: grid; grid-template-columns: minmax(120px, 2fr) minmax(90px, 1fr); align-items: end; gap: 32px; margin: 12px 0; max-width: 540px; }
+.probabilities > div { display: grid; gap: 9px; }
+.probabilities span { font-size: 12px; color: var(--muted); }
+.probabilities strong { font-size: 40px; font-weight: 650; letter-spacing: -1px; line-height: 1.15; color: var(--green-dark); font-variant-numeric: tabular-nums; }
+.probabilities > div:last-child strong { font-size: 28px; color: var(--ink); }
+.track { height: 5px; background: rgba(var(--green-rgb), .13); border-radius: 4px; overflow: hidden; }
+.track i { display: block; height: 100%; background: var(--green-dark); border-radius: inherit; }
+.forecast p { font-size: 12px; line-height: 1.8; color: var(--muted); margin: 12px 0; }
+.forecast .correction { padding: 5px 9px; margin: 8px 0; border-left: 2px solid #bf8530; background: rgba(191, 133, 48, .08); color: var(--ink); }
+.forecast small, .post small, .feedTime { font-size: 11px; line-height: 1.7; color: var(--muted); }
+.signal { margin: 8px 0 0; font-size: 11px; color: var(--muted); }
+.signal summary, .reply summary { cursor: pointer; }
+.post time { font-size: 11px; color: var(--muted); }
+.posts { display: grid; gap: 12px; }
+.post { border: 1px solid var(--line); border-radius: 12px; padding: 17px 20px; min-width: 0; background: var(--panel); }
+.post h3 { margin: 0; font-size: 14px; line-height: 1.6; }
+.meaning { font-size: 12px; color: var(--muted); line-height: 1.8; margin: 8px 0 14px; }
+.parent, .reply { padding: 12px 14px; border-radius: 8px; }
+.parent { background: rgba(127, 127, 127, .055); border-left: 2px solid var(--line); margin-bottom: 8px; }
+.reply { background: rgba(var(--green-rgb), .045); border-left: 2px solid rgba(var(--green-rgb), .45); }
+.parent p, .reply p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; font-size: 13px; margin: 9px 0; }
+.reply details { font-size: 11px; color: var(--muted); margin-top: 10px; }

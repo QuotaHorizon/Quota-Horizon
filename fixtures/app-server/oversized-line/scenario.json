@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "name": "oversized-line",
+  "steps": [
+    {
+      "expect_method": "initialize",
+      "action": {
+        "type": "raw_repeated_line",
+        "prefix": "{\"padding\":\"",
+        "fragment": "x",
+        "repeat": 512,
+        "suffix": "\"}"
+      }
+    }
+  ]
+}

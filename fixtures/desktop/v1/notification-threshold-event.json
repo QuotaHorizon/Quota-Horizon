@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1.0",
+  "templateId": "quota_threshold_crossed",
+  "observedAt": "2026-08-30T00:00:00Z",
+  "details": {
+    "affectedWindowCount": 1,
+    "lowestRemainingBasisPoints": 1234,
+    "resetCreditCount": null,
+    "earliestExpiresAt": null
+  }
+}

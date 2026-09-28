@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0",
+  "status": "available",
+  "reasonCode": "settings_available",
+  "settings": {
+    "revision": 1,
+    "autoRefreshEnabled": true,
+    "refreshIntervalSeconds": 300,
+    "notificationThresholdBasisPoints": 2000,
+    "resetCreditNoticeHours": 24,
+    "quietHoursEnabled": false,
+    "quietHoursStartMinute": null,
+    "quietHoursEndMinute": null,
+    "language": "system",
+    "lockScreenPrivacy": true,
+    "launchAtLogin": false,
+    "historyRetentionDays": 180,
+    "updatedAt": "2026-08-30T04:00:00Z"
+  }
+}

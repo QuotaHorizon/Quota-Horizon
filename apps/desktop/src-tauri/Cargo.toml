@@ -1,0 +1,78 @@
+# Modified by the QuotaHorizon project from Codex Switch v1.3.5.
+[package]
+name = "quota-horizon-desktop"
+version = "0.1.4"
+description = "Local-first Codex quota planning and account workspace"
+authors = ["QuotaHorizon contributors"]
+license = "Apache-2.0"
+edition = "2021"
+
+[lib]
+name = "quota_horizon_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+capacity-domain = { path = "../../../crates/capacity-domain" }
+capacity-desktop-service = { package = "capacity-desktop", path = "../../capacity-preview/src-tauri" }
+capacity-migration = { path = "../../../crates/capacity-migration" }
+capacity-mutation = { path = "../../../crates/capacity-mutation" }
+capacity-store = { path = "../../../crates/capacity-store" }
+base64 = "0.22"
+aes-gcm = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+crypto_box = { version = "0.9.1", features = ["seal"] }
+dirs = "6"
+ed25519-dalek = { version = "2.2", features = ["pkcs8"] }
+flate2 = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+json5 = "0.4"
+md-5 = "0.10"
+keyring = "4.1.5"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "cookies", "json", "multipart", "rustls-tls"] }
+rqrr = "0.10.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+semver = "1"
+sha2 = "0.10"
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri-plugin-autostart = "2.5.1"
+tauri-plugin-clipboard-manager = "2.3.2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri-plugin-deep-link = "2"
+tiny_http = "0.12"
+toml_edit = "0.25"
+tungstenite = { version = "0.28", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+zstd = "0.13"
+rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+sysinfo = "0.37"
+
+[dev-dependencies]
+qrcode = "0.14.1"
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-version = "0.1.7"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Networking_WinHttp", "Win32_Storage_FileSystem"] }
+winreg = "0.55"
+windows = { version = "0.61", features = [
+  "ApplicationModel",
+  "ApplicationModel_Core",
+  "Foundation",
+  "Management_Deployment",
+  "Storage",
+  "Storage_Search",
+  "Win32_System_Com",
+  "Win32_System_WinRT",
+  "Win32_UI_Shell",
+] }

@@ -1,0 +1,336 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/capacity-planner/doctor/v1/doctor.schema.json",
+  "title": "Capacity Planner doctor JSON v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "product_version",
+    "platform",
+    "architecture",
+    "outcome",
+    "discovery",
+    "checks",
+    "observations",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "product_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "platform": {
+      "enum": [
+        "macos",
+        "windows",
+        "linux",
+        "unknown"
+      ]
+    },
+    "architecture": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "outcome": {
+      "enum": [
+        "ready",
+        "partial",
+        "executable_error",
+        "authentication_required",
+        "unsupported",
+        "timeout",
+        "protocol_error"
+      ]
+    },
+    "discovery": {
+      "$ref": "#/$defs/discovery"
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/check"
+      }
+    },
+    "observations": {
+      "$ref": "#/$defs/observations"
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    }
+  },
+  "$defs": {
+    "reasonCode": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9_.]+$"
+    },
+    "availability": {
+      "enum": [
+        "complete",
+        "partial",
+        "unsupported",
+        "failed"
+      ]
+    },
+    "freshness": {
+      "enum": [
+        "live",
+        "stale",
+        "not_applicable"
+      ]
+    },
+    "compatibility": {
+      "enum": [
+        "tested",
+        "expected_compatible",
+        "not_tested",
+        "unsupported",
+        "known_broken",
+        "not_applicable"
+      ]
+    },
+    "summaryStatus": {
+      "enum": [
+        "available",
+        "partial",
+        "unavailable"
+      ]
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "candidate_count",
+        "selected_sources",
+        "codex_version",
+        "identity_strength",
+        "path_redacted"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": [
+            "selected",
+            "confirmation_required",
+            "ambiguous",
+            "not_found",
+            "verification_failed"
+          ]
+        },
+        "candidate_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "selected_sources": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "explicit",
+              "macos_chatgpt_bundle",
+              "macos_bundle_registry",
+              "path"
+            ]
+          }
+        },
+        "codex_version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^codex-cli [A-Za-z0-9._+\\-]{1,96}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "identity_strength": {
+          "anyOf": [
+            {
+              "enum": [
+                "os_file_id",
+                "metadata_fingerprint"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path_redacted": {
+          "const": true
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "status",
+        "reason_codes"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "executable_discovery",
+            "version_probe",
+            "app_server_spawn",
+            "initialize_handshake",
+            "account_read",
+            "authentication",
+            "rate_limits_read",
+            "fixed_windows",
+            "reset_credits",
+            "workspace_credits",
+            "token_usage",
+            "protocol_contract"
+          ]
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "warning",
+            "fail",
+            "not_run",
+            "not_applicable"
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/reasonCode"
+          }
+        }
+      }
+    },
+    "dataStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "availability",
+        "freshness",
+        "compatibility",
+        "reason_codes"
+      ],
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/availability"
+        },
+        "freshness": {
+          "$ref": "#/$defs/freshness"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/compatibility"
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reasonCode"
+          }
+        }
+      }
+    },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fixed_window_count",
+        "reset_credit_summary",
+        "workspace_credit_summary",
+        "token_usage",
+        "status_axes"
+      ],
+      "properties": {
+        "fixed_window_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "reset_credit_summary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/summaryStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace_credit_summary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/summaryStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "token_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/availability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status_axes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/dataStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "severity",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/reasonCode"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 512
+        }
+      }
+    }
+  }
+}

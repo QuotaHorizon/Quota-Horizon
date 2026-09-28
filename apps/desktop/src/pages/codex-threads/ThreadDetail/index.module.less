@@ -1,0 +1,249 @@
+.detailDrawer :global(.ant-drawer-body) {
+  padding: 16px;
+  background: var(--bg);
+}
+
+.detailLoading,
+.detailEmpty {
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-secondary);
+}
+
+.detailBody {
+  display: grid;
+  gap: 14px;
+}
+
+.readingStatus {
+  position: sticky;
+  top: -16px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.summaryPanel,
+.timelineItem {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.summaryPanel {
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.summaryIdentity {
+  display: grid;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.summaryIdentity span,
+.summaryMeta {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.summaryMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.excerptGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.excerptGrid article {
+  padding: 10px;
+  border-radius: 9px;
+  background: var(--bg-soft, rgba(127, 127, 127, .08));
+}
+
+.excerptGrid p {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.resumePanel {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-soft, rgba(127, 127, 127, .05));
+}
+
+.resumeCommand {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.resumeCommand code {
+  min-width: 0;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: rgba(127, 127, 127, .1);
+  overflow-x: auto;
+}
+
+.resumeActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resumeActions span {
+  flex: 1 1 220px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.rebindPreview {
+  display: grid;
+  gap: 10px;
+  color: var(--text-secondary);
+}
+
+.rebindPreview p,
+.rebindPreview ul {
+  margin: 0;
+}
+
+.rebindPreview dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.rebindPreview dl div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-soft, rgba(127, 127, 127, .08));
+}
+
+.rebindPreview dt {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.rebindPreview dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.rebindPreview ul {
+  padding-left: 20px;
+}
+
+.timeline {
+  display: grid;
+  gap: 10px;
+}
+
+.timelineItem {
+  padding: 12px;
+  content-visibility: auto;
+  contain-intrinsic-size: 140px;
+}
+
+.timelineItem header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.timelineItem header time {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.timelineItem p,
+.timelineItem pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.timelineItem p {
+  margin: 10px 0 0;
+}
+
+.timelineItem details {
+  margin-top: 9px;
+}
+
+.timelineItem summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.timelineItem pre {
+  max-height: 320px;
+  margin: 7px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, .06);
+  font-size: 12px;
+}
+
+.messageuser {
+  border-left: 3px solid var(--primary, #1677ff);
+}
+
+.messageassistant {
+  border-left: 3px solid #52c41a;
+}
+
+.tool_call {
+  border-left: 3px solid #faad14;
+}
+
+.timeline footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .excerptGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .timelineItem header {
+    flex-wrap: wrap;
+  }
+
+  .timelineItem header time {
+    width: 100%;
+    margin-left: 23px;
+  }
+}

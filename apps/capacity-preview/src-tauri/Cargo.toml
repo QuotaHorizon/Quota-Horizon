@@ -1,0 +1,28 @@
+[package]
+name = "capacity-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "capacity_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+capacity-domain = { path = "../../../crates/capacity-domain" }
+capacity-mutation = { path = "../../../crates/capacity-mutation" }
+capacity-store = { path = "../../../crates/capacity-store" }
+capacity-vault = { path = "../../../crates/capacity-vault" }
+chrono.workspace = true
+codex-runtime = { path = "../../../crates/codex-runtime" }
+serde.workspace = true
+tauri = { workspace = true, features = ["tray-icon"] }
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true

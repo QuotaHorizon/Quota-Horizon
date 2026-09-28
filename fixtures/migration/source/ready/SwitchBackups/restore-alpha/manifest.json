@@ -1,0 +1,16 @@
+{
+  "id": "restore-alpha",
+  "createdAt": "2026-08-30T00:00:00Z",
+  "reason": "fixture",
+  "summary": "Synthetic restore fixture",
+  "codexWasRunning": false,
+  "files": [
+    {
+      "originalPath": "/Users/fixture/.codex/auth.json",
+      "backupRelativePath": "files/auth.json",
+      "exists": true,
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "modifiedAt": "2026-08-30T00:00:00Z"
+    }
+  ]
+}

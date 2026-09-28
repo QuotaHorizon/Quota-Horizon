@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "captured_at": "2026-08-30T00:00:00Z",
+  "environment": {
+    "environment_id": "fixture:process-timeout",
+    "platform": "fixture",
+    "architecture": "fixture",
+    "boundary": "fixture"
+  },
+  "codex_executable": null,
+  "account": null,
+  "quota": {
+    "windows": [],
+    "reset_credit_summary": {
+      "summary_status": "unavailable",
+      "available_count": null,
+      "details_status": "unavailable",
+      "credits": null
+    },
+    "usage_credit_summary": {
+      "summary_status": "unavailable",
+      "entries": [],
+      "captured_at": "2026-08-30T00:00:00Z",
+      "upstream_schema_fingerprint": null
+    }
+  },
+  "usage": {
+    "availability": "failed",
+    "summary": null,
+    "reason_codes": [
+      "request_timeout"
+    ]
+  },
+  "data_status": {
+    "availability": "failed",
+    "freshness": "not_applicable",
+    "compatibility": "not_tested",
+    "reason_codes": [
+      "request_timeout",
+      "compatibility_not_tested"
+    ]
+  },
+  "diagnostics": [
+    {
+      "code": "request_timeout",
+      "severity": "error",
+      "message": "The fixture intentionally withheld its response past the request timeout."
+    }
+  ]
+}

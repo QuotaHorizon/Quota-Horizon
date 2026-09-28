@@ -1,0 +1,359 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/codex-capacity-planner/soak/v2/soak.schema.json",
+  "title": "Codex Capacity Planner internal soak report v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "outcome",
+    "requested_duration_seconds",
+    "elapsed_milliseconds",
+    "interval_seconds",
+    "concurrent_requests",
+    "scheduled_rounds",
+    "successful_rounds",
+    "failed_rounds",
+    "failure_round_counts",
+    "maximum_consecutive_failed_rounds",
+    "first_failure_elapsed_seconds",
+    "last_failure_elapsed_seconds",
+    "request_responses",
+    "source_generations",
+    "coalesced_responses",
+    "current_responses",
+    "stale_responses",
+    "error_responses",
+    "maximum_round_latency_ms",
+    "final_availability",
+    "final_freshness",
+    "final_compatibility",
+    "final_window_count",
+    "shutdown_clean",
+    "shutdown_failure",
+    "diagnostics_complete",
+    "source_lifecycle",
+    "executable",
+    "path_redacted"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "2.0"
+    },
+    "outcome": {
+      "enum": [
+        "pass",
+        "failed"
+      ]
+    },
+    "requested_duration_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 28800
+    },
+    "elapsed_milliseconds": {
+      "$ref": "#/$defs/count"
+    },
+    "interval_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600
+    },
+    "concurrent_requests": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16
+    },
+    "scheduled_rounds": {
+      "$ref": "#/$defs/count"
+    },
+    "successful_rounds": {
+      "$ref": "#/$defs/count"
+    },
+    "failed_rounds": {
+      "$ref": "#/$defs/count"
+    },
+    "failure_round_counts": {
+      "$ref": "#/$defs/failure_round_counts"
+    },
+    "maximum_consecutive_failed_rounds": {
+      "$ref": "#/$defs/count"
+    },
+    "first_failure_elapsed_seconds": {
+      "$ref": "#/$defs/optional_count"
+    },
+    "last_failure_elapsed_seconds": {
+      "$ref": "#/$defs/optional_count"
+    },
+    "request_responses": {
+      "$ref": "#/$defs/count"
+    },
+    "source_generations": {
+      "$ref": "#/$defs/count"
+    },
+    "coalesced_responses": {
+      "$ref": "#/$defs/count"
+    },
+    "current_responses": {
+      "$ref": "#/$defs/count"
+    },
+    "stale_responses": {
+      "$ref": "#/$defs/count"
+    },
+    "error_responses": {
+      "$ref": "#/$defs/count"
+    },
+    "maximum_round_latency_ms": {
+      "$ref": "#/$defs/count"
+    },
+    "final_availability": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "complete",
+        "partial",
+        "unsupported",
+        "failed",
+        null
+      ]
+    },
+    "final_freshness": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "live",
+        "stale",
+        "not_applicable",
+        null
+      ]
+    },
+    "final_compatibility": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "tested",
+        "expected_compatible",
+        "not_tested",
+        "unsupported",
+        "known_broken",
+        "not_applicable",
+        null
+      ]
+    },
+    "final_window_count": {
+      "$ref": "#/$defs/optional_count"
+    },
+    "shutdown_clean": {
+      "type": "boolean"
+    },
+    "shutdown_failure": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/failure_category"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "diagnostics_complete": {
+      "type": "boolean"
+    },
+    "source_lifecycle": {
+      "$ref": "#/$defs/source_lifecycle"
+    },
+    "executable": {
+      "$ref": "#/$defs/executable"
+    },
+    "path_redacted": {
+      "const": true
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "optional_count": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/count"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "failure_category": {
+      "type": "string",
+      "enum": [
+        "process_failed",
+        "timeout",
+        "protocol_error",
+        "executable_changed",
+        "account_changed",
+        "account_boundary_invalid",
+        "backoff",
+        "owner_stopped",
+        "join_error",
+        "diagnostic_incomplete",
+        "mixed"
+      ]
+    },
+    "failure_round_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "process_failed",
+        "timeout",
+        "protocol_error",
+        "executable_changed",
+        "account_changed",
+        "account_boundary_invalid",
+        "backoff",
+        "owner_stopped",
+        "join_error",
+        "diagnostic_incomplete",
+        "mixed"
+      ],
+      "properties": {
+        "process_failed": {
+          "$ref": "#/$defs/count"
+        },
+        "timeout": {
+          "$ref": "#/$defs/count"
+        },
+        "protocol_error": {
+          "$ref": "#/$defs/count"
+        },
+        "executable_changed": {
+          "$ref": "#/$defs/count"
+        },
+        "account_changed": {
+          "$ref": "#/$defs/count"
+        },
+        "account_boundary_invalid": {
+          "$ref": "#/$defs/count"
+        },
+        "backoff": {
+          "$ref": "#/$defs/count"
+        },
+        "owner_stopped": {
+          "$ref": "#/$defs/count"
+        },
+        "join_error": {
+          "$ref": "#/$defs/count"
+        },
+        "diagnostic_incomplete": {
+          "$ref": "#/$defs/count"
+        },
+        "mixed": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "source_lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "refresh_attempts",
+        "identity_verification_failures",
+        "connection_start_attempts",
+        "connections_started",
+        "connection_start_failures",
+        "disconnect_attempts",
+        "disconnects_completed",
+        "disconnect_failures",
+        "connection_handle_active"
+      ],
+      "properties": {
+        "refresh_attempts": {
+          "$ref": "#/$defs/count"
+        },
+        "identity_verification_failures": {
+          "$ref": "#/$defs/count"
+        },
+        "connection_start_attempts": {
+          "$ref": "#/$defs/count"
+        },
+        "connections_started": {
+          "$ref": "#/$defs/count"
+        },
+        "connection_start_failures": {
+          "$ref": "#/$defs/count"
+        },
+        "disconnect_attempts": {
+          "$ref": "#/$defs/count"
+        },
+        "disconnects_completed": {
+          "$ref": "#/$defs/count"
+        },
+        "disconnect_failures": {
+          "$ref": "#/$defs/count"
+        },
+        "connection_handle_active": {
+          "type": "boolean"
+        }
+      }
+    },
+    "executable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform",
+        "architecture",
+        "candidate_source",
+        "codex_version",
+        "status_schema_version"
+      ],
+      "properties": {
+        "platform": {
+          "enum": [
+            "macos",
+            "windows",
+            "linux",
+            "unknown"
+          ]
+        },
+        "architecture": {
+          "enum": [
+            "aarch64",
+            "x86_64",
+            "x86",
+            "arm",
+            "other"
+          ]
+        },
+        "candidate_source": {
+          "enum": [
+            "explicit",
+            "macos_chatgpt_bundle",
+            "macos_bundle_registry",
+            "path"
+          ]
+        },
+        "codex_version": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 106,
+              "pattern": "^codex-cli [A-Za-z0-9._+\\-]{1,96}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status_schema_version": {
+          "const": "1.0"
+        }
+      }
+    }
+  }
+}
