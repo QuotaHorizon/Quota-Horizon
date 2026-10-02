@@ -152,10 +152,12 @@ export function LiveSourcesPanel({ archive, archiveContent, language, onOpenSour
     };
     check();
     const timer = window.setInterval(check, 15 * 60_000);
+    const clock = window.setInterval(() => { if (document.visibilityState === "visible") setNow(Date.now()); }, 30_000);
     window.addEventListener("focus", check);
     document.addEventListener("visibilitychange", check);
     return () => {
       window.clearInterval(timer);
+      window.clearInterval(clock);
       window.removeEventListener("focus", check);
       document.removeEventListener("visibilitychange", check);
     };

@@ -65,7 +65,7 @@ describe("public corrections across visible surfaces", () => {
     expect(value.insights!.forecast.value!.signalCorrected).toBe(false);
     expect(forecastPresentation(value.insights, now, false, value)).toMatchObject({ signalActive: false, signalWithdrawn: true, stale: false });
     const chip = renderToStaticMarkup(<ResetNoticeChip timeline={value} insights={value.insights} now={now} language="zh" onOpen={() => undefined} />);
-    expect(chip).toContain("线索有更正"); expect(chip).toContain("第三方 24h 20%");
+    expect(chip).toContain("预告有更正"); expect(chip).toContain("第三方 24h 20%");
     expect(chip).toContain('data-state="withdrawn"');
   });
 

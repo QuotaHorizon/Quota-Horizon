@@ -22,7 +22,9 @@ export interface PublicResetArchiveEntry {
     scope: "broad_codex" | "personal" | "unknown";
     recordedAt: string;
     occurredAt: string | null;
-    announcementTiming?: { expectedOn: string; timeZone: string; sourceUrl: string } | null;
+    announcementTiming?: {
+      expectedOn?: string | null; expectedAt?: string | null; timeZone: string; sourceUrl: string; cohort?: string | null;
+    } | null;
     source: {
       canonicalUrl: string;
       author: string;

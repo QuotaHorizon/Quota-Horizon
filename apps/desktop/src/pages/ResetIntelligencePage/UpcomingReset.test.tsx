@@ -46,6 +46,32 @@ describe("near-term reset announcements", () => {
     expect(result[0].excerpt).toContain("I promised a reset for Tuesday");
     expect(result[0].state).not.toBe("reported");
   });
+  it("preserves a matched official timed commitment and its named population", () => {
+    const data = timeline();
+    const official = data.entries[2].signal;
+    official.semantics = "explicit_timed_reset";
+    official.announcementTiming = { expectedAt: "2026-09-12T07:00:00.000Z", timeZone: "America/Los_Angeles",
+      sourceUrl: "https://quotaresets.com/api/v1/events.json", cohort: "all paid ChatGPT accounts" };
+    const notice = upcomingResetNotices(data, now)[0];
+    expect(notice).toMatchObject({ explicit: true, kind: "reset", cohort: "all paid ChatGPT accounts",
+      timing: { start: Date.parse("2026-09-12T07:00:00.000Z"), end: Date.parse("2026-09-12T07:00:00.000Z"), deadline: true, explicit: true } });
+    const html = renderToStaticMarkup(<UpcomingResetView timeline={data} now={now} language="zh" />);
+    expect(html).toContain("Tibo 明确预告额度重置");
+    expect(html).toContain("官方承诺时间");
+    expect(html).toContain("适用范围：all paid ChatGPT accounts");
+    expect(html).not.toContain("100%");
+  });
+  it("does not keep an expired commitment active or choose between conflicting exact targets", () => {
+    const data = timeline();
+    data.entries[2].signal.semantics = "explicit_timed_reset";
+    data.entries[2].signal.announcementTiming = { expectedAt: "2026-09-12T06:00:00.000Z",
+      timeZone: "America/Los_Angeles", sourceUrl: "https://quotaresets.com/api/v1/events.json" };
+    expect(upcomingResetNotices(data, now)[0]).toMatchObject({ explicit: true, state: "elapsed" });
+    const conflict = structuredClone(data.entries[2]); conflict.signal.signalId = "conflicting_timing";
+    conflict.signal.announcementTiming!.expectedAt = "2026-09-12T08:00:00.000Z";
+    data.entries.push(conflict);
+    expect(upcomingResetNotices(data, now)[0]).toMatchObject({ explicit: false, timing: null, conflictingTiming: true });
+  });
   it("finds a commitment after a long introduction instead of relying on the 160-character snippet", () => {
     expect(resetCommitmentExcerpt(fullText)).toBe("A reset is landing by midnight today.");
     expect(resetCommitmentExcerpt(fullText.slice(0, 160))).toBeNull();

@@ -20,7 +20,9 @@ CPA 的环境变量和返回格式见 [CPA bridge](CPA_BRIDGE.md)，历史授权
 
 ## 重置雷达
 
-概览显示 [Codex Reset](https://codex-reset.com/) 提供的 24/48 小时重置概率，以及 Tibo 发言、译文和回复上下文。
+概览优先显示明确的定时重置预告、适用范围和本地时间。有效预告覆盖的 24/48 小时窗口按 100% 判定，
+[Codex Reset](https://codex-reset.com/) 的来源预测保留原值，并列显示在“判断依据与来源对照”中。
+预告到期后显示“等待确认”；来源更新失败、时间冲突或撤回更正均有对应状态。Tibo 原文、译文和回复上下文保留在下方。
 事件历史汇集 Codex Reset 与 [QuotaResets](https://quotaresets.com/) 的记录，服务状态来自 [OpenAI Status](https://status.openai.com/)。
 
 “重置历史”用近三个月的日历区分额度重置、重置卡发放和预告。点击日期可查看按电脑时区换算的事件时间。

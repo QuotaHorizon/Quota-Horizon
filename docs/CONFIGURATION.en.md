@@ -20,7 +20,9 @@ See [CPA bridge](CPA_BRIDGE.en.md) for environment variables and response format
 
 ## Reset radar
 
-The overview shows 24/48-hour reset probabilities from [Codex Reset](https://codex-reset.com/), alongside Tibo posts, translations and reply context.
+The overview leads with explicit dated reset announcements, covered accounts and local time. An active announcement sets each covered 24/48-hour window to 100%.
+Original estimates from [Codex Reset](https://codex-reset.com/) remain alongside it under “Basis and source comparison”.
+After the scheduled time, the outlook shows “awaiting confirmation”; source failures, timing conflicts and corrections have their own states. Tibo posts, translations and reply context remain below.
 Event history combines records from Codex Reset and [QuotaResets](https://quotaresets.com/); service updates come from [OpenAI Status](https://status.openai.com/).
 
 Reset history uses a three-month calendar to distinguish quota resets, reset-card grants and announcements. Select a date to see event times in your computer's timezone.

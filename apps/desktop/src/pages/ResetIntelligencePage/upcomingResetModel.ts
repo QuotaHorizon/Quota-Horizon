@@ -14,9 +14,17 @@ export interface UpcomingResetNotice {
   collectedVia: string[];
   trackerCount: number;
   state: "upcoming" | "elapsed" | "reported" | "withdrawn" | "announced_delivery";
-  timing: { start: number; end: number; timeZone: string; sourceUrl: string; deadline: boolean } | null;
+  timing: { start: number; end: number; timeZone: string; sourceUrl: string; deadline: boolean; explicit: boolean } | null;
+  explicit: boolean;
+  cohort: string | null;
   stale: boolean;
   conflictingTiming: boolean;
+}
+
+export function activeResetCommitment(notice: UpcomingResetNotice | null | undefined, now: number, failed = false) {
+  return !!notice && !failed && notice.explicit && notice.kind === "reset" && notice.state === "upcoming"
+    && !notice.stale && !notice.conflictingTiming && notice.timing?.explicit === true
+    && Number.isFinite(notice.timing.end) && notice.timing.end > now;
 }
 
 /** Calendar-date bounds in the source's named zone, not a hard-coded Pacific
@@ -49,7 +57,7 @@ export function resetCommitmentExcerpt(text: string): string | null {
     const sentence = `${parts[index]}${parts[index + 1] ?? ""}`.trim();
     // This selects a visible excerpt of a reported commitment, not an official
     // confirmation, a global scope determination or a probability estimate.
-    if (/\b(?:not|never|no|won't|wouldn't|might|may|could|hope|wish|yesterday|already)\b/iu.test(sentence) || sentence.includes("?")) continue;
+    if (/\b(?:not|never|no|won't|wouldn't|might|may|could|hope|wish|if|unless|yesterday|already)\b/iu.test(sentence) || sentence.includes("?")) continue;
     if (/\b(?:will|going to)\b[^.!?]{0,200}\breset\b|\breset\b[^.!?]{0,200}\b(?:landing|lands|arriving|arrives|coming)\b|\b(?:I|we) (?:have )?promised? (?:a |the |another )?(?:usage |quota )?reset (?:for|on|by)\b|\b(?:the |a )?reset is scheduled (?:for|on)\b/iu.test(sentence)) {
       return sentence.trim().length <= 360 ? sentence.trim() : null;
     }
@@ -59,7 +67,10 @@ export function resetCommitmentExcerpt(text: string): string | null {
 
 export function upcomingResetNotices(timeline: PublicResetTimeline | null, now: number): UpcomingResetNotice[] {
   if (!timeline || !Number.isFinite(now)) return [];
-  const latest = latestPublicEntries(timeline.entries);
+  const latest = latestPublicEntries(timeline.entries.filter(({ signal }) => {
+    const recorded = exactPublicTime(signal.recordedAt);
+    return recorded != null && recorded <= now;
+  }));
   const groups = new Map<string, PublicTimelineEntry[]>();
   for (const entry of latest) {
     if (!isTiboStatement(entry.signal)) continue;
@@ -83,16 +94,20 @@ export function upcomingResetNotices(timeline: PublicResetTimeline | null, now: 
     if (kinds.size > 1) continue; // Disagreeing reset/grant classification needs review.
     const withdrawn = latest.some((other) => isPublicWithdrawal(other)
       && group.some((item) => sameResetSubject(item.signal, other.signal)));
-    const reported = group.some((item) => item.signal.semantics === "confirmed_reset"
+    const reported = latest.some((item) => group.some((subject) => sameResetSubject(item.signal, subject.signal))
+      && item.signal.semantics === "confirmed_reset"
       && exactPublicTime(item.signal.occurredAt) != null && exactPublicTime(item.signal.occurredAt)! <= now);
     const hints = group.flatMap((item) => {
       const hint = item.signal.announcementTiming;
       if (!hint || hint.sourceUrl !== "https://quotaresets.com/api/v1/events.json"
         || !item.signal.source.discoveredVia.includes(hint.sourceUrl)) return [];
-      const bounds = sourceDateBounds(hint.expectedOn, hint.timeZone);
+      const exact = exactPublicTime(hint.expectedAt);
+      if (exact != null) return [{ start: exact, end: exact, timeZone: hint.timeZone, sourceUrl: hint.sourceUrl,
+        deadline: true, explicit: item.signal.semantics === "explicit_timed_reset" }];
+      const bounds = hint.expectedOn ? sourceDateBounds(hint.expectedOn, hint.timeZone) : null;
       if (!bounds) return [];
       return [{ ...bounds, timeZone: hint.timeZone, sourceUrl: hint.sourceUrl,
-        deadline: /\bby (?:midnight|(?:the )?end of (?:the )?day)\b/iu.test(excerpt) }];
+        deadline: /\bby (?:midnight|(?:the )?end of (?:the )?day)\b/iu.test(excerpt), explicit: false }];
     });
     const conflictingTiming = new Set(hints.map((hint) => `${hint.start}:${hint.end}`)).size > 1;
     const timing = conflictingTiming ? null : hints[0] ?? null;
@@ -100,15 +115,20 @@ export function upcomingResetNotices(timeline: PublicResetTimeline | null, now: 
     const trackers = new Set(collectedVia.flatMap((url) => {
       try { const host = new URL(url).hostname; return ["quotaresets.com", "codex-reset.com"].includes(host) ? [host] : []; } catch { return []; }
     }));
-    const relevantSources = timeline.sources.filter((source) => collectedVia.includes(source.sourceUrl));
+    const relevantSources = timeline.sources.filter((source) => timing?.explicit
+      ? source.sourceUrl === timing.sourceUrl : collectedVia.includes(source.sourceUrl));
     const stale = relevantSources.length === 0 || relevantSources.some((source) => {
       const time = exactPublicTime(source.lastSuccessAt);
       return source.issue != null || time == null || time > now || now - time >= 15 * 60_000;
     });
-    result.push({ key, kind: kinds.has("global_banked_reset_grant") ? "grant" : reported ? "reset" : "unknown", excerpt,
+    const explicit = group.some((item) => item.signal.semantics === "explicit_timed_reset")
+      && kinds.size === 1 && kinds.has("global_full_reset") && !withdrawn && !conflictingTiming;
+    const cohort = group.map((item) => item.signal.announcementTiming?.cohort).find((value): value is string => !!value) ?? null;
+    result.push({ key, kind: kinds.has("global_banked_reset_grant") ? "grant" : reported || explicit ? "reset" : "unknown", excerpt,
       url: entry.signal.source.canonicalUrl, publishedAt: exactPublicTime(entry.signal.source.publishedAt)!, collectedVia,
-      trackerCount: trackers.size, timing, stale, conflictingTiming,
+      trackerCount: trackers.size, timing, explicit, cohort, stale, conflictingTiming,
       state: withdrawn ? "withdrawn" : reported ? "reported" : quoted.delivery ? "announced_delivery" : timing && timing.end <= now ? "elapsed" : "upcoming" });
   }
-  return result.sort((a, b) => b.publishedAt - a.publishedAt).slice(0, 3);
+  return result.sort((a, b) => Number(activeResetCommitment(b, now)) - Number(activeResetCommitment(a, now))
+    || b.publishedAt - a.publishedAt).slice(0, 3);
 }

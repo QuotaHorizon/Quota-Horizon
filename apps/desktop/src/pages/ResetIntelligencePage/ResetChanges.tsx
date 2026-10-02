@@ -13,12 +13,15 @@ import styles from "./resetChanges.module.less";
 function Version({ signal, label, language, showTitle }: { signal: PublicRevisionChange["current"]; label: string; language: Language; showTitle: boolean }) {
   const zh = language === "zh";
   const hint = signal.announcementTiming;
-  const bounds = hint ? sourceDateBounds(hint.expectedOn, hint.timeZone) : null;
+  const exactTarget = exactPublicTime(hint?.expectedAt);
+  const bounds = hint?.expectedOn ? sourceDateBounds(hint.expectedOn, hint.timeZone) : null;
   return <div className={styles.version}>
     <strong>{label}</strong>
     {showTitle && <span>{zh ? "来源标题：" : "Source title: "}{signal.title}</span>}
     <p>{signal.summary}</p>
     <span>{zh ? "原帖发布时间：" : "Post published: "}{calendarEventTime(exactPublicTime(signal.source.publishedAt), language)}</span>
+    {exactTarget != null && <span>{zh ? "明确承诺时间（本地）：" : "Promised time (local): "}{calendarEventTime(exactTarget, language)}</span>}
+    {hint?.cohort && <span>{zh ? "承诺适用范围：" : "Announced for: "}{hint.cohort}</span>}
     {signal.occurredAt && <span>{zh ? "来源标注的发生/确认时间（待核实）：" : "Source-reported occurrence/confirmation (unverified): "}{calendarEventTime(exactPublicTime(signal.occurredAt), language)}</span>}
     {bounds && <span>{zh ? "追踪站预计日期，换算到本地：" : "Tracker’s expected day in local time: "}
       {publicEvidenceTime(new Date(bounds.start).toISOString(), language)}{zh ? " 至 " : " to "}{publicEvidenceTime(new Date(bounds.end).toISOString(), language)}

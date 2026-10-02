@@ -1,5 +1,5 @@
 import type { Language } from "../../i18n";
-import { resetDeliveryExcerpt } from "./upcomingResetModel";
+import { activeResetCommitment, resetCommitmentExcerpt, resetDeliveryExcerpt, upcomingResetNotices } from "./upcomingResetModel";
 import { publicPostWithdrawn } from "./publicCorrections";
 import type { PublicInsights, PublicPost, PublicResetTimeline } from "./types";
 
@@ -16,7 +16,13 @@ export function forecastPresentation(insights: PublicInsights | undefined, now: 
   const signalWithdrawn = !!value && (value.signalCorrected || publicPostWithdrawn(timeline?.entries, value.signalUrl));
   const signalActive = !!value && !stale && !signalWithdrawn && Number.isFinite(signalAge) && signalAge >= -60_000
     && signalAge < 72 * 3_600_000 && Number.isFinite(deadline) && deadline > now;
-  return { value, stale, signalActive, signalWithdrawn };
+  const notice = timeline ? upcomingResetNotices(timeline, now)[0] ?? null : null;
+  const announcement = activeResetCommitment(notice, now, failed)
+    && !(signalWithdrawn && value?.signalUrl === notice?.url) ? notice : null;
+  const byHours = (hours: number) => announcement?.timing && announcement.timing.end <= now + hours * 3_600_000
+    ? 100 : value ? hours === 24 ? value.probability24h : value.probability48h : null;
+  return { value, stale, signalActive, signalWithdrawn, notice, announcement,
+    probability24h: byHours(24), probability48h: byHours(48) };
 }
 
 export function resetRelated(post: PublicPost) {
@@ -46,13 +52,22 @@ export function postReading(post: PublicPost, language: Language, timeline?: Pub
   };
   if (post.kind === "reset_report") return { tone: "reset", title: zh ? "Tibo 的额度重置声明" : "Tibo’s quota reset statement",
     meaning: zh ? "适用范围和进展见原文。" : "See the statement for scope and progress." };
+  if (post.kind === "notice" && explicitResetText(post.text)) return {
+    tone: "reset", title: zh ? "Tibo 明确预告额度重置" : "Tibo explicitly announced a quota reset",
+    meaning: zh ? "已公布重置安排，时间与适用范围见下方。" : "A reset is scheduled. Timing and covered accounts are shown below.",
+  };
   if (post.kind === "limits") return { tone: "notice", title: zh ? "额度规则动态" : "Quota policy update",
     meaning: zh ? "套餐或用量规则的最新消息。" : "Updates to plans or usage limits." };
   if (post.kind === "notice") return { tone: "notice", title: zh ? "Tibo 的重置动态" : "Tibo’s reset update",
-    meaning: zh ? "重置类型与时间待明确，原文如下。" : "Reset type and timing are unspecified. The original is below." };
+    meaning: zh ? "最新重置消息，原文与上下文见下方。" : "The latest reset update, with the original wording and context below." };
   return { tone: "notice", title: zh ? "Tibo 的公开回复与讨论" : "Tibo’s public replies and discussion",
     meaning: post.isReply && !post.parent?.text
       ? (zh ? "回复上文暂缺。" : "Reply context is unavailable.")
       : (zh ? "相关讨论，完整内容见下方。" : "Related discussion. The full conversation is below."),
   };
+}
+
+function explicitResetText(text: string) {
+  const sentence = resetCommitmentExcerpt(text);
+  return sentence != null && /\b(?:global|full) reset\b/iu.test(sentence);
 }

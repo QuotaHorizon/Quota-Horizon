@@ -45,7 +45,8 @@ function stageOf(signal: Signal): Stage {
 
 function timing(signal: Signal) {
   return [exactPublicTime(signal.occurredAt), signal.announcementTiming?.expectedOn ?? null,
-    signal.announcementTiming?.timeZone ?? null, exactPublicTime(signal.source.publishedAt)];
+    exactPublicTime(signal.announcementTiming?.expectedAt), signal.announcementTiming?.timeZone ?? null,
+    signal.announcementTiming?.cohort ?? null, exactPublicTime(signal.source.publishedAt)];
 }
 
 function changeKind(previous: Signal | null, current: Signal): ChangeKind | null {

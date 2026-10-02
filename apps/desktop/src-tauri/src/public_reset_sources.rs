@@ -20,6 +20,7 @@ use url::Url;
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ITEMS: usize = 2048;
 const PARSER_VERSION: &str = "public-candidate-v5";
+const EXPLICIT_TIMED_RESET_PARSER_VERSION: &str = "public-candidate-v6";
 const QUOTA_RESETS: &str = "https://quotaresets.com/api/v1/events.json";
 const CODEX_RESET: &str = "https://codex-reset.com/api/timeline";
 const CODEX_RESET_POSTS: &str = "https://codex-reset.com/api/feed";
@@ -387,13 +388,31 @@ fn quota_resets_candidate(
     } else {
         canonical_public_url(field(source, "url", 2048)?)?
     };
-    let kind = match field(row, "type", 64)? {
-        "hard_reset" if field(row, "state", 64)? == "confirmed" => PublicEventKind::GlobalFullReset,
+    let tracker_type = field(row, "type", 64)?;
+    let tracker_state = field(row, "state", 64)?;
+    let expected_at = optional_time(row, "expectedAt")?;
+    let timing_source_url = row
+        .get("timingSource")
+        .and_then(|timing| timing.get("url"))
+        .and_then(Value::as_str)
+        .and_then(|url| canonical_public_url(url).ok())
+        .map(|(url, _)| url);
+    let explicit_timed_commitment = tracker_type == "hard_reset"
+        && tracker_state == "likely"
+        && expected_at.is_some()
+        && optional_text(source, "kind", 64)? == Some("authorized_social")
+        && class == PublicSourceClass::OfficialSocial
+        && timing_source_url.as_deref() == Some(canonical.as_str());
+    let kind = match tracker_type {
+        "hard_reset" if tracker_state == "confirmed" || explicit_timed_commitment => {
+            PublicEventKind::GlobalFullReset
+        }
         "banked_reset" => PublicEventKind::GlobalBankedResetGrant,
         _ => PublicEventKind::Unclassified,
     };
-    let semantics = match field(row, "state", 64)? {
+    let semantics = match tracker_state {
         "confirmed" => PublicSignalSemantics::ConfirmedReset,
+        "likely" if explicit_timed_commitment => PublicSignalSemantics::ExplicitTimedReset,
         "likely" => PublicSignalSemantics::PossibleSignal,
         "retracted" => PublicSignalSemantics::Retracted,
         "corrected" => PublicSignalSemantics::Corrected,
@@ -411,12 +430,18 @@ fn quota_resets_candidate(
             published_at: optional_time(source, "publishedAt")?,
             occurred_at: optional_time(row, "confirmedAt")?,
             title: field(row, "title", 256)?,
-            summary: field(row, "summary", 4096)?,
+            summary: if explicit_timed_commitment {
+                optional_text(source, "excerpt", 4096)?.unwrap_or(field(row, "summary", 4096)?)
+            } else {
+                field(row, "summary", 4096)?
+            },
         },
         row,
         collected,
     )?;
-    if let Some(expected_on) = optional_text(row, "expectedOn", 10)? {
+    let expected_on = optional_text(row, "expectedOn", 10)?.map(str::to_owned);
+    let cohort = optional_text(row, "cohort", 256)?.map(str::to_owned);
+    if expected_at.is_some() || expected_on.is_some() {
         let timing = row.get("timingSource").ok_or(())?;
         let timing_url = canonical_public_url(field(timing, "url", 2048)?)?.0;
         if timing_url != signal.source.canonical_url {
@@ -425,10 +450,14 @@ fn quota_resets_candidate(
             return Ok(Some(signal));
         }
         signal.announcement_timing = Some(PublicAnnouncementTiming {
-            expected_on: expected_on.into(),
+            expected_on,
+            expected_at,
             time_zone: field(timing, "timeZone", 64)?.into(),
             source_url: QUOTA_RESETS.into(),
+            cohort,
         });
+        // Reparse only enriched rows, preserving unrelated journal revisions.
+        signal.source.parser_version = EXPLICIT_TIMED_RESET_PARSER_VERSION.into();
     }
     Ok(Some(signal))
 }
@@ -632,6 +661,71 @@ mod tests {
         row["timingSource"]["url"] = json!("https://x.com/thsottiaux/status/999999");
         let unrelated = parse(PublicTimelineSource::QuotaResets, json!({"data":[row]}));
         assert!(unrelated.candidates[0].announcement_timing.is_none());
+    }
+
+    #[test]
+    fn dated_official_hard_reset_commitment_keeps_exact_time_and_population() {
+        let row = json!({
+            "slug":"2026-10-02-openai-hard-reset-2105843926221660585",
+            "resetId":"openai-hard-reset-2105843926221660585",
+            "provider":"openai", "type":"hard_reset", "state":"likely",
+            "announcedAt":"2026-10-02T02:14:51Z", "expectedAt":"2026-10-02T17:00:00Z",
+            "title":"OpenAI full reset", "summary":"Full reset announced.",
+            "cohort":"all paid ChatGPT accounts",
+            "timingSource":{"url":"https://x.com/thsottiaux/status/2105843926221660585",
+                "publishedAt":"2026-10-02T02:14:51Z", "excerpt":"tomorrow 10am PST",
+                "timeZone":"America/Los_Angeles"},
+            "source":{"url":"https://x.com/thsottiaux/status/2105843926221660585",
+                "kind":"authorized_social", "publishedAt":"2026-10-02T02:14:51Z",
+                "excerpt":"Global reset landing tomorrow 10am PST for all paid ChatGPT accounts."}
+        });
+        let bytes = serde_json::to_vec(&json!({"data":[row]})).unwrap();
+        let batch = decode_public_timeline(
+            PublicTimelineSource::QuotaResets,
+            &bytes,
+            UtcTimestamp::parse("2026-10-02T13:00:00Z").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(batch.rejected_records, 0);
+        assert_eq!(batch.candidates.len(), 1);
+        let item = &batch.candidates[0];
+        assert_eq!(item.kind, PublicEventKind::GlobalFullReset);
+        assert_eq!(item.semantics, PublicSignalSemantics::ExplicitTimedReset);
+        assert_eq!(item.disposition(), PublicEvidenceDisposition::NeedsReview);
+        assert_eq!(
+            item.summary,
+            "Global reset landing tomorrow 10am PST for all paid ChatGPT accounts."
+        );
+        let timing = item.announcement_timing.as_ref().unwrap();
+        assert_eq!(
+            timing.expected_at.as_ref().unwrap().as_str(),
+            "2026-10-02T17:00:00.000Z"
+        );
+        assert_eq!(timing.cohort.as_deref(), Some("all paid ChatGPT accounts"));
+        assert_eq!(timing.time_zone, "America/Los_Angeles");
+    }
+
+    #[test]
+    fn dated_commitment_is_not_promoted_when_timing_source_does_not_match() {
+        let row = json!({
+            "slug":"sample-reset-1", "provider":"openai", "type":"hard_reset", "state":"likely",
+            "expectedAt":"2026-10-02T17:00:00Z", "cohort":"all paid ChatGPT accounts",
+            "timingSource":{"url":"https://x.com/other/status/123456", "timeZone":"America/Los_Angeles"},
+            "title":"Synthetic reset", "summary":"Synthetic tracker row.",
+            "source":{"url":"https://x.com/thsottiaux/status/123456", "kind":"authorized_social",
+                "publishedAt":"2026-10-02T02:14:51Z"}
+        });
+        let bytes = serde_json::to_vec(&json!({"data":[row]})).unwrap();
+        let batch = decode_public_timeline(
+            PublicTimelineSource::QuotaResets,
+            &bytes,
+            UtcTimestamp::parse("2026-10-02T13:00:00Z").unwrap(),
+        )
+        .unwrap();
+        let item = &batch.candidates[0];
+        assert_eq!(item.kind, PublicEventKind::Unclassified);
+        assert_eq!(item.semantics, PublicSignalSemantics::PossibleSignal);
+        assert!(item.announcement_timing.is_none());
     }
 
     #[test]

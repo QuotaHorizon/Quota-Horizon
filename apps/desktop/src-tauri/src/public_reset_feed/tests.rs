@@ -147,6 +147,79 @@ mod tests {
     }
 
     #[test]
+    fn timed_announcement_survives_refresh_and_reload_with_source_probability_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DB_NAME);
+        let bytes = serde_json::to_vec(&json!({"data":[{
+            "provider":"openai", "slug":"synthetic-timed-reset", "type":"hard_reset", "state":"likely",
+            "title":"Synthetic timed announcement", "summary":"Full reset announced.",
+            "expectedAt":at(10).as_str(), "cohort":"all paid ChatGPT accounts",
+            "timingSource":{"url":"https://x.com/thsottiaux/status/123456", "timeZone":"America/Los_Angeles"},
+            "source":{"kind":"authorized_social", "url":"https://x.com/thsottiaux/status/123456",
+                "publishedAt":at(0).as_str(), "excerpt":"Global reset landing tomorrow 10am PST for all paid ChatGPT accounts."}
+        }]})).unwrap();
+        let decode = |hour| {
+            decode_public_timeline(PublicTimelineSource::QuotaResets, &bytes, at(hour)).unwrap()
+        };
+        let mut legacy = decode(1);
+        legacy.candidates[0].announcement_timing = None;
+        legacy.candidates[0].kind = capacity_domain::public_reset::PublicEventKind::Unclassified;
+        legacy.candidates[0].semantics =
+            capacity_domain::public_reset::PublicSignalSemantics::PossibleSignal;
+        legacy.candidates[0].source.parser_version = "public-candidate-v5".into();
+        save_refresh(
+            &path,
+            vec![(PublicTimelineSource::QuotaResets, Ok(legacy))],
+            &at(1),
+        )
+        .unwrap();
+        let forecast = insights::parse_forecast(
+            &serde_json::to_vec(&json!({
+                "updated_at":at(2).as_str(), "mode":"announced", "confidence":"low",
+                "probabilities":{"rounded_24h":17,"rounded_48h":31}
+            }))
+            .unwrap(),
+            &at(2),
+        )
+        .unwrap();
+        save_refresh_with_insights(
+            &path,
+            vec![(PublicTimelineSource::QuotaResets, Ok(decode(2)))],
+            Some(Ok(forecast)),
+            &at(2),
+        )
+        .unwrap();
+        let latest = load_timeline(&path, &at(2)).unwrap();
+        assert_eq!(latest.revision_count, 2);
+        let timing = latest.entries[0]
+            .signal
+            .announcement_timing
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            timing.expected_at.as_ref().unwrap().as_str(),
+            "2026-09-12T10:00:00.000Z"
+        );
+        assert_eq!(timing.cohort.as_deref(), Some("all paid ChatGPT accounts"));
+        assert!(latest.entries[0].signal.occurred_at.is_none());
+        assert_eq!(
+            latest.insights.forecast.value.unwrap().probability_24h,
+            17.0
+        );
+        assert!(load_timeline(&path, &at(1)).unwrap().entries[0]
+            .signal
+            .announcement_timing
+            .is_none());
+        let repeated = save_refresh(
+            &path,
+            vec![(PublicTimelineSource::QuotaResets, Ok(decode(3)))],
+            &at(3),
+        )
+        .unwrap();
+        assert_eq!(repeated.revision_count, 2);
+    }
+
+    #[test]
     fn identical_content_updates_source_freshness_without_rewriting_history() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(DB_NAME);

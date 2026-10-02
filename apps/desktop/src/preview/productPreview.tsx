@@ -5,6 +5,7 @@ import { ConfigProvider } from "antd";
 import { CapacityPopover } from "../components/CapacityPopover";
 import { AccountsPage } from "../pages/AccountsPage";
 import { LiveSourcesView } from "../pages/ResetIntelligencePage/LiveSourcesPanel";
+import { ResetNoticeChip } from "../components/CapacityPopover/ResetNoticeChip";
 import type { PublicResetTimeline } from "../pages/ResetIntelligencePage/types";
 import type { Account } from "../types";
 import { LANGUAGE_STORAGE_KEY, translate } from "../i18n";
@@ -17,7 +18,7 @@ const scene = query.get("scene") ?? "accounts";
 const language = query.get("lang") === "en" ? "en" : "zh";
 const zh = language === "zh";
 document.documentElement.lang = zh ? "zh-CN" : "en";
-document.documentElement.dataset.theme = "light";
+document.documentElement.dataset.theme = query.get("theme") === "dark" ? "dark" : "light";
 // This origin is the standalone browser preview, never the native app store.
 localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
 const now = Date.now();
@@ -64,6 +65,30 @@ const timeline: PublicResetTimeline = {
   },
 };
 
+const scenario = query.get("scenario");
+if (scene === "radar" && scenario) {
+  const sourceUrl = "https://quotaresets.com/api/v1/events.json";
+  const postUrl = "https://x.com/thsottiaux/status/2105843926221660585";
+  const target = new Date(now + (scenario === "elapsed" ? -1 : 4) * 3_600_000).toISOString();
+  const published = new Date(now - 5 * 3_600_000).toISOString();
+  const text = "Global reset landing tomorrow 10am PST for all paid ChatGPT accounts.";
+  timeline.sources = [{ sourceId: "quotaresets", sourceUrl, lastAttemptAt: observed, lastSuccessAt: observed,
+    issue: scenario === "stale" ? "request_failed" : null, acceptedRecords: 1, rejectedRecords: 0, skippedRecords: 0 }];
+  timeline.entries = [{ disposition: scenario === "withdrawn" ? "retracted" : "needs_review", signal: {
+    signalId: "synthetic-announcement", evidenceFamilyId: "synthetic-family", revision: 1, eventId: "synthetic-reset",
+    kind: "global_full_reset", semantics: scenario === "withdrawn" ? "retracted" : "explicit_timed_reset", scope: "unknown",
+    recordedAt: observed, occurredAt: null, title: "Synthetic reset announcement", summary: text,
+    announcementTiming: { expectedAt: target, timeZone: "America/Los_Angeles", sourceUrl, cohort: "all paid ChatGPT accounts" },
+    source: { canonicalUrl: postUrl, author: "@thsottiaux", review: "indirect", sourceClass: "official_social",
+      publishedAt: published, collectedAt: observed, contentSha256: "a".repeat(64), parserVersion: "preview", discoveredVia: [sourceUrl] },
+  } }];
+  timeline.insights!.forecast.value!.probability24h = 17;
+  timeline.insights!.forecast.value!.probability48h = 31;
+  timeline.insights!.posts!.posts = [{ id: "2105843926221660585", url: postUrl, text,
+    translatedText: "明天太平洋时间上午 10 点，所有付费 ChatGPT 账号将迎来全局重置。",
+    publishedAt: published, kind: "notice", isReply: false, parent: null }];
+}
+
 function Preview() {
   if ("__TAURI_INTERNALS__" in window) return <p>This fixture is available only in a browser.</p>;
   const title = scene === "menu" ? (zh ? "菜单栏弹窗" : "Menu-bar popover")
@@ -73,8 +98,10 @@ function Preview() {
       <header className="preview-heading"><div><small>QuotaHorizon</small><h1>{title}</h1></div>
         <p>{zh ? "合成预览 · 账号、额度、概率、正文与时间均为样例" : "Synthetic preview · sample accounts, quota, probabilities, text and times"}</p></header>
       {scene === "menu" ? <div className="preview-popover"><CapacityPopover /></div>
-        : scene === "radar" ? <LiveSourcesView language={language} now={now}
+        : scene === "radar" ? <><LiveSourcesView language={language} now={now}
           state={{ timeline, busy: false, failed: false }} onRefresh={noop} onOpenSource={noop} />
+          {scenario && <div style={{ maxWidth: 350, marginTop: 20 }}><ResetNoticeChip timeline={timeline}
+            insights={timeline.insights} now={now} language={language} onOpen={noop} /></div>}</>
         : <AccountsPage active accounts={accounts} providers={[]} loading={false} busyAccountId={null}
           refreshingAccountIds={[]} refreshingAll={false} refreshProgress={null} localProxy={null} proxyBusy={false}
           resetCredits={{}} onAdd={noop} onSwitch={noop} onDeactivate={noop} onRollbackLastChange={noop}

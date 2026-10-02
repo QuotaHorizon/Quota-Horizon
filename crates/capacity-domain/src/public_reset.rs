@@ -102,11 +102,18 @@ pub struct PublicEvidenceSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PublicAnnouncementTiming {
-    /// A tracker's interpretation of a calendar date, never an exact official
-    /// deadline or a confirmed occurrence. Conversion belongs to presentation.
-    pub expected_on: String,
+    /// Optional calendar-date interpretation supplied by a tracker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_on: Option<String>,
+    /// Exact instant supplied by a source that records a dated commitment.
+    /// This is an announced target, not proof of delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_at: Option<UtcTimestamp>,
     pub time_zone: String,
     pub source_url: String,
+    /// The population named by the source; preserve its wording verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cohort: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -180,13 +187,22 @@ impl PublicResetSignal {
 
     pub fn validate(&self) -> Result<(), PublicLedgerError> {
         if self.announcement_timing.as_ref().is_some_and(|timing| {
-            timing.expected_on.len() != 10
-                || chrono::NaiveDate::parse_from_str(&timing.expected_on, "%Y-%m-%d").is_err()
+            timing.expected_on.as_ref().is_some_and(|date| {
+                date.len() != 10 || chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err()
+            }) || (timing.expected_on.is_none() && timing.expected_at.is_none())
                 || !text_field(&timing.time_zone, 64)
                 || !timing.time_zone.bytes().all(|byte| {
                     byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'_' | b'-' | b'+')
                 })
                 || !public_url_shape(&timing.source_url)
+                || timing
+                    .cohort
+                    .as_ref()
+                    .is_some_and(|value| !text_field(value, 256))
+                || timing
+                    .expected_at
+                    .as_ref()
+                    .is_some_and(|value| value.as_str().len() > 64)
         }) {
             return Err(PublicLedgerError::InvalidRecord);
         }
@@ -486,22 +502,18 @@ mod tests {
         candidate.semantics = PublicSignalSemantics::Retracted;
         ledger.append(candidate).unwrap();
         assert!(ledger.as_of(&time(1)).is_empty());
-        assert!(
-            ledger
-                .dated_confirmations_at(&time(2), PublicEventKind::GlobalFullReset)
-                .is_empty()
-        );
+        assert!(ledger
+            .dated_confirmations_at(&time(2), PublicEventKind::GlobalFullReset)
+            .is_empty());
         assert_eq!(
             ledger
                 .dated_confirmations_at(&time(3), PublicEventKind::GlobalFullReset)
                 .len(),
             1
         );
-        assert!(
-            ledger
-                .dated_confirmations_at(&time(4), PublicEventKind::GlobalFullReset)
-                .is_empty()
-        );
+        assert!(ledger
+            .dated_confirmations_at(&time(4), PublicEventKind::GlobalFullReset)
+            .is_empty());
     }
 
     #[test]
@@ -570,15 +582,42 @@ mod tests {
         let mut decoded: PublicResetSignal = serde_json::from_str(&encoded).unwrap();
         assert!(decoded.announcement_timing.is_none());
         decoded.announcement_timing = Some(PublicAnnouncementTiming {
-            expected_on: "2026-09-11".into(),
+            expected_on: Some("2026-09-11".into()),
+            expected_at: None,
             time_zone: "America/Los_Angeles".into(),
             source_url: "https://quotaresets.com/api/v1/events.json".into(),
+            cohort: None,
         });
         assert!(decoded.validate().is_ok());
         assert_eq!(decoded.occurred_at, original.occurred_at);
         assert_eq!(decoded.disposition(), original.disposition());
-        decoded.announcement_timing.as_mut().unwrap().expected_on = "2026-02-30".into();
+        decoded.announcement_timing.as_mut().unwrap().expected_on = Some("2026-02-30".into());
         assert_eq!(decoded.validate(), Err(PublicLedgerError::InvalidRecord));
+    }
+
+    #[test]
+    fn exact_announcement_targets_and_legacy_dates_round_trip_without_occurrences() {
+        let mut record = signal();
+        record.occurred_at = None;
+        record.semantics = PublicSignalSemantics::ExplicitTimedReset;
+        let legacy = serde_json::json!({"expectedOn":"2026-09-11", "timeZone":"America/Los_Angeles",
+            "sourceUrl":"https://quotaresets.com/api/v1/events.json"});
+        record.announcement_timing = Some(serde_json::from_value(legacy).unwrap());
+        assert!(record.validate().is_ok());
+        let timing = record.announcement_timing.as_mut().unwrap();
+        assert!(timing.expected_at.is_none());
+        assert!(timing.cohort.is_none());
+        timing.expected_on = None;
+        timing.expected_at = Some(time(10));
+        timing.cohort = Some("all paid ChatGPT accounts".into());
+        assert!(record.validate().is_ok());
+        let json = serde_json::to_value(&record).unwrap();
+        assert!(json["announcementTiming"].get("expectedOn").is_none());
+        let reloaded: PublicResetSignal = serde_json::from_value(json).unwrap();
+        assert_eq!(reloaded, record);
+        assert!(reloaded.occurred_at.is_none());
+        record.announcement_timing.as_mut().unwrap().expected_at = None;
+        assert_eq!(record.validate(), Err(PublicLedgerError::InvalidRecord));
     }
 
     #[test]
@@ -607,10 +646,8 @@ mod tests {
         second.occurred_at = Some(time(2));
         ledger.append(first).unwrap();
         ledger.append(second).unwrap();
-        assert!(
-            ledger
-                .dated_confirmations_at(&time(3), PublicEventKind::GlobalFullReset)
-                .is_empty()
-        );
+        assert!(ledger
+            .dated_confirmations_at(&time(3), PublicEventKind::GlobalFullReset)
+            .is_empty());
     }
 }
