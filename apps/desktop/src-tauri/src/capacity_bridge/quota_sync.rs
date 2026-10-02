@@ -106,6 +106,11 @@ fn active_account(app: &AppHandle, expected_digest: &str) -> Option<AccountSumma
 }
 
 fn observation_from_usage(usage: &UsageSummary, plan: &str) -> Option<DesktopQuotaObservation> {
+    let plan = usage
+        .plan
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(plan);
     let (short, weekly) = crate::system_tray::account_usage_windows(usage, plan);
     let windows = [short, weekly]
         .into_iter()
@@ -291,5 +296,43 @@ mod tests {
         assert_eq!(usage.primary.unwrap().remaining_percent, 28.0);
         assert!(usage.secondary.is_none());
         assert_eq!(observation.windows.len(), 1);
+    }
+
+    #[test]
+    fn startup_uses_the_saved_quota_plan_instead_of_stale_login_metadata() {
+        let mut usage = UsageSummary {
+            primary: Some(UsageWindow {
+                remaining_percent: 72.0,
+                used_percent: 28.0,
+                window_minutes: Some(10080),
+                resets_at: None,
+            }),
+            plan: Some("prolite".into()),
+            fetched_at: Some("2026-10-02T16:50:00Z".into()),
+            ..Default::default()
+        };
+        let observation = observation_from_usage(&usage, "free").unwrap();
+        assert_eq!(observation.plan_type.as_deref(), Some("prolite"));
+        let snapshot = DesktopStatusEnvelope::from_cached_quota(&observation).unwrap();
+        assert_eq!(
+            serde_json::to_value(snapshot).unwrap()["status"]["account"]["planType"],
+            "prolite"
+        );
+        usage.plan = Some("free".into());
+        assert_eq!(
+            observation_from_usage(&usage, "pro")
+                .unwrap()
+                .plan_type
+                .as_deref(),
+            Some("free")
+        );
+        usage.plan = None;
+        assert_eq!(
+            observation_from_usage(&usage, "plus")
+                .unwrap()
+                .plan_type
+                .as_deref(),
+            Some("plus")
+        );
     }
 }

@@ -397,9 +397,15 @@ fn quota_resets_candidate(
         .and_then(Value::as_str)
         .and_then(|url| canonical_public_url(url).ok())
         .map(|(url, _)| url);
+    let timing_zone = row
+        .get("timingSource")
+        .map(|timing| optional_text(timing, "timeZone", 64))
+        .transpose()?
+        .flatten();
     let explicit_timed_commitment = tracker_type == "hard_reset"
         && tracker_state == "likely"
         && expected_at.is_some()
+        && timing_zone.is_some()
         && optional_text(source, "kind", 64)? == Some("authorized_social")
         && class == PublicSourceClass::OfficialSocial
         && timing_source_url.as_deref() == Some(canonical.as_str());
@@ -442,6 +448,11 @@ fn quota_resets_candidate(
     let expected_on = optional_text(row, "expectedOn", 10)?.map(str::to_owned);
     let cohort = optional_text(row, "cohort", 256)?.map(str::to_owned);
     if expected_at.is_some() || expected_on.is_some() {
+        // Some historical records carry an exact timestamp without the zone
+        // behind the interpretation. Keep the event without a timing hint.
+        let Some(time_zone) = timing_zone else {
+            return Ok(Some(signal));
+        };
         let timing = row.get("timingSource").ok_or(())?;
         let timing_url = canonical_public_url(field(timing, "url", 2048)?)?.0;
         if timing_url != signal.source.canonical_url {
@@ -452,7 +463,7 @@ fn quota_resets_candidate(
         signal.announcement_timing = Some(PublicAnnouncementTiming {
             expected_on,
             expected_at,
-            time_zone: field(timing, "timeZone", 64)?.into(),
+            time_zone: time_zone.into(),
             source_url: QUOTA_RESETS.into(),
             cohort,
         });
@@ -726,6 +737,35 @@ mod tests {
         assert_eq!(item.kind, PublicEventKind::Unclassified);
         assert_eq!(item.semantics, PublicSignalSemantics::PossibleSignal);
         assert!(item.announcement_timing.is_none());
+    }
+
+    #[test]
+    fn incomplete_optional_timing_does_not_discard_a_historical_grant() {
+        let mut row = tracker_row();
+        row["type"] = json!("banked_reset");
+        row["expectedAt"] = json!("2026-09-07T03:00:00Z");
+        row["timingSource"] = json!({"url":"https://x.com/thsottiaux/status/123456",
+            "publishedAt":"2026-09-07T02:00:00Z"});
+        let batch = parse(
+            PublicTimelineSource::QuotaResets,
+            json!({"data":[row.clone()]}),
+        );
+        assert_eq!(batch.rejected_records, 0);
+        assert_eq!(batch.candidates.len(), 1);
+        let signal = &batch.candidates[0];
+        assert_eq!(signal.kind, PublicEventKind::GlobalBankedResetGrant);
+        assert_eq!(signal.semantics, PublicSignalSemantics::ConfirmedReset);
+        assert!(signal.announcement_timing.is_none());
+        assert!(signal.occurred_at.is_some());
+        row["state"] = json!("likely");
+        row["type"] = json!("hard_reset");
+        row["confirmedAt"] = Value::Null;
+        let lead = parse(PublicTimelineSource::QuotaResets, json!({"data":[row]}));
+        assert_eq!(lead.rejected_records, 0);
+        assert_eq!(
+            lead.candidates[0].semantics,
+            PublicSignalSemantics::PossibleSignal
+        );
     }
 
     #[test]

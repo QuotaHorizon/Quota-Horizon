@@ -22,6 +22,17 @@ function envelope(): DesktopStatusEnvelope {
 }
 
 describe("daily-driver priority and reset-card clarity", () => {
+  it.each(["zh", "en"] as const)("shows the live Pro Lite plan with a weekly-only quota in %s", (language) => {
+    const value = envelope();
+    value.status!.account!.planType = "prolite";
+    value.status!.quotaWindows = [{ limitId: "codex:primary", label: "weekly", windowMinutes: 10080,
+      usedPercent: 28, remainingPercent: 72, resetsAt: "2026-10-06T12:00:00Z" }];
+    vi.mocked(getCapacityStatusSnapshot).mockReturnValue(value);
+    const html = renderToStaticMarkup(<CapacityPage language={language} notify={() => undefined} />);
+    expect(html).toContain("Pro Lite");
+    expect(html).not.toContain("Free");
+    expect(html).toContain(language === "zh" ? "此套餐无独立 5h 限额" : "No separate 5h limit on this plan");
+  });
   it("keeps quota, reset cards and history on the daily page, without lab entry points", () => {
     vi.mocked(getCapacityStatusSnapshot).mockReturnValue(envelope());
     const html = renderToStaticMarkup(<CapacityPage language="zh" notify={() => undefined} />);

@@ -113,13 +113,25 @@ pub fn normalize_capacity_read(
         .rate_limits
         .ok_or(NormalizationError::MissingRateLimits)?;
     let (buckets, used_single_bucket_fallback) = collect_buckets(&rate_limits)?;
-    let plan_type = account_snapshot.plan_type.clone().or_else(|| {
-        buckets
-            .iter()
-            .find_map(|(_, bucket)| bucket.plan_type.clone())
-    });
-    let plan_type = plan_type
-        .as_deref()
+    // Account metadata can lag subscription changes. Prefer the plan returned
+    // with the current Codex quota, never a model-specific bucket's plan.
+    let quota_plan_type = buckets
+        .iter()
+        .find(|(id, bucket)| {
+            id == "codex" && bucket.limit_id.as_deref().is_none_or(|id| id == "codex")
+        })
+        .and_then(|(_, bucket)| bucket.plan_type.as_deref())
+        .or_else(|| {
+            rate_limits
+                .rate_limits
+                .limit_id
+                .as_deref()
+                .is_none_or(|id| id == "codex")
+                .then_some(rate_limits.rate_limits.plan_type.as_deref())
+                .flatten()
+        });
+    let plan_type = quota_plan_type
+        .or(account_snapshot.plan_type.as_deref())
         .map(safe_account_metadata)
         .transpose()?
         .map(str::to_owned);
@@ -812,6 +824,81 @@ mod tests {
         assert_eq!(status.data_status.freshness, Freshness::Live);
         assert_eq!(status.data_status.compatibility, Compatibility::NotTested);
         assert_eq!(status.quota.reset_credit_summary.available_count, Some(1));
+    }
+
+    #[test]
+    fn current_codex_quota_plan_overrides_stale_account_metadata_in_both_directions() {
+        for (account_plan, quota_plan) in [("free", "prolite"), ("pro", "free")] {
+            let mut read = complete_read();
+            read.account.account.as_mut().unwrap().plan_type = Some(account_plan.into());
+            let limits = read.rate_limits.as_mut().unwrap();
+            limits.rate_limits.plan_type = Some(quota_plan.into());
+            let bucket = limits
+                .rate_limits_by_limit_id
+                .as_mut()
+                .unwrap()
+                .get_mut("codex")
+                .unwrap();
+            bucket.plan_type = Some(quota_plan.into());
+            bucket.primary.as_mut().unwrap().window_duration_mins = Some(10080);
+            bucket.secondary = None;
+            let status = normalize_capacity_read(read, context()).unwrap();
+            assert_eq!(
+                status.account.unwrap().plan_type.as_deref(),
+                Some(quota_plan)
+            );
+            assert_eq!(status.quota.windows.len(), 1);
+            assert_eq!(status.quota.windows[0].window_minutes, Some(10080));
+            assert_eq!(status.quota.windows[0].remaining_percent, 65.0);
+        }
+    }
+
+    #[test]
+    fn quota_plan_falls_back_to_default_codex_then_account_without_borrowing_model_plans() {
+        let mut read = complete_read();
+        let limits = read.rate_limits.as_mut().unwrap();
+        let mut model = limits.rate_limits.clone();
+        model.limit_id = Some("codex_bengalfox".into());
+        model.plan_type = Some("free".into());
+        let by_id = limits.rate_limits_by_limit_id.as_mut().unwrap();
+        by_id.remove("codex");
+        by_id.insert("codex_bengalfox".into(), model);
+        limits.rate_limits.plan_type = Some("prolite".into());
+        let plan = |read| {
+            normalize_capacity_read(read, context())
+                .unwrap()
+                .account
+                .unwrap()
+                .plan_type
+        };
+        assert_eq!(plan(read.clone()).as_deref(), Some("prolite"));
+        read.rate_limits.as_mut().unwrap().rate_limits.plan_type = None;
+        assert_eq!(plan(read.clone()).as_deref(), Some("plus"));
+        read.account.account.as_mut().unwrap().plan_type = None;
+        assert_eq!(plan(read.clone()), None);
+        read.rate_limits.as_mut().unwrap().rate_limits.plan_type = Some("free".into());
+        read.rate_limits.as_mut().unwrap().rate_limits.limit_id = Some("codex_bengalfox".into());
+        assert_eq!(plan(read), None);
+    }
+
+    #[test]
+    fn single_bucket_plan_is_authoritative_and_invalid_live_metadata_is_not_silenced() {
+        let mut read = complete_read();
+        read.account.account.as_mut().unwrap().plan_type = Some("free".into());
+        let limits = read.rate_limits.as_mut().unwrap();
+        limits.rate_limits_by_limit_id = None;
+        limits.rate_limits.limit_id = None;
+        limits.rate_limits.plan_type = Some("prolite".into());
+        let status = normalize_capacity_read(read.clone(), context()).unwrap();
+        assert_eq!(
+            status.account.unwrap().plan_type.as_deref(),
+            Some("prolite")
+        );
+        read.rate_limits.as_mut().unwrap().rate_limits.plan_type = Some("pro\nlite".into());
+        assert_eq!(
+            normalize_capacity_read(read, context()).unwrap_err(),
+            NormalizationError::InvalidAccountMetadata
+        );
     }
 
     #[test]
