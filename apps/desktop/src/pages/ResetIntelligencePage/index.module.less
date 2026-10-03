@@ -1,4 +1,7 @@
-.page { padding: 24px var(--page-x) 56px; display: grid; gap: 26px; color: var(--ink); min-width: 0; }
+.page { width: 100%; max-width: 1280px; margin-inline: auto; padding: 18px 24px 40px; display: grid; gap: 20px; color: var(--ink); min-width: 0; }
+:global(.reset-radar-main > .topbar) { height: 82px; padding: 15px max(24px, calc((100% - 1232px) / 2)); }
+:global(.reset-radar-main > .topbar h1) { font-size: 24px; }
+:global(.reset-radar-main > .topbar .eyebrow) { margin-bottom: 4px; font-size: 10px; }
 .intro { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .archiveNotice { display: flex; gap: 12px; align-items: flex-start; padding: 15px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
 .archiveNotice > svg { flex: none; margin-top: 2px; color: var(--muted); }

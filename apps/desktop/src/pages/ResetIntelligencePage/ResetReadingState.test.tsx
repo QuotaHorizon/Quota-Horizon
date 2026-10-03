@@ -64,7 +64,9 @@ describe("public reset reading state", () => {
     expect(html).not.toContain("1 条新进展"); expect(html).toContain("全部已读");
     expect(html).toContain("已读状态保存失败"); expect(html).not.toContain("已核实公告");
     expect(html.indexOf("全部已读")).toBeLessThan(html.indexOf("来源预测"));
-    expect(html).not.toContain("情报有什么变化"); expect(html).not.toContain("公开来源状态");
+    expect(html).not.toContain("情报有什么变化");
+    expect(html).toContain("公开来源状态");
+    expect(html).not.toContain("公开来源与原文资料");
     for (const section of ["概览", "重置历史", "详细资料"]) expect(html).toContain(section);
     const busy = renderToStaticMarkup(<LiveSourcesView state={{ timeline: timeline(), busy: false, failed: false, readBusy: true }} language="en" now={now} onMarkRead={() => undefined} />);
     expect(busy).toContain("Saving"); expect(busy).toContain('disabled=""');

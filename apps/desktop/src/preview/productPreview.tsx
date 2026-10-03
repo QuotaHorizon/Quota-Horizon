@@ -45,7 +45,12 @@ const accounts: Account[] = [
   },
 }));
 const timeline: PublicResetTimeline = {
-  sources: [], entries: [], revisionCount: 0, evidenceFamilyCount: 0,
+  sources: [
+    { sourceId: "codex_reset", sourceUrl: "https://codex-reset.com/api/forecast", lastAttemptAt: observed, lastSuccessAt: observed,
+      issue: null, acceptedRecords: 1, rejectedRecords: 0, skippedRecords: 0 },
+    { sourceId: "codex_reset_posts", sourceUrl: "https://codex-reset.com/api/tweets", lastAttemptAt: observed, lastSuccessAt: observed,
+      issue: null, acceptedRecords: 4, rejectedRecords: 0, skippedRecords: 0 },
+  ], entries: [], revisionCount: 0, evidenceFamilyCount: 0,
   insights: {
     forecast: { attemptedAt: observed, issue: null, value: {
       sourceUrl: "https://codex-reset.com/api/forecast", updatedAt: observed, checkedAt: observed,
@@ -66,18 +71,18 @@ const timeline: PublicResetTimeline = {
 };
 
 const scenario = query.get("scenario");
-if (scene === "radar" && scenario) {
+if (scene === "radar" && scenario && scenario !== "unavailable") {
   const sourceUrl = "https://quotaresets.com/api/v1/events.json";
   const postUrl = "https://x.com/thsottiaux/status/2105843926221660585";
-  const target = new Date(now + (scenario === "elapsed" ? -1 : 4) * 3_600_000).toISOString();
+  const target = new Date(now + (scenario === "reported" ? -4 : scenario === "elapsed" ? -1 : scenario === "distant" ? 30 : 4) * 3_600_000).toISOString();
   const published = new Date(now - 5 * 3_600_000).toISOString();
   const text = "Global reset landing tomorrow 10am PST for all paid ChatGPT accounts.";
-  timeline.sources = [{ sourceId: "quotaresets", sourceUrl, lastAttemptAt: observed, lastSuccessAt: observed,
-    issue: scenario === "stale" ? "request_failed" : null, acceptedRecords: 1, rejectedRecords: 0, skippedRecords: 0 }];
+  timeline.sources.push({ sourceId: "quotaresets", sourceUrl, lastAttemptAt: observed, lastSuccessAt: observed,
+    issue: scenario === "stale" ? "request_failed" : null, acceptedRecords: 1, rejectedRecords: 0, skippedRecords: 0 });
   timeline.entries = [{ disposition: scenario === "withdrawn" ? "retracted" : "needs_review", signal: {
     signalId: "synthetic-announcement", evidenceFamilyId: "synthetic-family", revision: 1, eventId: "synthetic-reset",
-    kind: "global_full_reset", semantics: scenario === "withdrawn" ? "retracted" : "explicit_timed_reset", scope: "unknown",
-    recordedAt: observed, occurredAt: null, title: "Synthetic reset announcement", summary: text,
+    kind: "global_full_reset", semantics: scenario === "withdrawn" ? "retracted" : scenario === "reported" ? "confirmed_reset" : "explicit_timed_reset", scope: "unknown",
+    recordedAt: observed, occurredAt: scenario === "reported" ? new Date(now - 2 * 3_600_000).toISOString() : null, title: "Synthetic reset announcement", summary: text,
     announcementTiming: { expectedAt: target, timeZone: "America/Los_Angeles", sourceUrl, cohort: "all paid ChatGPT accounts" },
     source: { canonicalUrl: postUrl, author: "@thsottiaux", review: "indirect", sourceClass: "official_social",
       publishedAt: published, collectedAt: observed, contentSha256: "a".repeat(64), parserVersion: "preview", discoveredVia: [sourceUrl] },
@@ -86,7 +91,27 @@ if (scene === "radar" && scenario) {
   timeline.insights!.forecast.value!.probability48h = 31;
   timeline.insights!.posts!.posts = [{ id: "2105843926221660585", url: postUrl, text,
     translatedText: "明天太平洋时间上午 10 点，所有付费 ChatGPT 账号将迎来全局重置。",
-    publishedAt: published, kind: "notice", isReply: false, parent: null }];
+    publishedAt: published, kind: "notice", isReply: false, parent: null },
+    { id: "synthetic-grant", url: "https://x.com/thsottiaux/status/123", kind: "grant", isReply: false, parent: null,
+      text: "Synthetic preview: we are loading a banked reset for Plus users.", translatedText: "合成正文：正在向 Plus 用户发放一张重置卡。",
+      publishedAt: new Date(now - 28 * 3_600_000).toISOString() },
+    { id: "synthetic-reply", url: "https://x.com/thsottiaux/status/124", kind: "context", isReply: true,
+      text: "Synthetic preview: the reset is still coming tomorrow.", translatedText: "合成正文：重置仍会在明天到来。",
+      publishedAt: new Date(now - 30 * 3_600_000).toISOString(),
+      parent: { id: "synthetic-question", author: "example", url: "https://x.com/example/status/125",
+        text: "Synthetic question: is there a global reset planned this week?", checkedAt: observed } },
+  ];
+  if (scenario === "reported") timeline.insights!.posts!.posts.unshift({
+    id: "synthetic-report", url: "https://x.com/thsottiaux/status/126", kind: "reset_report", isReply: false, parent: null,
+    text: "Synthetic preview: some Pro accounts did not receive the reset as expected. We are investigating and will follow up.",
+    translatedText: "合成正文：部分 Pro 账号未按预期重置。正在调查中，后续会更新进展。",
+    publishedAt: new Date(now - 3_600_000).toISOString(),
+  });
+}
+if (scenario === "unavailable") {
+  timeline.insights!.forecast.value = null;
+  timeline.insights!.forecast.issue = "request_failed";
+  timeline.sources[0].issue = "request_failed";
 }
 
 function Preview() {

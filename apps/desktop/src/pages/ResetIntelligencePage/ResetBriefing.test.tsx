@@ -61,8 +61,9 @@ describe("attributed reset briefing", () => {
     expect(html).toContain("报告完成");
     expect(html).toContain("重置已全部完成。");
     expect(html).not.toContain("预告已更正");
-    expect(html).not.toContain("Tibo 明确预告额度重置");
-    expect(html).toContain("更多发言");
+    expect(html.indexOf("重置已全部完成。")).toBeLessThan(html.indexOf("关键动态"));
+    expect(html.indexOf("关键动态")).toBeLessThan(html.indexOf("Tibo 明确预告额度重置"));
+    expect(html).toContain('aria-expanded="false"');
     const state = forecastPresentation(data.insights, now, false, data);
     expect(state.signalActive).toBe(false);
     expect(state.notice?.reportedAt).toBe(Date.parse(report.publishedAt));
