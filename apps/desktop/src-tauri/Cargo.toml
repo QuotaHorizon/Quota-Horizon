@@ -1,7 +1,7 @@
 # Modified by the QuotaHorizon project from Codex Switch v1.3.5.
 [package]
 name = "quota-horizon-desktop"
-version = "0.1.6"
+version = "0.1.7"
 description = "Local-first Codex quota planning and account workspace"
 authors = ["QuotaHorizon contributors"]
 license = "Apache-2.0"

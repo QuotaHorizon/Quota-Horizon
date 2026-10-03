@@ -3,7 +3,7 @@ import { Clock3, MessageCircle, TrendingUp } from "lucide-react";
 import type { Language } from "../../i18n";
 import { EvidenceLink } from "./ArchiveView";
 import { publicEvidenceTime } from "./presentation";
-import { forecastPresentation, postReading, resetRelated } from "./resetBriefingModel";
+import { forecastPresentation, postReading, resetRelated, selectBriefingPost } from "./resetBriefingModel";
 import type { PublicPost, PublicReadReceipt, PublicResetTimeline } from "./types";
 import { postReadReceipts, useVisibleResetRead } from "./visibleResetRead";
 import shared from "./index.module.less";
@@ -39,26 +39,26 @@ export function ResetBriefing({ timeline, language, now, failed = false, onOpenS
   onRead?: (receipts: PublicReadReceipt[]) => void;
 }) {
   const zh = language === "zh";
-  const { value, stale, signalActive, signalWithdrawn, notice, announcement, probability24h, probability48h } = forecastPresentation(timeline?.insights, now, failed, timeline);
+  const { value, stale, signalActive, signalWithdrawn, notice, noticeWithdrawn, announcement, probability24h, probability48h } = forecastPresentation(timeline?.insights, now, failed, timeline);
   const feed = timeline?.insights?.posts;
   const posts = feed?.posts ?? [];
   const [all, setAll] = useState(false);
   const [more, setMore] = useState(false);
   const [limit, setLimit] = useState(3);
-  const latest = posts.find((post) => post.url === notice?.url) ?? posts.find(resetRelated);
+  const latest = selectBriefingPost(posts, notice);
   const otherPosts = (all ? posts : posts.filter(resetRelated)).filter((post) => post.id !== latest?.id);
   const feedSource = timeline?.sources.find((source) => source.sourceId === "codex_reset_posts");
   const feedAge = feed ? now - Date.parse(feed.fetchedAt) : NaN;
   const postsStale = !!feed && (failed || !!feedSource?.issue || !Number.isFinite(feedAge) || feedAge < -60_000 || feedAge >= 30 * 60_000);
   const confidence = value ? ({ low: ["低", "Low"], medium: ["中", "Medium"], high: ["高", "High"] }[value.confidence] ?? ["未说明", "Unspecified"])[zh ? 0 : 1] : "—";
-  const statusLabel = notice?.state === "withdrawn" || signalWithdrawn ? (zh ? "预告已更正" : "Announcement corrected")
+  const statusLabel = noticeWithdrawn ? (zh ? "预告已更正" : "Announcement corrected")
     : notice?.state === "reported" ? (zh ? "已报告重置" : "Reset reported")
     : notice?.state === "elapsed" ? (zh ? "预告时间已到 · 等待确认" : "Scheduled time reached · awaiting confirmation")
     : notice?.conflictingTiming ? (zh ? "预告时间有分歧" : "Timing interpretations differ")
     : notice && (notice.stale || failed) ? (zh ? "上次预告 · 待更新" : "Saved announcement · update due")
     : announcement ? (zh ? "已明确预告" : "Explicitly announced") : (zh ? "重置预告" : "Reset announcement");
   const scope = notice?.cohort === "all paid ChatGPT accounts" && zh ? "所有付费 ChatGPT 账号" : notice?.cohort;
-  const pendingNotice = !!notice && !announcement && (notice.explicit || notice.state !== "upcoming" || notice.conflictingTiming);
+  const pendingNotice = !!notice && !announcement && (noticeWithdrawn || notice.explicit || notice.state !== "upcoming" || notice.conflictingTiming);
   return <section className={styles.briefing} aria-label={zh ? "重置情报速览" : "Reset briefing"}>
       <article className={styles.forecast} data-stale={!announcement && stale || undefined} data-announced={announcement ? true : undefined}>
         <div className={styles.outlook}>
@@ -78,7 +78,8 @@ export function ResetBriefing({ timeline, language, now, failed = false, onOpenS
           </div>;
         })}</div>}
         {notice && <div className={styles.announcementSummary}>
-          {notice.timing && <div><Clock3 size={15} aria-hidden="true" /><time>{zh ? "预告时间 · " : "Scheduled · "}{publicEvidenceTime(new Date(notice.timing.end).toISOString(), language)}</time></div>}
+          {notice.reportedAt != null && <div className={styles.announcementTime}><Clock3 size={15} aria-hidden="true" /><time>{zh ? "报告完成 · " : "Reported complete · "}{publicEvidenceTime(new Date(notice.reportedAt).toISOString(), language)}</time></div>}
+          {notice.timing && <div className={styles.announcementTime}><Clock3 size={15} aria-hidden="true" /><time>{zh ? "预告时间 · " : "Scheduled · "}{publicEvidenceTime(new Date(notice.timing.end).toISOString(), language)}</time></div>}
           {scope && <span>{zh ? "适用范围：" : "For: "}{scope}</span>}
           <div className={shared.sourceRow}><EvidenceLink url={notice.url} label={zh ? "Tibo 原帖" : "Tibo’s announcement"} onOpen={onOpenSource} />
             <span>{zh ? "发布 " : "Published "}{publicEvidenceTime(new Date(notice.publishedAt).toISOString(), language)}</span></div>

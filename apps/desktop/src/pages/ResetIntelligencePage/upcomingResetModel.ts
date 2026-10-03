@@ -17,6 +17,7 @@ export interface UpcomingResetNotice {
   timing: { start: number; end: number; timeZone: string; sourceUrl: string; deadline: boolean; explicit: boolean } | null;
   explicit: boolean;
   cohort: string | null;
+  reportedAt?: number | null;
   stale: boolean;
   conflictingTiming: boolean;
 }
@@ -94,9 +95,14 @@ export function upcomingResetNotices(timeline: PublicResetTimeline | null, now: 
     if (kinds.size > 1) continue; // Disagreeing reset/grant classification needs review.
     const withdrawn = latest.some((other) => isPublicWithdrawal(other)
       && group.some((item) => sameResetSubject(item.signal, other.signal)));
-    const reported = latest.some((item) => group.some((subject) => sameResetSubject(item.signal, subject.signal))
-      && item.signal.semantics === "confirmed_reset"
-      && exactPublicTime(item.signal.occurredAt) != null && exactPublicTime(item.signal.occurredAt)! <= now);
+    const reports = latest.filter((item) => group.some((subject) => sameResetSubject(item.signal, subject.signal))
+      && item.signal.semantics === "confirmed_reset")
+      .flatMap((item) => {
+        const at = exactPublicTime(item.signal.occurredAt);
+        return at != null && at <= now ? [at] : [];
+      });
+    const reportedAt = reports.length ? Math.max(...reports) : null;
+    const reported = reportedAt != null;
     const hints = group.flatMap((item) => {
       const hint = item.signal.announcementTiming;
       if (!hint || hint.sourceUrl !== "https://quotaresets.com/api/v1/events.json"
@@ -126,7 +132,7 @@ export function upcomingResetNotices(timeline: PublicResetTimeline | null, now: 
     const cohort = group.map((item) => item.signal.announcementTiming?.cohort).find((value): value is string => !!value) ?? null;
     result.push({ key, kind: kinds.has("global_banked_reset_grant") ? "grant" : reported || explicit ? "reset" : "unknown", excerpt,
       url: entry.signal.source.canonicalUrl, publishedAt: exactPublicTime(entry.signal.source.publishedAt)!, collectedVia,
-      trackerCount: trackers.size, timing, explicit, cohort, stale, conflictingTiming,
+      trackerCount: trackers.size, timing, explicit, cohort, reportedAt, stale, conflictingTiming,
       state: withdrawn ? "withdrawn" : reported ? "reported" : quoted.delivery ? "announced_delivery" : timing && timing.end <= now ? "elapsed" : "upcoming" });
   }
   return result.sort((a, b) => Number(activeResetCommitment(b, now)) - Number(activeResetCommitment(a, now))

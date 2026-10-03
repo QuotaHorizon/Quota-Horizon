@@ -91,6 +91,7 @@ export interface ExternalResetForecast {
   probability24h: number; probability48h: number; confidence: string; mode: string;
   lastResetAt: string | null; signalScore: number | null; signalUrl: string | null;
   signalPublishedAt: string | null; signalDeadline: string | null; signalCorrected: boolean;
+  signalState?: string | null;
 }
 
 export interface PublicParentPost {

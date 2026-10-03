@@ -15,14 +15,14 @@ export function ResetNoticeChip({ notice, insights, timeline, sourceFailed = fal
   notice = timeline ? forecast.notice ?? undefined : notice;
   const probability = forecast.value ? `${zh ? "第三方 24h" : "Source 24h"} ${forecast.value.probability24h}%${forecast.stale ? (zh ? " · 缓存" : " · Cached") : ""}` : null;
   const activeAnnouncement = timeline ? !!forecast.announcement : activeResetCommitment(notice, now, sourceFailed);
-  const label = failed ? (zh ? "未能打开 · 重试" : "Retry opening") : !notice ? forecast.signalWithdrawn ? (zh ? "线索有更正" : "Lead corrected") : (zh ? "重置情报" : "Reset briefing") : notice.state === "withdrawn"
+  const label = failed ? (zh ? "未能打开 · 重试" : "Retry opening") : !notice ? forecast.signalWithdrawn ? (zh ? "线索有更正" : "Lead corrected") : (zh ? "重置情报" : "Reset briefing") : forecast.noticeWithdrawn || notice.state === "withdrawn"
     ? (zh ? "预告有更正" : "Notice corrected") : notice.state === "reported"
       ? (zh ? "重置新动态" : "Reset update") : notice.state === "announced_delivery"
         ? (zh ? "发卡新动态" : "Reset-card update") : notice.state === "elapsed"
         ? (zh ? "预告待确认" : "Awaiting confirmation") : notice.kind === "grant"
           ? (zh ? "发卡预告" : "Grant announced") : notice.kind === "unknown" ? (zh ? "重置相关预告" : "Reset-related notice") : (zh ? "重置预告" : "Reset announced");
   const target = notice?.state === "upcoming" && notice.timing?.deadline ? notice.timing.end : null;
-  const displayState = notice?.state ?? (forecast.signalWithdrawn ? "withdrawn" : undefined);
+  const displayState = forecast.noticeWithdrawn ? "withdrawn" : notice?.state ?? (forecast.signalWithdrawn ? "withdrawn" : undefined);
   const today = target != null && localCalendarDate(new Date(target)) === localCalendarDate(new Date(now));
   const time = target == null ? null : new Intl.DateTimeFormat(zh ? "zh-CN" : "en-US", {
     ...(today ? {} : { month: "2-digit", day: "2-digit" }), hour: "2-digit", minute: "2-digit", hourCycle: "h23",

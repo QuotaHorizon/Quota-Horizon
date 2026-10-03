@@ -12,7 +12,8 @@
 .announcementBadge { padding: 3px 8px; border-radius: 6px; background: rgba(var(--green-rgb), .14); color: var(--radar-accent); font-weight: 600; }
 .outlook { min-width: 0; }
 .announcementSummary { display: grid; gap: 9px; margin: 18px 0 0; padding-top: 14px; border-top: 1px solid var(--line); }
-.announcementSummary > div:first-child { display: flex; align-items: center; gap: 7px; }
+.announcementTime { display: grid; grid-template-columns: 15px minmax(0, 1fr); column-gap: 7px; align-items: start; }
+.announcementTime > svg { margin-top: 2px; }
 .announcementSummary strong { font-size: 14px; line-height: 1.65; }
 .announcementSummary span, .announcementSummary time { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .announcementSummary a { width: fit-content; color: var(--green-dark); font-size: 12px; }

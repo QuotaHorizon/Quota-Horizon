@@ -23,6 +23,8 @@ pub(crate) struct ExternalForecast {
     pub signal_url: Option<String>,
     pub signal_published_at: Option<String>,
     pub signal_deadline: Option<String>,
+    #[serde(default)]
+    pub signal_state: Option<String>,
     pub signal_corrected: bool,
 }
 
@@ -151,6 +153,7 @@ pub(crate) fn parse_forecast(
         signal_url,
         signal_published_at: timestamp(alert, "source_at"),
         signal_deadline: timestamp(&alert["window"], "end_at"),
+        signal_state: text(alert, "state", 32),
         signal_corrected: alert
             .get("corrected")
             .and_then(Value::as_bool)
@@ -158,7 +161,7 @@ pub(crate) fn parse_forecast(
             || alert
                 .get("state")
                 .and_then(Value::as_str)
-                .is_some_and(|state| state != "active"),
+                .is_some_and(|state| matches!(state, "corrected" | "retracted" | "withdrawn")),
     })
 }
 
@@ -410,6 +413,9 @@ fn validate_cache(value: &PublicInsights) -> bool {
                 .is_some_and(|v| !v.is_finite() || !(0.0..=100.0).contains(&v))
             || !["low", "medium", "high"].contains(&v.confidence.as_str())
             || !body(&v.mode, 32)
+            || v.signal_state
+                .as_deref()
+                .is_some_and(|state| !body(state, 32))
             || [&v.last_reset_at, &v.signal_deadline, &v.signal_published_at]
                 .iter()
                 .any(|v| v.as_deref().is_some_and(|v| !date(v)))
@@ -517,6 +523,32 @@ mod tests {
         v["updated_at"] = json!("2099-01-01T00:00:00Z");
         assert!(parse_forecast(&serde_json::to_vec(&v).unwrap(), &at()).is_err());
     }
+    #[test]
+    fn completed_and_expired_alerts_are_not_corrections() {
+        for (state, corrected) in [
+            ("active", false),
+            ("confirmed", false),
+            ("expired", false),
+            ("inactive", false),
+            ("corrected", true),
+            ("retracted", true),
+            ("withdrawn", true),
+        ] {
+            let mut value = json!({"updated_at":"2026-09-23T02:59:00Z", "mode":"model", "confidence":"low",
+                "probabilities":{"rounded_24h":16,"rounded_48h":29}, "latest_alert":{
+                    "url":"https://x.com/thsottiaux/status/123", "state":state, "corrected":false}});
+            let parsed = parse_forecast(&serde_json::to_vec(&value).unwrap(), &at()).unwrap();
+            assert_eq!(parsed.signal_state.as_deref(), Some(state));
+            assert_eq!(parsed.signal_corrected, corrected, "{state}");
+            value["latest_alert"]["corrected"] = json!(true);
+            assert!(
+                parse_forecast(&serde_json::to_vec(&value).unwrap(), &at())
+                    .unwrap()
+                    .signal_corrected
+            );
+        }
+    }
+
     #[test]
     fn preserves_reply_topology_translation_and_unclassified_notices() {
         let v = json!({"fetched_at":"2026-09-23T02:59:00Z","tweets":[{

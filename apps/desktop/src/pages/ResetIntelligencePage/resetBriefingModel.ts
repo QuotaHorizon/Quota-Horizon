@@ -1,5 +1,5 @@
 import type { Language } from "../../i18n";
-import { activeResetCommitment, resetCommitmentExcerpt, resetDeliveryExcerpt, upcomingResetNotices } from "./upcomingResetModel";
+import { activeResetCommitment, resetCommitmentExcerpt, resetDeliveryExcerpt, upcomingResetNotices, type UpcomingResetNotice } from "./upcomingResetModel";
 import { publicPostWithdrawn } from "./publicCorrections";
 import type { PublicInsights, PublicPost, PublicResetTimeline } from "./types";
 
@@ -13,16 +13,29 @@ export function forecastPresentation(insights: PublicInsights | undefined, now: 
     || !Number.isFinite(checkedAge) || checkedAge < -60_000 || checkedAge >= halfHour);
   const deadline = value?.signalDeadline ? Date.parse(value.signalDeadline) : NaN;
   const signalAge = value?.signalPublishedAt ? now - Date.parse(value.signalPublishedAt) : NaN;
-  const signalWithdrawn = !!value && (value.signalCorrected || publicPostWithdrawn(timeline?.entries, value.signalUrl));
-  const signalActive = !!value && !stale && !signalWithdrawn && Number.isFinite(signalAge) && signalAge >= -60_000
+  // Older caches collapsed every non-active state (including confirmed) into
+  // signalCorrected. Their event journal remains usable until the next fetch.
+  const signalWithdrawn = !!value && ((value.signalState != null && value.signalCorrected)
+    || publicPostWithdrawn(timeline?.entries, value.signalUrl));
+  const signalActive = !!value && !stale && !signalWithdrawn && (!value.signalState || value.signalState === "active")
+    && Number.isFinite(signalAge) && signalAge >= -60_000
     && signalAge < 72 * 3_600_000 && Number.isFinite(deadline) && deadline > now;
   const notice = timeline ? upcomingResetNotices(timeline, now)[0] ?? null : null;
+  const noticeWithdrawn = notice?.state === "withdrawn" || !!(notice && signalWithdrawn && value?.signalUrl === notice.url);
   const announcement = activeResetCommitment(notice, now, failed)
-    && !(signalWithdrawn && value?.signalUrl === notice?.url) ? notice : null;
+    && !noticeWithdrawn ? notice : null;
   const byHours = (hours: number) => announcement?.timing && announcement.timing.end <= now + hours * 3_600_000
     ? 100 : value ? hours === 24 ? value.probability24h : value.probability48h : null;
-  return { value, stale, signalActive, signalWithdrawn, notice, announcement,
+  return { value, stale, signalActive, signalWithdrawn, notice, noticeWithdrawn, announcement,
     probability24h: byHours(24), probability48h: byHours(48) };
+}
+
+export function selectBriefingPost(posts: PublicPost[], notice: UpcomingResetNotice | null) {
+  const announcement = posts.find((post) => post.url === notice?.url);
+  const latest = posts.filter(resetRelated).sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))[0];
+  // Keep a forthcoming commitment prominent. Once it has progressed, lead
+  // with the latest substantive update and retain the original in More.
+  return notice?.state === "upcoming" ? announcement ?? latest : latest ?? announcement;
 }
 
 export function resetRelated(post: PublicPost) {

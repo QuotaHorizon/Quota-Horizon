@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ResetBriefing } from "./ResetBriefing";
-import { forecastPresentation, postReading, resetRelated } from "./resetBriefingModel";
+import { forecastPresentation, postReading, resetRelated, selectBriefingPost } from "./resetBriefingModel";
 import { ResetNoticeChip } from "../../components/CapacityPopover/ResetNoticeChip";
 import { upcomingResetNotices } from "./upcomingResetModel";
 import type { PublicInsights, PublicPost, PublicResetTimeline } from "./types";
@@ -17,7 +17,7 @@ function insights(): PublicInsights {
     sourceUrl: "https://codex-reset.com/api/forecast", updatedAt: "2026-09-23T02:58:00Z", checkedAt: "2026-09-23T02:59:00Z",
     probability24h: 20, probability48h: 35, confidence: "low", mode: "model", lastResetAt: null,
     signalScore: 93, signalUrl: post.url, signalPublishedAt: post.publishedAt,
-    signalDeadline: "2026-09-23T06:59:59Z", signalCorrected: false,
+    signalDeadline: "2026-09-23T06:59:59Z", signalCorrected: false, signalState: "active",
   } }, posts: { fetchedAt: "2026-09-23T02:59:00Z", checkedAt: "2026-09-23T02:59:00Z", posts: [post] } };
 }
 function timeline(): PublicResetTimeline {
@@ -47,6 +47,49 @@ function announcedTimeline(target = "2026-09-23T10:00:00Z"): PublicResetTimeline
 const render = (value = timeline()) => renderToStaticMarkup(<ResetBriefing timeline={value} language="zh" now={now} />);
 
 describe("attributed reset briefing", () => {
+  it("leads with the completed reset and its new report after an announcement is fulfilled", () => {
+    const data = announcedTimeline();
+    data.entries[0].signal.semantics = "confirmed_reset";
+    data.entries[0].signal.occurredAt = "2026-09-23T02:57:00Z";
+    const report: PublicPost = { ...data.insights!.posts!.posts[0], id: "789",
+      url: "https://x.com/thsottiaux/status/789", kind: "reset_report",
+      text: "Reset all propagated. Enjoy.", translatedText: "重置已全部完成。", publishedAt: "2026-09-23T02:57:00Z" };
+    data.insights!.posts!.posts.push(report); // Selection also handles an unsorted feed.
+    Object.assign(data.insights!.forecast.value!, { signalUrl: report.url, signalState: "confirmed", signalDeadline: null });
+    const html = render(data);
+    expect(html).toContain("已报告重置");
+    expect(html).toContain("报告完成");
+    expect(html).toContain("重置已全部完成。");
+    expect(html).not.toContain("预告已更正");
+    expect(html).not.toContain("Tibo 明确预告额度重置");
+    expect(html).toContain("更多发言");
+    const state = forecastPresentation(data.insights, now, false, data);
+    expect(state.signalActive).toBe(false);
+    expect(state.notice?.reportedAt).toBe(Date.parse(report.publishedAt));
+    const chip = renderToStaticMarkup(<ResetNoticeChip timeline={data} insights={data.insights} now={now} language="zh" onOpen={() => undefined} />);
+    expect(chip).toContain("重置新动态");
+    expect(chip).not.toContain("预告有更正");
+    expect(chip).not.toContain("100%");
+    data.insights!.forecast.value!.signalState = undefined;
+    data.insights!.forecast.value!.signalCorrected = true; // A persisted 0.1.6 cache.
+    expect(render(data)).not.toContain("已更正");
+  });
+  it("does not withdraw a current announcement because a different lead was corrected", () => {
+    const data = announcedTimeline();
+    const value = data.insights!.forecast.value!;
+    value.signalState = "corrected"; value.signalCorrected = true;
+    expect(forecastPresentation(data.insights, now, false, data)).toMatchObject({ noticeWithdrawn: false, probability24h: 100 });
+    expect(render(data)).not.toContain("预告已更正");
+    value.signalUrl = data.entries[0].signal.source.canonicalUrl;
+    expect(render(data)).toContain("预告已更正");
+    expect(renderToStaticMarkup(<ResetNoticeChip timeline={data} insights={data.insights} now={now} language="zh" onOpen={() => undefined} />)).toContain("预告有更正");
+  });
+  it("keeps an upcoming commitment visible until it progresses", () => {
+    const data = announcedTimeline();
+    const announcement = data.insights!.posts!.posts[0];
+    data.insights!.posts!.posts.unshift({ ...post, id: "new", kind: "reset_report", publishedAt: "2026-09-23T02:50:00Z" });
+    expect(selectBriefingPost(data.insights!.posts!.posts, upcomingResetNotices(data, now)[0])).toBe(announcement);
+  });
   it("shows an announcement-led 100% outlook without overwriting the source estimates", () => {
     const data = announcedTimeline();
     const unchanged = JSON.stringify(data);
