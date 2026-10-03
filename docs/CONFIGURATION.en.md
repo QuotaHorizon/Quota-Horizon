@@ -20,10 +20,17 @@ See [CPA bridge](CPA_BRIDGE.en.md) for environment variables and response format
 
 ## Reset radar
 
-The overview leads with explicit dated reset announcements, covered accounts and local time. An active announcement sets each covered 24/48-hour window to 100%.
-Original estimates from [Codex Reset](https://codex-reset.com/) appear as bars under “How sources compare”. Select 24h / 48h to change the forecast window.
-The progress diagram shows the announcement, scheduled time and reported completion; after the scheduled time, the outlook shows “awaiting confirmation”. Source failures, timing conflicts and corrections have their own states.
-Related statements include Tibo posts, translations and reply context. Select a record in “Key updates” to expand it.
+The overview shows Horizon’s experimental combined estimate, forecast trends, source comparisons and community outlook. Select 24 / 48 hours to change the forecast window.
+An active explicit announcement takes precedence at 100% for each covered window; the updates section tracks its timing, covered accounts and reported completion.
+Original estimates from [Codex Reset](https://codex-reset.com/), [Codex Reset Monitor](https://codexreset.org/),
+[QuotaCue](https://quotacue.com/) and [CodexReset.app](https://codexreset.app/) remain visible.
+Expand “Evidence & overlap” to inspect weights, shared original posts, source generation times and local collection times. Stale, failed or reset-inconsistent sources stay visible and are excluded from the combined estimate.
+
+The Horizon trend accumulates from the first local observation. You can also select the historical forecasts recorded by Codex Reset Monitor.
+The community panel samples public GitHub and Hacker News content, deduplicates authors, and separates predictions, wishes and reported experiences.
+Enough independent predictions with explicit horizons can adjust the combined estimate. “Views, evidence and sampling” shows statements, sample counts and collection status.
+WeChat, Reddit and Linux.do are not connected. Missing prediction samples appear as `—`.
+Expand statements in the updates section to read Tibo posts, translations and reply context. “How the estimate is calculated” explains the current weights and community adjustment.
 Event history combines records from Codex Reset and [QuotaResets](https://quotaresets.com/); service updates come from [OpenAI Status](https://status.openai.com/).
 
 Reset history uses a three-month calendar to distinguish quota resets, reset-card grants and announcements. Select a date to see event times in your computer's timezone.

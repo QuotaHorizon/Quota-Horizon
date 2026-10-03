@@ -124,6 +124,16 @@ fn save_refresh_with_insights(
     forecast: Option<Result<insights::ExternalForecast, SourceIssue>>,
     at: &UtcTimestamp,
 ) -> Result<PublicResetTimeline, String> {
+    save_refresh_with_radar(path, outcomes, forecast, None, at)
+}
+
+fn save_refresh_with_radar(
+    path: &Path,
+    outcomes: Vec<SourceOutcome>,
+    forecast: Option<Result<insights::ExternalForecast, SourceIssue>>,
+    radar: Option<radar::Collected>,
+    at: &UtcTimestamp,
+) -> Result<PublicResetTimeline, String> {
     let mut conn = open_store(path, true)?;
     let tx = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -228,6 +238,9 @@ fn save_refresh_with_insights(
                 status.accepted_records as i64, status.rejected_records as i64, status.skipped_records as i64]).map_err(db_error)?;
     }
     insights::save_cache(&tx, &insight_cache)?;
+    if let Some(collected) = radar {
+        radar::save(&tx, collected, &insight_cache, at)?;
+    }
     read_state::baseline_if_needed(&tx)?;
     tx.commit().map_err(db_error)?;
     load_timeline(path, at)
@@ -288,12 +301,14 @@ fn refresh_at_path(path: &Path, force: bool) -> Result<(PublicResetTimeline, boo
     if gate.is_some_and(|last| last.elapsed() < Duration::from_secs(5))
         || (!force
             && sources_recent(&cached, &at)
+            && cached.radar.updated_at.is_some()
             && cached.insights.forecast.attempted_at.is_some())
     {
         return Ok((cached, false));
     }
     *gate = Some(Instant::now());
-    let (mut outcomes, forecast) = std::thread::scope(|scope| {
+    let (mut outcomes, forecast, radar) = std::thread::scope(|scope| {
+        let radar = scope.spawn(|| radar::collect(&at));
         let forecast = scope.spawn(|| {
             let client = public_client()?;
             let response = client
@@ -305,6 +320,7 @@ fn refresh_at_path(path: &Path, force: bool) -> Result<(PublicResetTimeline, boo
         (
             collect_sources(),
             forecast.join().unwrap_or(Err(SourceIssue::RequestFailed)),
+            radar.join().map_err(|_| db_error("radar collector failed")),
         )
     });
     if let Ok(client) = public_client() {
@@ -316,6 +332,6 @@ fn refresh_at_path(path: &Path, force: bool) -> Result<(PublicResetTimeline, boo
             }
         }
     }
-    save_refresh_with_insights(path, outcomes, Some(forecast), &now())
+    save_refresh_with_radar(path, outcomes, Some(forecast), Some(radar?), &now())
         .map(|timeline| (timeline, true))
 }

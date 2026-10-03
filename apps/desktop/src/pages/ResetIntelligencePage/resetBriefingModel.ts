@@ -25,7 +25,9 @@ export function forecastPresentation(insights: PublicInsights | undefined, now: 
   const announcement = activeResetCommitment(notice, now, failed)
     && !noticeWithdrawn ? notice : null;
   const byHours = (hours: number) => announcement?.timing && announcement.timing.end <= now + hours * 3_600_000
-    ? 100 : value ? hours === 24 ? value.probability24h : value.probability48h : null;
+    ? 100 : timeline?.radar?.updatedAt
+      ? timeline.radar.estimate ? hours === 24 ? timeline.radar.estimate.probability24h : timeline.radar.estimate.probability48h : null
+      : value ? hours === 24 ? value.probability24h : value.probability48h : null;
   return { value, stale, signalActive, signalWithdrawn, notice, noticeWithdrawn, announcement,
     probability24h: byHours(24), probability48h: byHours(48) };
 }

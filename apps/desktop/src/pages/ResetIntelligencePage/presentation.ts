@@ -35,7 +35,8 @@ export function publicEvidenceUrl(value: string): string | null {
     if (url.protocol !== "https:" || url.username || url.password || url.port
       || /[\s\u0000-\u001f]/u.test(value)) return null;
     const allowed = ["help.openai.com", "openai.com", "status.openai.com", "x.com",
-      "quotaresets.com", "codex-reset.com"];
+      "quotaresets.com", "codex-reset.com", "codexreset.org", "codexreset.app", "quotacue.com",
+      "github.com", "news.ycombinator.com"];
     return allowed.includes(url.hostname) ? url.href : null;
   } catch { return null; }
 }

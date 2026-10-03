@@ -26,6 +26,12 @@ pub(crate) struct ExternalForecast {
     #[serde(default)]
     pub signal_state: Option<String>,
     pub signal_corrected: bool,
+    #[serde(default)]
+    pub model_probability_24h: Option<f64>,
+    #[serde(default)]
+    pub model_probability_48h: Option<f64>,
+    #[serde(default)]
+    pub evidence_urls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -162,6 +168,11 @@ pub(crate) fn parse_forecast(
                 .get("state")
                 .and_then(Value::as_str)
                 .is_some_and(|state| matches!(state, "corrected" | "retracted" | "withdrawn")),
+        model_probability_24h: percent(&v["probabilities"]["model_24h"]),
+        model_probability_48h: percent(&v["probabilities"]["model_48h"]),
+        evidence_urls: v["context"]["evidence_ids"].as_array().into_iter().flatten()
+            .filter_map(Value::as_str).filter(|id| post_id(id)).take(32)
+            .map(|id| format!("https://x.com/thsottiaux/status/{id}")).collect(),
     })
 }
 

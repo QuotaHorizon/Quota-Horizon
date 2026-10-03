@@ -75,6 +75,7 @@ export interface PublicResetTimeline {
   revisionCount: number;
   evidenceFamilyCount: number;
   insights?: PublicInsights;
+  radar?: RadarView;
   changes?: { items: PublicRevisionChange[]; totalCount: number; readVersion?: number };
 }
 
@@ -107,4 +108,40 @@ export interface PublicPost {
 export interface PublicInsights {
   forecast: { value: ExternalResetForecast | null; attemptedAt: string | null; issue: PublicSourceIssue | null };
   posts: { fetchedAt: string; checkedAt: string; posts: PublicPost[] } | null;
+}
+
+export interface RadarPoint { at: string; probability24h: number; probability48h: number }
+export interface RadarForecast {
+  id: string; name: string; url: string; method: "cadence" | "statements" | "mixed";
+  probability24h: number | null; probability48h: number | null;
+  baseline24h: number | null; baseline48h: number | null;
+  updatedAt: string | null; collectedAt: string; lastResetAt: string | null;
+  evidenceUrls: string[]; usesCommunity: boolean; issue: PublicSourceIssue | null;
+  exclusion: "unavailable" | "fetch_failed" | "reset_mismatch" | "stale" | "community_overlap" | null;
+  weight: number; history: RadarPoint[];
+}
+export interface RadarOpinion {
+  id: string; channel: string; author: string; url: string; text: string; publishedAt: string;
+  stance: "optimistic" | "uncertain" | "pessimistic" | "wish" | "observation";
+  reason: string; evidenceUrls: string[]; horizonHours: number | null;
+}
+export interface RadarChannel {
+  id: string; name: string; url: string; query: string; attemptedAt: string; successAt: string | null;
+  issue: PublicSourceIssue | null; scanned: number; truncated: boolean;
+}
+export interface RadarView {
+  updatedAt: string | null;
+  forecasts: RadarForecast[];
+  community: {
+    channels: RadarChannel[]; opinions: RadarOpinion[];
+    optimistic: number; uncertain: number; pessimistic: number; wishes: number; observations: number;
+    authors: number; communities: number; independentAuthors: number; duplicates: number;
+    optimisticShare: number | null; previousShare: number | null;
+  };
+  estimate: {
+    probability24h: number; probability48h: number; pooled24h: number; pooled48h: number;
+    communityAdjustment24h: number; communityAdjustment48h: number;
+    sourceCount: number; spread24h: number; spread48h: number; evidenceGroups: number; modelVersion: string;
+  } | null;
+  history: RadarPoint[];
 }

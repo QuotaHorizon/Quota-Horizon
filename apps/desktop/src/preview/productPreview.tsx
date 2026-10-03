@@ -6,7 +6,7 @@ import { CapacityPopover } from "../components/CapacityPopover";
 import { AccountsPage } from "../pages/AccountsPage";
 import { LiveSourcesView } from "../pages/ResetIntelligencePage/LiveSourcesPanel";
 import { ResetNoticeChip } from "../components/CapacityPopover/ResetNoticeChip";
-import type { PublicResetTimeline } from "../pages/ResetIntelligencePage/types";
+import type { PublicResetTimeline, RadarView } from "../pages/ResetIntelligencePage/types";
 import type { Account } from "../types";
 import { LANGUAGE_STORAGE_KEY, translate } from "../i18n";
 import "antd/dist/reset.css";
@@ -147,5 +147,13 @@ function Preview() {
 }
 
 const root = createRoot(document.getElementById("root")!);
-root.render(<Preview />);
+// Optional local public-source capture for development review. This fixture is
+// browser-only and never imports the user's account store or native journal.
+if (scene === "radar" && query.get("capture") === "radar") {
+  fetch("/radar-review.json").then(response => {
+    if (!response.ok) throw new Error("Local review capture unavailable");
+    return response.json();
+  }).then((radar: RadarView) => { timeline.radar = radar; root.render(<Preview />); })
+    .catch(() => root.render(<p>Local review capture unavailable.</p>));
+} else root.render(<Preview />);
 if (import.meta.hot) import.meta.hot.dispose(() => root.unmount());

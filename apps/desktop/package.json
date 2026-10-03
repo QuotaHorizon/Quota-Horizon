@@ -2,7 +2,7 @@
   "name": "@quota-horizon/desktop",
   "description": "Modified by QuotaHorizon from Codex Switch v1.3.5",
   "private": true,
-  "version": "0.1.8",
+  "version": "0.1.9",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {

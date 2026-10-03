@@ -85,6 +85,7 @@ pub(crate) struct PublicResetTimeline {
     evidence_family_count: usize,
     insights: insights::PublicInsights,
     changes: changes::PublicRevisionHistory,
+    radar: radar::RadarView,
 }
 
 struct StoredLedger {
@@ -153,7 +154,7 @@ fn open_store(path: &Path, write: bool) -> Result<Connection, String> {
             .map_err(db_error)?;
         }
         conn.execute_batch("BEGIN IMMEDIATE; CREATE TABLE public_insights (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL); PRAGMA user_version=2; COMMIT;").map_err(db_error)?;
-    } else if !(1..=3).contains(&version) {
+    } else if !(1..=4).contains(&version) {
         return Err(db_error("unsupported schema"));
     }
     if write && version < 3 {
@@ -172,6 +173,9 @@ fn open_store(path: &Path, write: bool) -> Result<Connection, String> {
             load_timeline(&backup, &now())?;
         }
         read_state::migrate(&mut conn)?;
+    }
+    if write && version < 4 {
+        radar::migrate(&conn)?;
     }
     Ok(conn)
 }
@@ -303,6 +307,7 @@ fn load_timeline(path: &Path, at: &UtcTimestamp) -> Result<PublicResetTimeline, 
             evidence_family_count: 0,
             insights: insights::PublicInsights::default(),
             changes: changes::PublicRevisionHistory::default(),
+            radar: radar::RadarView::default(),
         });
     }
     let mut conn = open_store(path, false)?;
@@ -342,6 +347,7 @@ fn load_timeline(path: &Path, at: &UtcTimestamp) -> Result<PublicResetTimeline, 
         evidence_family_count: store.ledger.evidence_family_count_at(at),
         insights: insights::read_cache(&tx)?,
         changes,
+        radar: radar::load(&tx, at)?,
     })
 }
 
@@ -349,6 +355,7 @@ include!("collector.rs");
 mod background;
 mod changes;
 pub(crate) mod insights;
+mod radar;
 pub(crate) mod read_state;
 pub(crate) use background::{setup, shutdown};
 include!("tests.rs");
