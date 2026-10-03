@@ -1,8 +1,6 @@
 use super::*;
 
 const ORG: &str = "https://codexreset.org/_serverFn/265792b9fbf2f0d07fea84fe2c15432450c2afaf3552f5e75c04dc9540f99dbf";
-const CUE: &str = "https://quotacue.com/api/dashboard";
-const APP: &str = "https://codexreset.app/api/signal";
 
 pub(super) fn unavailable(id: &str, issue: SourceIssue, at: &UtcTimestamp) -> Forecast {
     let (name, url, method) = match id {
@@ -112,6 +110,7 @@ pub(super) fn parse(id: &str, bytes: &[u8], at: &UtcTimestamp) -> Result<Forecas
                         at: time,
                         probability_24h: number(&row["score24h"]).ok()?,
                         probability_48h: number(&row["score48h"]).ok()?,
+                        model_version: None,
                     })
                 })
                 .take(192)
@@ -149,29 +148,26 @@ pub(super) fn parse(id: &str, bytes: &[u8], at: &UtcTimestamp) -> Result<Forecas
 
 pub(super) fn collect(at: &UtcTimestamp) -> Vec<(&'static str, Result<Forecast, SourceIssue>)> {
     std::thread::scope(|scope| {
-        let jobs: Vec<_> = [
-            ("reset_monitor", ORG),
-            ("quota_cue", CUE),
-            ("reset_app", APP),
-        ]
-        .into_iter()
-        .map(|(id, url)| {
-            (
-                id,
-                scope.spawn(move || {
-                    let client = public_client()?;
-                    let mut req = client
-                        .get(url)
-                        .header(reqwest::header::ACCEPT, "application/json");
-                    if id == "reset_monitor" {
-                        req = req.header("x-tsr-serverFn", "true");
-                    }
-                    let bytes = read_response(req.send().map_err(|_| SourceIssue::RequestFailed)?)?;
-                    parse(id, &bytes, at)
-                }),
-            )
-        })
-        .collect();
+        let jobs: Vec<_> = [("reset_monitor", ORG)]
+            .into_iter()
+            .map(|(id, url)| {
+                (
+                    id,
+                    scope.spawn(move || {
+                        let client = public_client()?;
+                        let mut req = client
+                            .get(url)
+                            .header(reqwest::header::ACCEPT, "application/json");
+                        if id == "reset_monitor" {
+                            req = req.header("x-tsr-serverFn", "true");
+                        }
+                        let bytes =
+                            read_response(req.send().map_err(|_| SourceIssue::RequestFailed)?)?;
+                        parse(id, &bytes, at)
+                    }),
+                )
+            })
+            .collect();
         jobs.into_iter()
             .map(|(id, job)| (id, job.join().unwrap_or(Err(SourceIssue::RequestFailed))))
             .collect()

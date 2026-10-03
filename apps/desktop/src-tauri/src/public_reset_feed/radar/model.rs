@@ -15,7 +15,7 @@ fn shares(c: &[&Opinion]) -> (usize, usize, usize, Option<f64>) {
 fn sample(opinions: &[Opinion], end: i64) -> (Vec<&Opinion>, usize) {
     let mut sorted: Vec<_> = opinions
         .iter()
-        .filter(|p| seconds(&p.published_at).is_some_and(|t| t <= end && t > end - 6 * 3600))
+        .filter(|p| seconds(&p.published_at).is_some_and(|t| t <= end && t > end - 24 * 3600))
         .collect();
     sorted.sort_by_key(|p| std::cmp::Reverse(seconds(&p.published_at)));
     let mut authors = HashSet::new();
@@ -38,7 +38,7 @@ fn sample(opinions: &[Opinion], end: i64) -> (Vec<&Opinion>, usize) {
     (sorted, count)
 }
 fn adjustment(base: f64, score: f64) -> f64 {
-    // Bounded log-odds tilt. Coefficients are explicit priors for the v1
+    // Bounded log-odds tilt. Coefficients are explicit priors for the v2
     // experiment, not learned weights or a claim of forecast calibration.
     let p = (base / 100.0).clamp(0.001, 0.999);
     (100.0 / (1.0 + (-(p / (1.0 - p)).ln() - score).exp())).clamp(0.0, 100.0)
@@ -50,10 +50,10 @@ fn round(v: f64) -> f64 {
 pub(super) fn evaluate(view: &mut RadarView, at: &UtcTimestamp) {
     let time = seconds(at.as_str()).unwrap();
     view.community.opinions.retain(|p| {
-        seconds(&p.published_at).is_some_and(|t| t <= time + 60 && t > time - 12 * 3600)
+        seconds(&p.published_at).is_some_and(|t| t <= time + 60 && t > time - 48 * 3600)
     });
     let (current, duplicates) = sample(&view.community.opinions, time);
-    let (previous, _) = sample(&view.community.opinions, time - 6 * 3600);
+    let (previous, _) = sample(&view.community.opinions, time - 24 * 3600);
     let (positive, uncertain, negative, share) = shares(&current);
     let previous_share = shares(&previous).3;
     let authors = current.len();
@@ -64,11 +64,6 @@ pub(super) fn evaluate(view: &mut RadarView, at: &UtcTimestamp) {
         .len();
     let wishes = current.iter().filter(|p| p.stance == "wish").count();
     let observations = current.iter().filter(|p| p.stance == "observation").count();
-    let facts: HashSet<_> = view
-        .forecasts
-        .iter()
-        .flat_map(|f| f.evidence_urls.iter())
-        .collect();
     let fresh_channels: HashSet<_> = view
         .community
         .channels
@@ -95,18 +90,31 @@ pub(super) fn evaluate(view: &mut RadarView, at: &UtcTimestamp) {
                 && matches!(p.stance.as_str(), "optimistic" | "pessimistic")
                 && p.horizon_hours.is_some()
                 && last_reset.is_none_or(|reset| seconds(&p.published_at).unwrap_or(0) > reset)
-                && !p.evidence_urls.iter().any(|u| facts.contains(u))
-                && !p.text.to_lowercase().contains("tibo")
-                && !p.text.contains("thsottiaux")
+                && p.reason != "quoted_evidence"
+                && p.horizon_hours.is_some_and(|h| {
+                    seconds(&p.published_at).unwrap_or(0) + i64::from(h) * 3600 > time
+                })
         })
         .copied()
         .collect();
-    let independent_authors = independent.len();
-    let community_active = independent_authors >= 3;
+    let independent_authors = independent
+        .iter()
+        .filter(|p| {
+            p.evidence_urls.is_empty()
+                && !p.text.to_lowercase().contains("tibo")
+                && !p.text.to_lowercase().contains("thsottiaux")
+        })
+        .count();
     let mut grouped: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, f) in view.forecasts.iter_mut().enumerate() {
         f.weight = 0.0;
-        f.exclusion = if f.probability_24h.is_none() || f.probability_48h.is_none() {
+        f.exclusion = if f.id == "reset_app" {
+            Some("source_retired")
+        } else if f.method == "mixed" || f.uses_community {
+            Some("method_unverified")
+        } else if f.updated_at.is_none() {
+            Some("missing_timestamp")
+        } else if f.probability_24h.is_none() || f.probability_48h.is_none() {
             Some("unavailable")
         } else if f.issue.is_some() {
             Some("fetch_failed")
@@ -131,8 +139,6 @@ pub(super) fn evaluate(view: &mut RadarView, at: &UtcTimestamp) {
             })
         {
             Some("stale")
-        } else if community_active && (f.uses_community || f.method == "mixed") {
-            Some("community_overlap")
         } else {
             None
         }
@@ -194,39 +200,100 @@ pub(super) fn evaluate(view: &mut RadarView, at: &UtcTimestamp) {
             groups.insert(format!("undisclosed:{}", f.id));
         }
     }
-    let tilt = |hours: u32| {
+    let effect = |hours: u32| {
+        // A bullish 24h forecast also concerns 48h. A bearish 24h forecast
+        // does not imply no reset in 48h; bearish 48h can inform both windows.
         let views: Vec<_> = independent
             .iter()
-            .filter(|p| p.horizon_hours.is_some_and(|h| h <= hours))
+            .filter(|p| {
+                p.horizon_hours.is_some_and(|h| {
+                    if p.stance == "optimistic" {
+                        h <= hours
+                    } else {
+                        h >= hours
+                    }
+                })
+            })
             .collect();
-        let n = views.len();
-        if n < 3 {
-            return 0.0;
+        let mut groups: Vec<(HashSet<String>, Vec<(f64, f64, bool)>)> = vec![];
+        let mut channels = HashSet::new();
+        for p in &views {
+            channels.insert(&p.channel);
+            let age = (time - seconds(&p.published_at).unwrap()).max(0) as f64;
+            let weight = 2.0_f64.powf(-age / (12.0 * 3600.0));
+            let text = p.text.to_lowercase();
+            let mut anchors: HashSet<String> = p
+                .evidence_urls
+                .iter()
+                .filter_map(|s| url::Url::parse(s).ok())
+                .map(|mut u| {
+                    u.set_query(None);
+                    u.set_fragment(None);
+                    u.to_string()
+                })
+                .collect();
+            let shared =
+                !anchors.is_empty() || text.contains("tibo") || text.contains("thsottiaux");
+            if anchors.is_empty() {
+                anchors.insert(if shared {
+                    "named:thsottiaux".into()
+                } else {
+                    format!("author:{}:{}", p.channel, p.author.to_lowercase())
+                });
+            }
+            let mut entries = vec![(
+                weight,
+                if p.stance == "optimistic" { 1.0 } else { -1.0 },
+                shared,
+            )];
+            // Merge transitively overlapping reference sets before assigning a cap.
+            let mut i = 0;
+            while i < groups.len() {
+                if !anchors.is_disjoint(&groups[i].0) {
+                    let (other, values) = groups.remove(i);
+                    anchors.extend(other);
+                    entries.extend(values);
+                    i = 0;
+                } else {
+                    i += 1;
+                }
+            }
+            groups.push((anchors, entries));
         }
-        let balance = views
-            .iter()
-            .map(|p| if p.stance == "optimistic" { 1.0 } else { -1.0 })
-            .sum::<f64>()
-            / n as f64;
-        let coverage = (views
-            .iter()
-            .map(|p| &p.channel)
-            .collect::<HashSet<_>>()
-            .len() as f64
-            / 2.0)
-            .min(1.0);
-        0.35 * balance * n as f64 / (n as f64 + 20.0) * coverage
+        let mut effective = 0.0;
+        let mut direction = 0.0;
+        let mut shared_authors = 0;
+        for (_, entries) in &groups {
+            let total: f64 = entries.iter().map(|e| e.0).sum();
+            let capped = total.min(1.0);
+            effective += capped;
+            direction += entries.iter().map(|e| e.0 * e.1).sum::<f64>() * capped / total;
+            shared_authors += entries.iter().filter(|e| e.2).count();
+        }
+        // v2 uses a continuous, inspectable prior: no three-author cliff.
+        // Twelve effective opinions halve shrinkage; two channels give full
+        // coverage. 1.5 is an experimental maximum log-odds signal, not fitted.
+        let coverage = (channels.len() as f64 / 2.0).min(1.0);
+        let tilt = 1.5 * direction / (effective + 12.0) * coverage;
+        CommunityEffect {
+            hours,
+            eligible_authors: views.len(),
+            effective_authors: round(effective),
+            shared_evidence_authors: shared_authors,
+            log_odds_adjustment: tilt,
+        }
     };
-    let p24 = if community_active {
-        adjustment(pooled[0], tilt(24))
-    } else {
-        pooled[0]
+    let e24 = effect(24);
+    let e48 = effect(48);
+    let adjusted = |base, tilt: f64| {
+        if tilt.abs() < f64::EPSILON {
+            base
+        } else {
+            adjustment(base, tilt)
+        }
     };
-    let p48 = if community_active {
-        adjustment(pooled[1], tilt(48)).max(p24)
-    } else {
-        pooled[1]
-    };
+    let p24 = adjusted(pooled[0], e24.log_odds_adjustment);
+    let p48 = adjusted(pooled[1], e48.log_odds_adjustment).max(p24);
     view.estimate = (count > 0).then(|| Estimate {
         probability_24h: round(p24),
         probability_48h: round(p48),
@@ -252,4 +319,6 @@ pub(super) fn evaluate(view: &mut RadarView, at: &UtcTimestamp) {
     c.wishes = wishes;
     c.observations = observations;
     c.independent_authors = independent_authors;
+    c.window_hours = 24;
+    c.effects = vec![e24, e48];
 }

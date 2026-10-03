@@ -121,7 +121,7 @@ function Preview() {
   return <ConfigProvider theme={{ token: { colorPrimary: "#35ada7", borderRadius: 10 } }}>
     <main className={`product-preview product-preview--${scene}`}>
       <header className="preview-heading"><div><small>QuotaHorizon</small><h1>{title}</h1></div>
-        <p>{zh ? "合成预览 · 账号、额度、概率、正文与时间均为样例" : "Synthetic preview · sample accounts, quota, probabilities, text and times"}</p></header>
+        <p>{query.get("capture") === "radar" ? (zh ? "本机公开来源预览 · 采集数据与已存预测记录" : "Local public-source preview · collected data and forecast records") : (zh ? "合成预览 · 账号、额度、概率、正文与时间均为样例" : "Synthetic preview · sample accounts, quota, probabilities, text and times")}</p></header>
       {scene === "menu" ? <div className="preview-popover"><CapacityPopover /></div>
         : scene === "radar" ? <><LiveSourcesView language={language} now={now}
           state={{ timeline, busy: false, failed: false }} onRefresh={noop} onOpenSource={noop} />
@@ -153,7 +153,11 @@ if (scene === "radar" && query.get("capture") === "radar") {
   fetch("/radar-review.json").then(response => {
     if (!response.ok) throw new Error("Local review capture unavailable");
     return response.json();
-  }).then((radar: RadarView) => { timeline.radar = radar; root.render(<Preview />); })
+  }).then((capture: RadarView | PublicResetTimeline) => {
+    if ("forecasts" in capture) timeline.radar = capture;
+    else Object.assign(timeline, capture);
+    root.render(<Preview />);
+  })
     .catch(() => root.render(<p>Local review capture unavailable.</p>));
 } else root.render(<Preview />);
 if (import.meta.hot) import.meta.hot.dispose(() => root.unmount());

@@ -43,6 +43,7 @@ export function selectBriefingPost(posts: PublicPost[], notice: UpcomingResetNot
 export function resetRelated(post: PublicPost) {
   return ["grant", "reset_report", "notice", "limits"].includes(post.kind)
     || /\b(?:reset|banked|quota|usage limits?)\b/iu.test(post.text)
+    || (/\bPro\s*500\b/iu.test(post.text) && /\b(?:fixed|reports?|investigat\w*|compensat\w*)\b/iu.test(post.text))
     // Parent context alone does not make a casual reply a useful reset update.
     // Keep contextual timing/commitment replies; all other posts remain in All.
     || (/\b(?:reset|banked|quota)\b/iu.test(post.parent?.text ?? "")
@@ -56,6 +57,10 @@ export function postReading(post: PublicPost, language: Language, timeline?: Pub
   const corrected = publicPostWithdrawn(timeline?.entries, post.url);
   if (corrected) return { tone: "notice", title: zh ? "相关追踪记录已更正" : "Related tracker record corrected",
     meaning: zh ? "此条预告已失效，可在情报变化中查看更正内容。" : "This notice is no longer active. See source updates for the correction." };
+  if (/\bPro\s*500\b/iu.test(post.text) && /\ball fixed\b/iu.test(post.text)) return {
+    tone: "reset", title: zh ? "Pro 500 问题已报告修复" : "Pro 500 issue reported fixed",
+    meaning: zh ? "Tibo 的修复进展，完整表述如下。" : "Tibo’s repair update, in full below.",
+  };
   if (post.isReply && post.parent?.text && /\bbanked reset|reset (?:card|credit)\b/iu.test(post.parent.text)) return {
     tone: "grant", title: zh ? "重置卡相关回复" : "Reset-card reply",
     meaning: zh ? "回复上文讨论的重置卡，完整对话见下方。" : "A reply about reset cards. The full conversation is below.",

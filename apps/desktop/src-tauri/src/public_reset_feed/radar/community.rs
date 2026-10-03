@@ -31,8 +31,8 @@ fn plain(text: &str) -> String {
     out
 }
 
-// v1 labels explicit language only. Desire, completed delivery, personal timers
-// and quoted announcements have separate labels and never create bullish votes.
+// Classify the author's own judgment separately from a quoted announcement.
+// Wishes, delivery reports and individual timers remain separate observations.
 pub(super) fn classify(text: &str) -> Option<(&'static str, &'static str, Option<u32>)> {
     let t = text.to_lowercase();
     if !contains_any(&t, &["reset", "重置"])
@@ -72,42 +72,72 @@ pub(super) fn classify(text: &str) -> Option<(&'static str, &'static str, Option
             "reset credit",
             "banked reset",
             "reset card",
+            "reset-credit",
+            "redemption entries",
+            "reset history",
+            "use usage resets",
+            "reset countdown",
+            "resets in ",
             "重置卡",
         ],
     ) {
         return Some(("observation", "account_or_card", None));
     }
-    if contains_any(
+    let personal_inference = contains_any(
         &t,
         &[
-            "hope",
-            "wish",
-            "please reset",
-            "pls reset",
-            "want a reset",
-            "need a reset",
-            "begging",
-            "希望",
-            "求重置",
-            "盼",
-            "想要重置",
+            "i think",
+            "i believe",
+            "i expect",
+            "i predict",
+            "i reckon",
+            "i bet",
+            "my guess",
+            "我认为",
+            "我觉得",
+            "我预计",
+            "我估计",
+            "我猜",
+            "大概率",
+            "should reset",
+            "likely to reset",
         ],
-    ) {
+    );
+    if !personal_inference
+        && contains_any(
+            &t,
+            &[
+                "hope",
+                "wish",
+                "please reset",
+                "pls reset",
+                "want a reset",
+                "need a reset",
+                "begging",
+                "希望",
+                "求重置",
+                "盼",
+                "想要重置",
+            ],
+        )
+    {
         return Some(("wish", "wish", None));
     }
-    if contains_any(
-        &t,
-        &[
-            "tibo said",
-            "tibo says",
-            "tibo announced",
-            "thsottiaux/status/",
-            "according to",
-            "官宣",
-            "tibo说",
-            "tibo 说",
-        ],
-    ) {
+    if !personal_inference
+        && contains_any(
+            &t,
+            &[
+                "tibo said",
+                "tibo says",
+                "tibo announced",
+                "thsottiaux/status/",
+                "according to",
+                "官宣",
+                "tibo说",
+                "tibo 说",
+            ],
+        )
+    {
         return Some(("observation", "quoted_evidence", None));
     }
     let horizon = if contains_any(
@@ -165,13 +195,28 @@ pub(super) fn classify(text: &str) -> Option<(&'static str, &'static str, Option
             "reset is coming",
             "probably reset",
             "probably get a reset",
+            "should reset",
+            "expect codex",
+            "expect tibo",
+            "expect a codex",
+            "think codex will",
+            "think tibo will",
+            "bet on a reset",
             "会重置",
             "大概率重置",
             "预计重置",
             "看好重置",
         ],
     ) {
-        return Some(("optimistic", "explicit_prediction", horizon));
+        return Some((
+            "optimistic",
+            if personal_inference {
+                "personal_inference"
+            } else {
+                "explicit_prediction"
+            },
+            horizon,
+        ));
     }
     if contains_any(
         &t,
@@ -203,7 +248,7 @@ fn opinion(
     at: &UtcTimestamp,
 ) -> Option<Opinion> {
     let age = seconds(at.as_str())? - seconds(published)?;
-    if !(0..12 * 3600).contains(&age)
+    if !(0..48 * 3600).contains(&age)
         || !public_url(url)
         || author.is_empty()
         || author.len() > 100
@@ -270,9 +315,9 @@ fn collect_channel(id: &str, at: &UtcTimestamp) -> (Channel, Vec<Opinion>) {
         }
         .into(),
         query: if hn {
-            "codex reset · comments · exact words · newest 100 · 12h"
+            "codex reset · comments · exact words · newest 100 · 48h"
         } else {
-            "openai/codex · quota reset issues + recent comments · newest 100 each · 12h"
+            "openai/codex · latest 100 comments + reset issues updated within 48h + last 100 comments from 3 active threads"
         }
         .into(),
         attempted_at: at.as_str().into(),
@@ -284,7 +329,7 @@ fn collect_channel(id: &str, at: &UtcTimestamp) -> (Channel, Vec<Opinion>) {
     let mut opinions = vec![];
     let result = (|| -> Result<(), SourceIssue> {
         let client = public_client()?;
-        let cutoff = seconds(at.as_str()).unwrap() - 12 * 3600;
+        let cutoff = seconds(at.as_str()).unwrap() - 48 * 3600;
         if hn {
             let url = format!("https://hn.algolia.com/api/v1/search_by_date?query=codex%20reset&tags=comment&hitsPerPage=100&typoTolerance=false&removeWordsIfNoResults=none&queryType=prefixNone&restrictSearchableAttributes=comment_text&numericFilters=created_at_i%3E{cutoff}");
             let v = json(&client, &url)?;
@@ -338,9 +383,9 @@ fn collect_channel(id: &str, at: &UtcTimestamp) -> (Channel, Vec<Opinion>) {
                 .query_pairs_mut()
                 .append_pair(
                     "q",
-                    &format!("repo:openai/codex is:issue quota reset created:>{since}"),
+                    &format!("repo:openai/codex is:issue reset in:title,body updated:>{since}"),
                 )
-                .append_pair("sort", "created")
+                .append_pair("sort", "updated")
                 .append_pair("order", "desc")
                 .append_pair("per_page", "100");
             let issues = json(&client, issues_url.as_str())?;
@@ -350,7 +395,27 @@ fn collect_channel(id: &str, at: &UtcTimestamp) -> (Channel, Vec<Opinion>) {
             channel.scanned += rows.len();
             channel.truncated |= issues["total_count"].as_u64().unwrap_or(0) > rows.len() as u64;
             all.extend(rows.clone());
-            for row in all.iter().take(200) {
+            // An old reset discussion can have fresh predictions. Fetch its
+            // latest page rather than limiting discovery to newly created issues.
+            for thread in rows
+                .iter()
+                .filter(|r| r["comments"].as_u64().unwrap_or(0) > 0)
+                .take(3)
+            {
+                let Some(number) = thread["number"].as_u64() else {
+                    continue;
+                };
+                let count = thread["comments"].as_u64().unwrap_or(0);
+                let page = count.div_ceil(100).max(1);
+                let url = format!("https://api.github.com/repos/openai/codex/issues/{number}/comments?per_page=100&page={page}");
+                let comments = json(&client, &url)?;
+                let rows = comments.as_array().ok_or(SourceIssue::SchemaChanged)?;
+                channel.scanned += rows.len();
+                channel.truncated |= page > 1;
+                all.extend(rows.clone());
+            }
+            let mut seen = HashSet::new();
+            for row in &all {
                 let (Some(key), Some(author), Some(text), Some(time), Some(link)) = (
                     row["id"].as_u64(),
                     short(&row["user"]["login"], 100),
@@ -360,6 +425,9 @@ fn collect_channel(id: &str, at: &UtcTimestamp) -> (Channel, Vec<Opinion>) {
                 ) else {
                     continue;
                 };
+                if !seen.insert(key) {
+                    continue;
+                }
                 if !link.starts_with("https://github.com/openai/codex/") {
                     continue;
                 }

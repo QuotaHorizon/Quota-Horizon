@@ -170,9 +170,15 @@ pub(crate) fn parse_forecast(
                 .is_some_and(|state| matches!(state, "corrected" | "retracted" | "withdrawn")),
         model_probability_24h: percent(&v["probabilities"]["model_24h"]),
         model_probability_48h: percent(&v["probabilities"]["model_48h"]),
-        evidence_urls: v["context"]["evidence_ids"].as_array().into_iter().flatten()
-            .filter_map(Value::as_str).filter(|id| post_id(id)).take(32)
-            .map(|id| format!("https://x.com/thsottiaux/status/{id}")).collect(),
+        evidence_urls: v["context"]["evidence_ids"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|id| post_id(id))
+            .take(32)
+            .map(|id| format!("https://x.com/thsottiaux/status/{id}"))
+            .collect(),
     })
 }
 

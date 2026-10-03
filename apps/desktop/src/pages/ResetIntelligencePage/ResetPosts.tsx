@@ -27,10 +27,10 @@ export function PostConversation({ post, timeline, language, onOpenSource, onRea
       <p>{post.parent?.text ?? (zh ? "父帖暂未取得，可打开原帖查看上文。" : "The parent is unavailable. Open the original post for context.")}</p>
     </div>}
     <div className={styles.reply}>
-      <div className={styles.byline}><strong>{post.isReply ? (zh ? "Tibo 回复" : "Tibo’s reply") : (zh ? "Tibo 原帖" : "Tibo’s post")}</strong>
+      <div className={styles.byline}><strong>{post.isReply ? (zh ? "Tibo 回复" : "Tibo’s reply") : (zh ? "Tibo 发言" : "Tibo’s post")}</strong>
         <EvidenceLink url={post.url} label={zh ? "原帖来源" : "Original post"} onOpen={onOpenSource} /></div>
-      <p>{translated ? post.translatedText : post.text}</p>
-      {translated && <details><summary>查看原文 · 译文来自 Codex Reset</summary><p>{post.text}</p></details>}
+      {translated && <div className={styles.translation}><span>中文 · Codex Reset 译文</span><p lang="zh">{post.translatedText}</p></div>}
+      <div className={styles.original}>{translated && <span>English · 原文</span>}<p lang="en">{post.text}</p></div>
     </div>
   </article>;
 }

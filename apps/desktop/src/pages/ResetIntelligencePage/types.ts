@@ -110,14 +110,14 @@ export interface PublicInsights {
   posts: { fetchedAt: string; checkedAt: string; posts: PublicPost[] } | null;
 }
 
-export interface RadarPoint { at: string; probability24h: number; probability48h: number }
+export interface RadarPoint { at: string; probability24h: number; probability48h: number; modelVersion?: string | null }
 export interface RadarForecast {
   id: string; name: string; url: string; method: "cadence" | "statements" | "mixed";
   probability24h: number | null; probability48h: number | null;
   baseline24h: number | null; baseline48h: number | null;
   updatedAt: string | null; collectedAt: string; lastResetAt: string | null;
   evidenceUrls: string[]; usesCommunity: boolean; issue: PublicSourceIssue | null;
-  exclusion: "unavailable" | "fetch_failed" | "reset_mismatch" | "stale" | "community_overlap" | null;
+  exclusion: "unavailable" | "fetch_failed" | "reset_mismatch" | "stale" | "community_overlap" | "source_retired" | "method_unverified" | "missing_timestamp" | null;
   weight: number; history: RadarPoint[];
 }
 export interface RadarOpinion {
@@ -137,6 +137,8 @@ export interface RadarView {
     optimistic: number; uncertain: number; pessimistic: number; wishes: number; observations: number;
     authors: number; communities: number; independentAuthors: number; duplicates: number;
     optimisticShare: number | null; previousShare: number | null;
+    windowHours?: number;
+    effects?: { hours: number; eligibleAuthors: number; effectiveAuthors: number; sharedEvidenceAuthors: number; logOddsAdjustment: number }[];
   };
   estimate: {
     probability24h: number; probability48h: number; pooled24h: number; pooled48h: number;

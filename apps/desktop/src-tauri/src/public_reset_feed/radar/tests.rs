@@ -42,7 +42,7 @@ fn pooling_is_monotone_and_duplicate_methods_do_not_multiply_evidence() {
 }
 #[test]
 fn failures_and_missed_resets_never_become_zero_votes() {
-    let mut stale = forecast("reset_app", "mixed", 99.0);
+    let mut stale = forecast("old_history", "cadence", 99.0);
     stale.last_reset_at = Some("2026-07-25T03:37:00Z".into());
     let mut v = RadarView {
         forecasts: vec![forecast("codex_reset", "cadence", 20.0), stale],
@@ -58,6 +58,12 @@ fn failures_and_missed_resets_never_become_zero_votes() {
 }
 #[test]
 fn community_distinguishes_wishes_quotes_scope_and_prediction() {
+    for report in [
+        "Codex reset history shows two redemption entries; please verify whether this is correct.",
+        "Codex usage displays 93% remaining and resets in 19h. Explain whether the countdown is correct.",
+    ] {
+        assert_eq!(community::classify(report).unwrap().0, "observation");
+    }
     for t in [
         "I hope Codex will reset today",
         "Please reset Codex quota tonight",
@@ -88,7 +94,7 @@ fn community_distinguishes_wishes_quotes_scope_and_prediction() {
     );
     assert_eq!(
         community::classify("Codex 今天大概率重置额度").unwrap(),
-        ("optimistic", "explicit_prediction", Some(24))
+        ("optimistic", "personal_inference", Some(24))
     );
     assert!(community::classify("git reset fixed the Codex limit bug").is_none());
 }
@@ -152,13 +158,20 @@ fn fresh_independent_community_moves_the_estimate_without_recounting_mixed_forec
     assert!(e.probability_24h > 30.0 && e.probability_24h < 35.0);
     assert_eq!(
         v.forecasts[1].exclusion.as_deref(),
-        Some("community_overlap")
+        Some("method_unverified")
     );
     for p in &mut v.community.opinions {
         p.text.push_str(" Tibo says");
     }
     model::evaluate(&mut v, &at());
     assert_eq!(v.community.independent_authors, 0);
+    assert_eq!(v.community.effects[0].eligible_authors, 3);
+    assert!(v.community.effects[0].effective_authors <= 1.0);
+    for p in &mut v.community.opinions {
+        p.reason = "quoted_evidence".into();
+    }
+    model::evaluate(&mut v, &at());
+    assert_eq!(v.estimate.as_ref().unwrap().community_adjustment_24h, 0.0);
 }
 #[test]
 fn parser_rejects_impossible_windows_and_keeps_unknown_generation_time() {
@@ -193,6 +206,15 @@ fn snapshots_replay_inputs_and_failures_without_rewriting_history() {
     .unwrap();
     let first = load(&conn, &at()).unwrap();
     assert_eq!(first.history.len(), 1);
+    assert!(uses_current_model(&first));
+    assert_eq!(
+        first.history[0].model_version.as_deref(),
+        Some(MODEL_VERSION)
+    );
+    assert_eq!(first.forecasts[0].history.len(), 1);
+    assert!(load_snapshot(&conn, &at()).unwrap().forecasts[0]
+        .history
+        .is_empty());
     let later = UtcTimestamp::parse("2026-10-03T08:15:00.000Z").unwrap();
     save(
         &conn,
@@ -206,8 +228,10 @@ fn snapshots_replay_inputs_and_failures_without_rewriting_history() {
     .unwrap();
     let latest = load(&conn, &later).unwrap();
     assert!(latest.estimate.is_none());
+    assert!(uses_current_model(&latest));
     assert_eq!(latest.forecasts[0].probability_24h, Some(40.0));
     assert_eq!(latest.history.len(), 1);
+    assert_eq!(latest.forecasts[0].history.len(), 1);
     assert_eq!(
         load(&conn, &at())
             .unwrap()
@@ -261,14 +285,11 @@ fn live_radar_collectors_and_snapshot() {
             if result.is_ok() { "ok" } else { "unavailable" }
         );
     }
-    assert!(
-        collected
-            .forecasts
-            .iter()
-            .filter(|(_, r)| r.is_ok())
-            .count()
-            >= 2
-    );
+    assert!(collected
+        .forecasts
+        .iter()
+        .any(|(id, r)| *id == "reset_monitor" && r.is_ok()));
+    assert!(!collected.forecasts.iter().any(|(id, _)| *id == "reset_app"));
     for (c, _) in &collected.community {
         eprintln!("{}: scanned={} issue={:?}", c.id, c.scanned, c.issue);
     }
@@ -290,4 +311,115 @@ fn live_radar_collectors_and_snapshot() {
         view.community.authors,
         view.community.independent_authors
     );
+}
+
+#[test]
+fn admission_rejects_retired_opaque_and_undated_inputs_even_when_prices_look_plausible() {
+    let mut undated = forecast("undated", "cadence", 60.0);
+    undated.updated_at = None;
+    let mut v = RadarView {
+        forecasts: vec![
+            forecast("codex_reset", "cadence", 20.0),
+            forecast("reset_app", "mixed", 50.0),
+            forecast("quota_cue", "mixed", 21.0),
+            undated,
+        ],
+        ..Default::default()
+    };
+    model::evaluate(&mut v, &at());
+    assert_eq!(v.estimate.unwrap().source_count, 1);
+    assert_eq!(v.forecasts[1].exclusion.as_deref(), Some("source_retired"));
+    assert_eq!(
+        v.forecasts[2].exclusion.as_deref(),
+        Some("method_unverified")
+    );
+    assert_eq!(
+        v.forecasts[3].exclusion.as_deref(),
+        Some("missing_timestamp")
+    );
+}
+
+fn sampled_view(opinions: Vec<Opinion>) -> RadarView {
+    let mut v = RadarView {
+        forecasts: vec![forecast("codex_reset", "cadence", 30.0)],
+        ..Default::default()
+    };
+    for id in ["github", "hacker_news"] {
+        v.community.channels.push(Channel {
+            id: id.into(),
+            name: id.into(),
+            url: "https://github.com".into(),
+            query: "test".into(),
+            attempted_at: at().as_str().into(),
+            success_at: Some(at().as_str().into()),
+            issue: None,
+            scanned: opinions.len(),
+            truncated: false,
+        });
+    }
+    v.community.opinions = opinions;
+    v
+}
+
+#[test]
+fn community_has_continuous_strength_and_respects_negative_horizons() {
+    let mut v = sampled_view(vec![opinion("a", "first independent view")]);
+    model::evaluate(&mut v, &at());
+    let single = v.estimate.as_ref().unwrap().community_adjustment_24h;
+    assert!(single > 0.0);
+    v.community.opinions.extend((0..40).map(|i| {
+        let mut p = opinion(&format!("person{i}"), &format!("different view {i}"));
+        p.channel = if i % 2 == 0 { "github" } else { "hacker_news" }.into();
+        p
+    }));
+    model::evaluate(&mut v, &at());
+    let strong = v.estimate.as_ref().unwrap().community_adjustment_24h;
+    assert!(strong > 15.0 && strong < 35.0);
+    for p in &mut v.community.opinions {
+        p.stance = "pessimistic".into();
+    }
+    model::evaluate(&mut v, &at());
+    assert!(v.estimate.as_ref().unwrap().community_adjustment_24h < 0.0);
+    assert_eq!(v.estimate.as_ref().unwrap().community_adjustment_48h, 0.0);
+}
+
+#[test]
+fn shared_reference_sets_merge_transitively_and_quotes_are_not_new_forecasts() {
+    let mut a = opinion("a", "My first personal inference from the announcement");
+    let mut b = opinion("b", "My second inference after reviewing two announcements");
+    let mut c = opinion("c", "My third inference after the second announcement");
+    a.evidence_urls = vec!["https://x.com/thsottiaux/status/111".into()];
+    b.evidence_urls = vec![
+        "https://x.com/thsottiaux/status/111?ref=copy".into(),
+        "https://x.com/thsottiaux/status/222".into(),
+    ];
+    c.evidence_urls = vec!["https://x.com/thsottiaux/status/222".into()];
+    let mut v = sampled_view(vec![a, b, c]);
+    model::evaluate(&mut v, &at());
+    assert_eq!(v.community.effects[0].eligible_authors, 3);
+    assert_eq!(v.community.effects[0].effective_authors, 1.0);
+    assert_eq!(
+        community::classify("Tibo says Codex will reset today")
+            .unwrap()
+            .0,
+        "observation"
+    );
+    assert_eq!(
+        community::classify("After Tibo's post, I think Codex will reset today")
+            .unwrap()
+            .0,
+        "optimistic"
+    );
+}
+
+#[test]
+fn expired_and_pre_reset_predictions_do_not_drive_the_next_event() {
+    let mut past = opinion("past", "old event prediction");
+    past.published_at = "2026-10-02T20:00:00Z".into();
+    let mut expired = opinion("expired", "expired window prediction");
+    expired.published_at = "2026-10-02T07:00:00Z".into();
+    let mut v = sampled_view(vec![past, expired]);
+    model::evaluate(&mut v, &at());
+    assert_eq!(v.community.effects[0].eligible_authors, 0);
+    assert_eq!(v.estimate.unwrap().community_adjustment_24h, 0.0);
 }

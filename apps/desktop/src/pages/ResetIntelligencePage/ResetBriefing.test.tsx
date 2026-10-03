@@ -160,7 +160,7 @@ describe("attributed reset briefing", () => {
     expect(html).toContain("You owe us a banked reset. Please.");
     expect(html).toContain("好吧。但它周二也会到。");
     expect(html).toContain("OK fine. But it’s also still coming in Tuesday.");
-    expect(html).toContain("父帖来源"); expect(html).toContain("译文来自 Codex Reset");
+    expect(html).toContain("父帖来源"); expect(html).toContain("Codex Reset 译文");
     expect(resetRelated(post)).toBe(true);
     expect(postReading(post, "zh")).toMatchObject({tone: "grant"});
     expect(html).toContain("回复上文讨论的重置卡");

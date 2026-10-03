@@ -302,6 +302,7 @@ fn refresh_at_path(path: &Path, force: bool) -> Result<(PublicResetTimeline, boo
         || (!force
             && sources_recent(&cached, &at)
             && cached.radar.updated_at.is_some()
+            && radar::uses_current_model(&cached.radar)
             && cached.insights.forecast.attempted_at.is_some())
     {
         return Ok((cached, false));

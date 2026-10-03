@@ -1,5 +1,5 @@
-.briefing { --radar-accent: var(--green-dark); display: grid; gap: 12px; min-width: 0; }
-:global(:root[data-theme="dark"]) .briefing { --radar-accent: var(--green); }
+.briefing { --radar-accent: var(--green-dark); --radar-blue: #4c69c6; --radar-amber: #aa741e; display: grid; gap: 12px; min-width: 0; }
+:global(:root[data-theme="dark"]) .briefing { --radar-accent: var(--green); --radar-blue: #95acff; --radar-amber: #dfb169; }
 .briefing h2, .briefing h3 { margin: 0; font-weight: 650; line-height: 1.5; }
 .briefing h2 { font-size: 14px; }
 .briefing h3 { font-size: 13px; }
@@ -196,3 +196,62 @@
 @media (min-width: 1041px) { .briefing > .detailGrid { align-items: stretch; } .heroGrid { min-height: 215px; } }
 @media (max-width: 1040px) { .heroGrid { gap: 20px; } .heroProbability { gap: 12px; } .heroReason { font-size: 13px; } .heroMeta { gap: 5px 10px; } }
 @media (max-width: 860px) { .heroGrid { grid-template-columns: 1fr; gap: 22px; } .trend { padding-top: 16px; border-top: 1px solid var(--line); } .heroProbability > strong { font-size: 64px; } .leadUpdate .updateButton { grid-template-columns: 20px minmax(0, 1fr) 14px; } .changeRow { grid-template-columns: 20px minmax(0, 1fr); } .changeRow > time, .changeRow > a { grid-column: 2; } }
+
+.horizonPair { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0 16px; }
+.horizonValue { display: grid; gap: 5px; min-width: 0; }
+.horizonValue + .horizonValue { border-left: 1px solid var(--line); padding-left: 20px; }
+.horizonValue > span, .horizonValue > small { font-size: 10px; line-height: 1.65; color: var(--muted); }
+.horizonValue > span:first-child { color: var(--ink); font-size: 12px; }
+.horizonValue > strong { color: var(--ink); font-size: clamp(38px, 4.8vw, 60px); font-weight: 600; line-height: 1.12; letter-spacing: -2px; font-variant-numeric: tabular-nums; }
+.horizonValue > strong small { font-size: .42em; letter-spacing: 0; margin-left: 2px; }
+.horizonValue > b { font-size: 12px; font-weight: 600; }
+.horizonValue > small { color: var(--radar-accent); }
+.lineKey { display: flex; gap: 15px; justify-content: flex-end; font-size: 10px; color: var(--muted); }
+.lineKey > span { display: flex; align-items: center; gap: 5px; }
+.lineKey i { width: 20px; border-top: 2px solid var(--muted); }
+.lineKey i[data-dashed] { border-top-style: dashed; }
+.overlayLine { fill: none; stroke: var(--series-color); stroke-linecap: round; stroke-linejoin: round; }
+.overlayDot { fill: var(--series-color); }
+.seriesLegend { display: flex; flex-wrap: wrap; gap: 5px 15px; padding-left: 8.5%; font-size: 10px; color: var(--ink); }
+.seriesLegend > span { display: inline-flex; align-items: center; gap: 5px; }
+.seriesLegend i { width: 7px; height: 7px; border-radius: 50%; }
+.seriesLegend small { color: var(--muted); font-size: 9px; }
+.sourceMatrix { margin: 18px 0; }
+.sourceMatrixHeading, .sourceMatrixRow { display: grid; grid-template-columns: minmax(130px, 1.5fr) minmax(55px, 1fr) minmax(55px, 1fr); gap: 14px; align-items: center; }
+.sourceMatrixHeading { color: var(--muted); font-size: 10px; margin-bottom: 6px; }
+.sourceMatrixHeading > span:not(:first-child) { text-align: right; }
+.sourceMatrixRow { padding: 13px 0; border-bottom: 1px solid var(--line); }
+.sourceMatrixRow:last-child { border: 0; }
+.sourceMatrixRow a { font-size: 12px; color: var(--series-color); }
+.sourceMatrixRow p { font-size: 10px; color: var(--muted); line-height: 1.65; margin: 5px 0 0; }
+.sourceCell { display: grid; gap: 7px; text-align: right; }
+.sourceCell strong { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sourceCell .track { width: 100%; height: 5px; }
+.sourceCell .track i { background: var(--series-color); }
+.sourceMatrixRow[data-muted] .track i { background: var(--muted); }
+.tiboCard { border-top: 2px solid rgba(var(--green-rgb), .55); }
+.tiboCard > .cardHeading h2 { display: flex; align-items: center; gap: 6px; }
+.tiboCard > .cardHeading h2 svg { color: var(--radar-accent); }
+.tiboLinks { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 11px; }
+.tiboGrid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 25px; }
+.tiboLead { min-width: 0; }
+.sectionLabel { color: var(--radar-accent); font-size: 11px; margin-bottom: 10px; }
+.tiboActivity { min-width: 0; padding-left: 22px; border-left: 1px solid var(--line); }
+.activityHeading { display: flex; justify-content: space-between; gap: 8px; margin: 0 0 10px; font-size: 12px; }
+.activityHeading span { color: var(--muted); font-size: 10px; }
+.activityList { display: grid; margin-top: 6px; }
+.activityItem { display: grid; gap: 8px; width: 100%; text-align: left; padding: 12px 0; color: var(--ink); background: none; border: 0; border-bottom: 1px solid var(--line); font: inherit; font-size: 12px; line-height: 1.6; }
+.activityItem > span:first-child { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.activityItem[aria-pressed="true"] { color: var(--radar-accent); }
+.activityMeta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; font-size: 9px; color: var(--muted); }
+.original > span, .translation > span { display: block; font-size: 9px; letter-spacing: .02em; color: var(--muted); }
+.original, .translation { margin-top: 10px; }
+.translation + .original { border-top: 1px solid var(--line); padding-top: 10px; }
+.selectedConversation { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.tiboFootnote { color: var(--muted); margin: 14px 0 0; font-size: 10px; line-height: 1.65; }
+.communityContribution { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 15px 0 8px; padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.communityContribution > div { display: grid; gap: 5px; }
+.communityContribution strong { font-size: 17px; font-weight: 600; color: var(--radar-accent); }
+.communityContribution span { color: var(--muted); font-size: 10px; line-height: 1.5; }
+@media (max-width: 1000px) { .tiboGrid { grid-template-columns: 1fr; gap: 18px; } .tiboActivity { border: 0; border-top: 1px solid var(--line); padding: 16px 0 0; } .activityList { grid-template-columns: 1fr 1fr; gap: 0 18px; } }
+@media (max-width: 600px) { .activityList { grid-template-columns: 1fr; } .sourceMatrixHeading, .sourceMatrixRow { grid-template-columns: minmax(105px, 1.4fr) minmax(45px, 1fr) minmax(45px, 1fr); gap: 9px; } .horizonValue + .horizonValue { padding-left: 14px; } }

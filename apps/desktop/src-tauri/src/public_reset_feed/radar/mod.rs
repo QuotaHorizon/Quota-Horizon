@@ -10,7 +10,7 @@ mod sources;
 #[cfg(test)]
 mod tests;
 
-const MODEL_VERSION: &str = "horizon-pool-v1";
+const MODEL_VERSION: &str = "horizon-pool-v2";
 const MAX_STATE: usize = 256 * 1024;
 const MAX_HISTORY_BYTES: i64 = 24 * 1024 * 1024;
 
@@ -41,6 +41,8 @@ pub(super) struct Point {
     at: String,
     probability_24h: f64,
     probability_48h: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model_version: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,6 +87,19 @@ pub(super) struct Community {
     independent_authors: usize,
     optimistic_share: Option<f64>,
     previous_share: Option<f64>,
+    #[serde(default)]
+    window_hours: u32,
+    #[serde(default)]
+    effects: Vec<CommunityEffect>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CommunityEffect {
+    hours: u32,
+    eligible_authors: usize,
+    effective_authors: f64,
+    shared_evidence_authors: usize,
+    log_odds_adjustment: f64,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,11 +120,17 @@ pub(super) struct Estimate {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RadarView {
     pub updated_at: Option<String>,
+    #[serde(default)]
+    model_version: String,
     forecasts: Vec<Forecast>,
     community: Community,
     estimate: Option<Estimate>,
     #[serde(default)]
     history: Vec<Point>,
+}
+
+pub(super) fn uses_current_model(view: &RadarView) -> bool {
+    view.model_version == MODEL_VERSION
 }
 
 pub(super) struct Collected {
@@ -202,7 +223,7 @@ fn table_exists(conn: &Connection) -> Result<bool, String> {
     .map_err(db_error)
 }
 
-pub(super) fn load(conn: &Connection, at: &UtcTimestamp) -> Result<RadarView, String> {
+fn load_snapshot(conn: &Connection, at: &UtcTimestamp) -> Result<RadarView, String> {
     if !table_exists(conn)? {
         return Ok(RadarView::default());
     }
@@ -217,9 +238,16 @@ pub(super) fn load(conn: &Connection, at: &UtcTimestamp) -> Result<RadarView, St
     if json.len() > MAX_STATE {
         return Err(db_error("radar cache limit"));
     }
-    let mut view: RadarView = serde_json::from_str(&json).map_err(db_error)?;
+    serde_json::from_str(&json).map_err(db_error)
+}
+
+pub(super) fn load(conn: &Connection, at: &UtcTimestamp) -> Result<RadarView, String> {
+    let mut view = load_snapshot(conn, at)?;
+    if view.updated_at.is_none() {
+        return Ok(view);
+    }
     let start = DateTime::parse_from_rfc3339(at.as_str()).unwrap() - chrono::Duration::hours(24);
-    let mut stmt = conn.prepare("SELECT at, json_extract(payload, '$.estimate.probability24h'), json_extract(payload, '$.estimate.probability48h') FROM radar_snapshots WHERE at >= ?1 AND at <= ?2 AND json_extract(payload, '$.estimate') IS NOT NULL ORDER BY at").map_err(db_error)?;
+    let mut stmt = conn.prepare("SELECT at, json_extract(payload, '$.estimate.probability24h'), json_extract(payload, '$.estimate.probability48h'), json_extract(payload, '$.estimate.modelVersion') FROM radar_snapshots WHERE at >= ?1 AND at <= ?2 AND json_extract(payload, '$.estimate') IS NOT NULL ORDER BY at").map_err(db_error)?;
     let rows = stmt
         .query_map(
             params![
@@ -231,11 +259,48 @@ pub(super) fn load(conn: &Connection, at: &UtcTimestamp) -> Result<RadarView, St
                     at: r.get(0)?,
                     probability_24h: r.get(1)?,
                     probability_48h: r.get(2)?,
+                    model_version: r.get(3)?,
                 })
             },
         )
         .map_err(db_error)?;
     view.history = rows.collect::<Result<Vec<_>, _>>().map_err(db_error)?;
+    // Observed source values extend their own series, never Horizon's history.
+    // Preserve a provider's native history when both have the same timestamp.
+    let mut stmt = conn.prepare("SELECT s.at, f.value FROM radar_snapshots s, json_each(s.payload, '$.forecasts') f WHERE s.at >= ?1 AND s.at <= ?2 ORDER BY s.at").map_err(db_error)?;
+    let observed = stmt
+        .query_map(
+            params![
+                start.to_rfc3339_opts(SecondsFormat::Millis, true),
+                at.as_str()
+            ],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .map_err(db_error)?;
+    for row in observed {
+        let (time, payload) = row.map_err(db_error)?;
+        let old: Forecast = serde_json::from_str(&payload).map_err(db_error)?;
+        if old.issue.is_some() || old.exclusion.is_some() {
+            continue;
+        }
+        if let (Some(p24), Some(p48), Some(f)) = (
+            old.probability_24h,
+            old.probability_48h,
+            view.forecasts.iter_mut().find(|f| f.id == old.id),
+        ) {
+            if !f.history.iter().any(|p| p.at == time) {
+                f.history.push(Point {
+                    at: time,
+                    probability_24h: p24,
+                    probability_48h: p48,
+                    model_version: None,
+                });
+            }
+        }
+    }
+    for f in &mut view.forecasts {
+        f.history.sort_by_key(|p| seconds(&p.at));
+    }
     Ok(view)
 }
 
@@ -245,9 +310,13 @@ pub(super) fn save(
     insights: &insights::PublicInsights,
     at: &UtcTimestamp,
 ) -> Result<(), String> {
-    let mut view = load(conn, at)?;
+    let mut view = load_snapshot(conn, at)?;
     view.history.clear();
+    // Historic snapshots retain retired inputs for replay; new collections do not.
+    view.forecasts
+        .retain(|f| !matches!(f.id.as_str(), "reset_app" | "quota_cue"));
     view.updated_at = Some(at.as_str().into());
+    view.model_version = MODEL_VERSION.into();
     for (id, outcome) in collected.forecasts {
         match outcome {
             Ok(f) => {
