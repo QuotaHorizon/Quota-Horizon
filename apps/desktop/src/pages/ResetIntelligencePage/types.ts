@@ -110,12 +110,13 @@ export interface PublicInsights {
   posts: { fetchedAt: string; checkedAt: string; posts: PublicPost[] } | null;
 }
 
-export interface RadarPoint { at: string; probability24h: number; probability48h: number; modelVersion?: string | null }
+export interface RadarPoint { at: string; probability24h: number; probability48h: number; modelVersion?: string | null; observedAt?: string | null }
 export interface RadarForecast {
   id: string; name: string; url: string; method: "cadence" | "statements" | "mixed";
   probability24h: number | null; probability48h: number | null;
   baseline24h: number | null; baseline48h: number | null;
   updatedAt: string | null; collectedAt: string; lastResetAt: string | null;
+  expiresAt?: string | null;
   evidenceUrls: string[]; usesCommunity: boolean; issue: PublicSourceIssue | null;
   exclusion: "unavailable" | "fetch_failed" | "reset_mismatch" | "stale" | "community_overlap" | "source_retired" | "method_unverified" | "missing_timestamp" | null;
   weight: number; history: RadarPoint[];
@@ -128,6 +129,21 @@ export interface RadarOpinion {
 export interface RadarChannel {
   id: string; name: string; url: string; query: string; attemptedAt: string; successAt: string | null;
   issue: PublicSourceIssue | null; scanned: number; truncated: boolean;
+  partial?: boolean;
+}
+export interface RadarPollRound {
+  kind: "probability" | "timing"; id: string; startsAt: string; endsAt: string; samples: number;
+  meanProbability: number | null; distribution: { probability: number | null; count: number; deadlineAt: string | null }[];
+  accepting: boolean; coverageGap: boolean; outcome: number | null;
+}
+export interface RadarPoll {
+  sourceId: string; name: string; url: string; updatedAt: string | null; collectedAt: string; issue: PublicSourceIssue | null;
+  round: RadarPollRound; recent: RadarPollRound[];
+  history: { at: string; roundId: string; meanProbability: number | null; samples: number }[];
+}
+export interface RadarCommunityPoint {
+  at: string; optimisticShare: number | null; directionalAuthors: number;
+  adjustment24h: number | null; adjustment48h: number | null; modelVersion: string;
 }
 export interface RadarView {
   updatedAt: string | null;
@@ -138,7 +154,9 @@ export interface RadarView {
     authors: number; communities: number; independentAuthors: number; duplicates: number;
     optimisticShare: number | null; previousShare: number | null;
     windowHours?: number;
-    effects?: { hours: number; eligibleAuthors: number; effectiveAuthors: number; sharedEvidenceAuthors: number; logOddsAdjustment: number }[];
+    effects?: { hours: number; eligibleAuthors: number; effectiveAuthors: number; sharedEvidenceAuthors: number; logOddsAdjustment: number; pollSamples?: number; pollEffective?: number }[];
+    polls?: RadarPoll[];
+    history?: RadarCommunityPoint[];
   };
   estimate: {
     probability24h: number; probability48h: number; pooled24h: number; pooled48h: number;

@@ -3,10 +3,11 @@ import { describe, expect, it } from "vitest";
 import { RadarOverview } from "./RadarOverview";
 import { TiboBriefing } from "./TiboBriefing";
 import { ForecastTrend } from "./ForecastTrend";
-import { historyDelta, evidenceGroups, currentOpinions } from "./radarOverviewModel";
+import { CommunityForecasts, timingVoteNodes } from "./CommunityForecasts";
+import { historyDelta, evidenceGroups, currentOpinions, forecastSeries, acceptedForecasts } from "./radarOverviewModel";
 import { forecastPresentation } from "./resetBriefingModel";
 import { ResetNoticeChip } from "../../components/CapacityPopover/ResetNoticeChip";
-import type { PublicResetTimeline, RadarView, RadarOpinion } from "./types";
+import type { PublicResetTimeline, RadarView, RadarOpinion, RadarPollRound } from "./types";
 const now = Date.parse("2026-10-03T08:00:00Z");
 const stamp = new Date(now).toISOString();
 const source = { id: "codex_reset", name: "Codex Reset", url: "https://codex-reset.com", method: "cadence" as const,
@@ -100,5 +101,29 @@ describe("combined radar overview", () => {
     expect(html).toContain("你还不知道我们下周会发布什么"); expect(html).toContain("with_replies");
     const en = renderToStaticMarkup(<TiboBriefing timeline={t} language="en" notice={null} now={now} />);
     expect(en).not.toContain('lang="zh"'); expect(en).toContain("All fixed."); expect(en).toContain("releasing next week.");
+  });
+});
+
+describe("community polls and forecast time semantics", () => {
+  it("deduplicates source generation times and makes differing coverage visible", () => {
+    const r=radar();
+    r.forecasts[0]={...source,history:[{at:stamp,probability24h:20,probability48h:40,observedAt:stamp},{at:stamp,probability24h:20,probability48h:40,observedAt:new Date(now+900_000).toISOString()}]};
+    r.forecasts.push({...source,id:"nextreset",name:"NextReset",method:"mixed"});
+    expect(acceptedForecasts(r.forecasts)).toHaveLength(2);
+    expect(forecastSeries(r,now).find(s=>s.id==="codex_reset")?.points).toHaveLength(1);
+    const html=renderToStaticMarkup(<ForecastTrend radar={r} now={now} language="en" />);
+    expect(html).toContain("First record");expect(html).toContain("Generated");expect(html).toContain("Observed");expect(html).toContain('data-series="nextreset-24"');
+    expect(html).toContain("repeated reads add no forecast points");
+  });
+  it("plots cumulative votes at the original deadlines without labelling them as rolling probabilities", () => {
+    const r=radar();
+    const round:RadarPollRound={kind:"timing",id:"round-1",startsAt:stamp,endsAt:new Date(now+7*86400_000).toISOString(),samples:8,meanProbability:null,accepting:true,coverageGap:false,outcome:null,
+      distribution:[{probability:null,count:0,deadlineAt:new Date(now+86400_000).toISOString()},{probability:null,count:1,deadlineAt:new Date(now+3*86400_000).toISOString()},{probability:null,count:6,deadlineAt:new Date(now+7*86400_000).toISOString()},{probability:null,count:1,deadlineAt:null}]};
+    expect(timingVoteNodes(round).map(n=>n.share)).toEqual([0,12.5,87.5]);
+    r.community.polls=[{sourceId:"codex_reset_poll",name:"Codex Reset",url:"https://codex-reset.com/codex-usage#reset-poll",updatedAt:null,collectedAt:stamp,issue:null,round,recent:[],history:[]}];
+    const html=renderToStaticMarkup(<CommunityForecasts radar={r} language="en" now={now} />);
+    expect(html).toContain("12.5%");expect(html).toContain("87.5%");expect(html).toContain("Cumulative share of votes by deadline");expect(html).toContain("8</strong>");
+    expect(html).not.toContain("24h 12.5%");expect(html).not.toContain("Polymarket");
+    const noVotes=timingVoteNodes({...round,samples:0,distribution:[]});expect(noVotes).toEqual([]);
   });
 });

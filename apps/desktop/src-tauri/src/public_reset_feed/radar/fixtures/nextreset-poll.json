@@ -1,0 +1,133 @@
+{
+  "asOf": "2026-10-03T12:19:28.048Z",
+  "available": true,
+  "round": {
+    "id": "pt-2026-10-03",
+    "startsAt": 1791010800000,
+    "endsAt": 1791097200000,
+    "lockAt": null,
+    "outcome": null,
+    "source": null,
+    "settledAt": null,
+    "coverageGap": false,
+    "votePolicy": "until_completed_reset",
+    "day": "2026-10-03",
+    "kind": "pacific-day",
+    "total": 1,
+    "excluded": 0,
+    "distribution": [
+      {
+        "probability": 10,
+        "count": 0
+      },
+      {
+        "probability": 30,
+        "count": 1
+      },
+      {
+        "probability": 50,
+        "count": 0
+      },
+      {
+        "probability": 70,
+        "count": 0
+      },
+      {
+        "probability": 90,
+        "count": 0
+      }
+    ],
+    "average": 30,
+    "correct": null,
+    "neutral": 0,
+    "averageScore": null,
+    "accepting": true
+  },
+  "recent": [
+    {
+      "id": "pt-2026-10-02",
+      "startsAt": 1790924400000,
+      "endsAt": 1791010800000,
+      "lockAt": 1790975928000,
+      "outcome": 1,
+      "source": "https://x.com/thsottiaux/status/2106131810921136451",
+      "settledAt": 1790976059193,
+      "coverageGap": false,
+      "votePolicy": "until_completed_reset",
+      "day": "2026-10-02",
+      "kind": "pacific-day",
+      "eventAt": 1790975928000,
+      "total": 1,
+      "excluded": 0,
+      "distribution": [
+        {
+          "probability": 10,
+          "count": 0
+        },
+        {
+          "probability": 30,
+          "count": 0
+        },
+        {
+          "probability": 50,
+          "count": 0
+        },
+        {
+          "probability": 70,
+          "count": 0
+        },
+        {
+          "probability": 90,
+          "count": 1
+        }
+      ],
+      "average": 90,
+      "correct": 1,
+      "neutral": 0,
+      "averageScore": 99,
+      "mine": null
+    },
+    {
+      "id": "pt-2026-10-01",
+      "startsAt": 1790838000000,
+      "endsAt": 1790924400000,
+      "lockAt": null,
+      "outcome": 0,
+      "source": null,
+      "settledAt": 1790928122799,
+      "coverageGap": false,
+      "votePolicy": "until_completed_reset",
+      "day": "2026-10-01",
+      "kind": "pacific-day",
+      "total": 1,
+      "excluded": 0,
+      "distribution": [
+        {
+          "probability": 10,
+          "count": 1
+        },
+        {
+          "probability": 30,
+          "count": 0
+        },
+        {
+          "probability": 50,
+          "count": 0
+        },
+        {
+          "probability": 70,
+          "count": 0
+        },
+        {
+          "probability": 90,
+          "count": 0
+        }
+      ],
+      "average": 10,
+      "correct": 1,
+      "neutral": 0,
+      "averageScore": 99,
+      "mine": null
+    }
+  ]
+}

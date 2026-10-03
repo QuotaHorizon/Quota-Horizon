@@ -35,7 +35,7 @@ fn plain(text: &str) -> String {
 // Wishes, delivery reports and individual timers remain separate observations.
 pub(super) fn classify(text: &str) -> Option<(&'static str, &'static str, Option<u32>)> {
     let t = text.to_lowercase();
-    if !contains_any(&t, &["reset", "重置"])
+    if !contains_any(&t, &["reset", "重置", "发卡"])
         || !contains_any(
             &t,
             &["codex", "quota", "usage", "limit", "tibo", "额度", "限额"],
@@ -69,16 +69,19 @@ pub(super) fn classify(text: &str) -> Option<(&'static str, &'static str, Option
             "我的额度",
             "我的周",
             "自然重置",
-            "reset credit",
-            "banked reset",
-            "reset card",
-            "reset-credit",
+            "used a reset",
+            "redeemed a reset",
+            "received a reset",
+            "got a reset card",
+            "my banked",
+            "我的重置卡",
+            "用了重置卡",
+            "收到重置卡",
             "redemption entries",
             "reset history",
             "use usage resets",
             "reset countdown",
             "resets in ",
-            "重置卡",
         ],
     ) {
         return Some(("observation", "account_or_card", None));
@@ -112,6 +115,7 @@ pub(super) fn classify(text: &str) -> Option<(&'static str, &'static str, Option
                 "please reset",
                 "pls reset",
                 "want a reset",
+                "need another banked",
                 "need a reset",
                 "begging",
                 "希望",
@@ -168,6 +172,9 @@ pub(super) fn classify(text: &str) -> Option<(&'static str, &'static str, Option
         &[
             "won't reset",
             "will not reset",
+            "won't issue",
+            "will not issue",
+            "no banked reset",
             "no reset expected",
             "don't expect",
             "do not expect",
@@ -179,35 +186,73 @@ pub(super) fn classify(text: &str) -> Option<(&'static str, &'static str, Option
             "不认为",
             "不太可能重置",
             "不看好",
+            "不会发卡",
         ],
     ) {
         return Some(("pessimistic", "explicit_prediction", horizon));
     }
-    if contains_any(
+    let expects_credits = contains_any(
         &t,
         &[
-            "will reset",
-            "will be a reset",
-            "expect a reset",
-            "expect another reset",
-            "expect the reset",
-            "likely to reset",
-            "reset is coming",
-            "probably reset",
-            "probably get a reset",
-            "should reset",
-            "expect codex",
-            "expect tibo",
-            "expect a codex",
-            "think codex will",
-            "think tibo will",
-            "bet on a reset",
-            "会重置",
-            "大概率重置",
-            "预计重置",
-            "看好重置",
+            "banked reset",
+            "reset credit",
+            "reset card",
+            "重置卡",
+            "发卡",
         ],
-    ) {
+    ) && (t
+        .split(|c: char| !c.is_alphabetic())
+        .any(|word| matches!(word, "expect" | "predict"))
+        || contains_any(
+            &t,
+            &[
+                "will give",
+                "will issue",
+                "will get",
+                "likely to receive",
+                "likely to get",
+                "应该",
+                "大概率",
+                "预计",
+                "会发",
+            ],
+        ));
+    if expects_credits
+        || contains_any(
+            &t,
+            &[
+                "will reset",
+                "will be a reset",
+                "expect a reset",
+                "expect another reset",
+                "expect another banked reset",
+                "expect a banked reset",
+                "will issue a reset",
+                "will issue another reset",
+                "will give a banked reset",
+                "will give another banked reset",
+                "expect the reset",
+                "likely to reset",
+                "reset is coming",
+                "probably reset",
+                "probably get a reset",
+                "should reset",
+                "expect codex",
+                "expect tibo",
+                "expect a codex",
+                "think codex will",
+                "think tibo will",
+                "bet on a reset",
+                "会重置",
+                "大概率重置",
+                "预计重置",
+                "看好重置",
+                "会发卡",
+                "大概率发卡",
+                "预计发卡",
+            ],
+        )
+    {
         return Some((
             "optimistic",
             if personal_inference {
@@ -261,7 +306,7 @@ fn opinion(
     let relevant = stripped
         .lines()
         .filter(|line| !line.trim_start().starts_with(['>', '#', '`']))
-        .filter(|line| contains_any(&line.to_lowercase(), &["reset", "重置"]))
+        .filter(|line| contains_any(&line.to_lowercase(), &["reset", "重置", "发卡"]))
         .collect::<Vec<_>>()
         .join(" ");
     let excerpt: String = relevant.chars().take(1200).collect();
@@ -325,6 +370,7 @@ fn collect_channel(id: &str, at: &UtcTimestamp) -> (Channel, Vec<Opinion>) {
         issue: None,
         scanned: 0,
         truncated: false,
+        partial: false,
     };
     let mut opinions = vec![];
     let result = (|| -> Result<(), SourceIssue> {
@@ -361,6 +407,7 @@ fn collect_channel(id: &str, at: &UtcTimestamp) -> (Channel, Vec<Opinion>) {
                 }
             }
         } else {
+            let mut successes = 0;
             let since = DateTime::from_timestamp(cutoff, 0)
                 .unwrap()
                 .to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -373,7 +420,16 @@ fn collect_channel(id: &str, at: &UtcTimestamp) -> (Channel, Vec<Opinion>) {
                 .append_pair("per_page", "100")
                 .append_pair("sort", "created")
                 .append_pair("direction", "desc");
-            let comments = json(&client, comments_url.as_str())?;
+            let comments = match json(&client, comments_url.as_str()) {
+                Ok(v) => {
+                    successes += 1;
+                    v
+                }
+                Err(e) => {
+                    channel.issue = Some(e);
+                    Value::Array(vec![])
+                }
+            };
             let rows = comments.as_array().ok_or(SourceIssue::SchemaChanged)?;
             channel.scanned += rows.len();
             channel.truncated |= rows.len() == 100;
@@ -388,7 +444,16 @@ fn collect_channel(id: &str, at: &UtcTimestamp) -> (Channel, Vec<Opinion>) {
                 .append_pair("sort", "updated")
                 .append_pair("order", "desc")
                 .append_pair("per_page", "100");
-            let issues = json(&client, issues_url.as_str())?;
+            let issues = match json(&client, issues_url.as_str()) {
+                Ok(v) => {
+                    successes += 1;
+                    v
+                }
+                Err(e) => {
+                    channel.issue = Some(e);
+                    serde_json::json!({"items": []})
+                }
+            };
             let rows = issues["items"]
                 .as_array()
                 .ok_or(SourceIssue::SchemaChanged)?;
@@ -408,12 +473,25 @@ fn collect_channel(id: &str, at: &UtcTimestamp) -> (Channel, Vec<Opinion>) {
                 let count = thread["comments"].as_u64().unwrap_or(0);
                 let page = count.div_ceil(100).max(1);
                 let url = format!("https://api.github.com/repos/openai/codex/issues/{number}/comments?per_page=100&page={page}");
-                let comments = json(&client, &url)?;
+                let comments = match json(&client, &url) {
+                    Ok(v) => {
+                        successes += 1;
+                        v
+                    }
+                    Err(e) => {
+                        channel.issue = Some(e);
+                        continue;
+                    }
+                };
                 let rows = comments.as_array().ok_or(SourceIssue::SchemaChanged)?;
                 channel.scanned += rows.len();
                 channel.truncated |= page > 1;
                 all.extend(rows.clone());
             }
+            if successes == 0 {
+                return Err(channel.issue.unwrap_or(SourceIssue::RequestFailed));
+            }
+            channel.partial = channel.issue.is_some();
             let mut seen = HashSet::new();
             for row in &all {
                 let (Some(key), Some(author), Some(text), Some(time), Some(link)) = (
@@ -436,7 +514,7 @@ fn collect_channel(id: &str, at: &UtcTimestamp) -> (Channel, Vec<Opinion>) {
                     id,
                     &author,
                     &link,
-                    &text,
+                    &format!("{}\n{text}", row["title"].as_str().unwrap_or("")),
                     &time,
                     at,
                 ) {

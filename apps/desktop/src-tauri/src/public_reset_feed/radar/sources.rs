@@ -10,6 +10,7 @@ pub(super) fn unavailable(id: &str, issue: SourceIssue, at: &UtcTimestamp) -> Fo
             "statements",
         ),
         "quota_cue" => ("QuotaCue", "https://quotacue.com", "mixed"),
+        "nextreset" => ("NextReset", "https://nextreset.ai", "mixed"),
         _ => ("CodexReset.app", "https://codexreset.app", "mixed"),
     };
     Forecast {
@@ -22,6 +23,7 @@ pub(super) fn unavailable(id: &str, issue: SourceIssue, at: &UtcTimestamp) -> Fo
         baseline_24h: None,
         baseline_48h: None,
         updated_at: None,
+        expires_at: None,
         collected_at: at.as_str().into(),
         last_reset_at: None,
         evidence_urls: vec![],
@@ -111,10 +113,68 @@ pub(super) fn parse(id: &str, bytes: &[u8], at: &UtcTimestamp) -> Result<Forecas
                         probability_24h: number(&row["score24h"]).ok()?,
                         probability_48h: number(&row["score48h"]).ok()?,
                         model_version: None,
+                        observed_at: Some(at.as_str().into()),
                     })
                 })
                 .take(192)
                 .collect();
+        }
+        "nextreset" => {
+            if v["checks"]["history"]["ok"] != true || v["state"] == "unavailable" {
+                return Err(SourceIssue::InvalidResponse);
+            }
+            let windows = v["windows"].as_array().ok_or(SourceIssue::SchemaChanged)?;
+            let window = |h| {
+                windows
+                    .iter()
+                    .find(|w| w["hours"] == h)
+                    .ok_or(SourceIssue::SchemaChanged)
+            };
+            let p = |v: &Value| {
+                number(v).and_then(|n| {
+                    if n <= 1.0 {
+                        Ok(n * 100.0)
+                    } else {
+                        Err(SourceIssue::SchemaChanged)
+                    }
+                })
+            };
+            f.probability_24h = Some(p(&window(24)?["probability"])?);
+            f.probability_48h = Some(p(&window(48)?["probability"])?);
+            f.baseline_24h = Some(p(&window(24)?["baseline"])?);
+            f.baseline_48h = Some(p(&window(48)?["baseline"])?);
+            f.updated_at = Some(stamp(&v["asOf"]).ok_or(SourceIssue::SchemaChanged)?);
+            f.expires_at = Some(stamp(&v["expiresAt"]).ok_or(SourceIssue::SchemaChanged)?);
+            if seconds(f.expires_at.as_ref().unwrap()) <= seconds(f.updated_at.as_ref().unwrap()) {
+                return Err(SourceIssue::SchemaChanged);
+            }
+            f.last_reset_at = stamp(&v["history"]["last"]["date"]);
+            if f.last_reset_at.is_none() {
+                return Err(SourceIssue::SchemaChanged);
+            }
+            // The documented poll is independent of NR-1.7. Active statements
+            // share the existing statements budget; an unchanged history-only
+            // forecast shares the cadence budget instead of adding evidence.
+            f.method = if (f.probability_24h.unwrap() - f.baseline_24h.unwrap()).abs() < 0.001
+                && (f.probability_48h.unwrap() - f.baseline_48h.unwrap()).abs() < 0.001
+            {
+                "cadence"
+            } else {
+                "statements"
+            }
+            .into();
+            f.uses_community = false;
+            f.evidence_urls = urls(&v["social"]);
+            for event in v["news"]["events"].as_array().into_iter().flatten() {
+                if event["multiplier"]
+                    .as_f64()
+                    .is_some_and(|m| (m - 1.0).abs() > 0.001)
+                {
+                    f.evidence_urls.extend(urls(event));
+                }
+            }
+            f.evidence_urls.sort();
+            f.evidence_urls.dedup();
         }
         "quota_cue" => {
             f.probability_24h = Some(number(&v["pred_24h"]["probability"])?);
@@ -148,26 +208,28 @@ pub(super) fn parse(id: &str, bytes: &[u8], at: &UtcTimestamp) -> Result<Forecas
 
 pub(super) fn collect(at: &UtcTimestamp) -> Vec<(&'static str, Result<Forecast, SourceIssue>)> {
     std::thread::scope(|scope| {
-        let jobs: Vec<_> = [("reset_monitor", ORG)]
-            .into_iter()
-            .map(|(id, url)| {
-                (
-                    id,
-                    scope.spawn(move || {
-                        let client = public_client()?;
-                        let mut req = client
-                            .get(url)
-                            .header(reqwest::header::ACCEPT, "application/json");
-                        if id == "reset_monitor" {
-                            req = req.header("x-tsr-serverFn", "true");
-                        }
-                        let bytes =
-                            read_response(req.send().map_err(|_| SourceIssue::RequestFailed)?)?;
-                        parse(id, &bytes, at)
-                    }),
-                )
-            })
-            .collect();
+        let jobs: Vec<_> = [
+            ("reset_monitor", ORG),
+            ("nextreset", "https://nextreset.ai/api/forecast"),
+        ]
+        .into_iter()
+        .map(|(id, url)| {
+            (
+                id,
+                scope.spawn(move || {
+                    let client = public_client()?;
+                    let mut req = client
+                        .get(url)
+                        .header(reqwest::header::ACCEPT, "application/json");
+                    if id == "reset_monitor" {
+                        req = req.header("x-tsr-serverFn", "true");
+                    }
+                    let bytes = read_response(req.send().map_err(|_| SourceIssue::RequestFailed)?)?;
+                    parse(id, &bytes, at)
+                }),
+            )
+        })
+        .collect();
         jobs.into_iter()
             .map(|(id, job)| (id, job.join().unwrap_or(Err(SourceIssue::RequestFailed))))
             .collect()

@@ -255,3 +255,36 @@
 .communityContribution span { color: var(--muted); font-size: 10px; line-height: 1.5; }
 @media (max-width: 1000px) { .tiboGrid { grid-template-columns: 1fr; gap: 18px; } .tiboActivity { border: 0; border-top: 1px solid var(--line); padding: 16px 0 0; } .activityList { grid-template-columns: 1fr 1fr; gap: 0 18px; } }
 @media (max-width: 600px) { .activityList { grid-template-columns: 1fr; } .sourceMatrixHeading, .sourceMatrixRow { grid-template-columns: minmax(105px, 1.4fr) minmax(45px, 1fr) minmax(45px, 1fr); gap: 9px; } .horizonValue + .horizonValue { padding-left: 14px; } }
+
+.briefing { --radar-violet: #8662ba; }
+:global(:root[data-theme="dark"]) .briefing { --radar-violet: #c3a7ec; }
+.trendControls { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.trendControls button { border: 0; background: none; color: var(--radar-accent); font: inherit; font-size: 10px; padding: 4px 0; }
+.seriesLegend { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.seriesLegend > span { display: grid; align-content: start; gap: 3px; }
+.seriesLegend > span > span { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.seriesLegend > span > small { line-height: 1.5; }
+.pollGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.pollGrid > div { min-width: 0; }
+.pollGrid > div + div { border-left: 1px solid var(--line); padding-left: 24px; }
+.pollHeadline { display: flex; gap: 12px; align-items: baseline; }
+.pollHeadline > strong { font-size: 32px; line-height: 1.3; color: var(--radar-accent); font-variant-numeric: tabular-nums; }
+.pollHeadline > span { color: var(--muted); font-size: 12px; }
+.pollPanel svg, .effectTrend svg { width: 100%; display: block; }
+.pollPanel svg text, .effectTrend svg text { fill: var(--muted); font-family: inherit; font-size: 11px; }
+.pollLine { fill: none; stroke: var(--radar-violet); stroke-width: 2.2; }
+.pollDot { fill: var(--radar-violet); }
+.nowLine { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; opacity: .5; }
+.voteWindows { display: grid; gap: 5px; }
+.voteWindows > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 10px; }
+.voteWindows span { color: var(--muted); line-height: 1.5; }
+.voteWindows strong { white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums; }
+.probabilityBins { display: grid; grid-template-columns: repeat(5, 1fr); align-items: end; gap: 10px; text-align: center; font-size: 11px; }
+.probabilityBins > div { display: grid; align-content: end; justify-items: stretch; gap: 5px; }
+.probabilityBins i { display: block; background: var(--radar-violet); opacity: .65; border-radius: 3px; }
+.probabilityBins span, .probabilityBins strong { color: var(--muted); font-weight: 400; }
+.pollSource { display: flex; gap: 6px 14px; flex-wrap: wrap; margin-top: 12px; font-size: 10px; color: var(--muted); }
+.effectTrend { margin-top: 16px; }
+.effectTrend .cardHeading { margin-bottom: 4px; }
+.effectTrend h3 { font-size: 11px; }
+@media (max-width: 940px) { .pollGrid { grid-template-columns: 1fr; gap: 20px; } .pollGrid > div + div { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; padding-top: 20px; } }

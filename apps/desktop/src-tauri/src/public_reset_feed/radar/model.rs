@@ -38,7 +38,7 @@ fn sample(opinions: &[Opinion], end: i64) -> (Vec<&Opinion>, usize) {
     (sorted, count)
 }
 fn adjustment(base: f64, score: f64) -> f64 {
-    // Bounded log-odds tilt. Coefficients are explicit priors for the v2
+    // Bounded log-odds tilt. Coefficients are explicit priors for the v3
     // experiment, not learned weights or a claim of forecast calibration.
     let p = (base / 100.0).clamp(0.001, 0.999);
     (100.0 / (1.0 + (-(p / (1.0 - p)).ln() - score).exp())).clamp(0.0, 100.0)
@@ -69,7 +69,7 @@ pub(super) fn evaluate(view: &mut RadarView, at: &UtcTimestamp) {
         .channels
         .iter()
         .filter(|c| {
-            c.issue.is_none()
+            (c.issue.is_none() || c.partial)
                 && c.success_at
                     .as_ref()
                     .and_then(|s| seconds(s))
@@ -110,7 +110,7 @@ pub(super) fn evaluate(view: &mut RadarView, at: &UtcTimestamp) {
         f.weight = 0.0;
         f.exclusion = if f.id == "reset_app" {
             Some("source_retired")
-        } else if f.method == "mixed" || f.uses_community {
+        } else if (f.method == "mixed" || f.uses_community) && f.id != "nextreset" {
             Some("method_unverified")
         } else if f.updated_at.is_none() {
             Some("missing_timestamp")
@@ -118,6 +118,13 @@ pub(super) fn evaluate(view: &mut RadarView, at: &UtcTimestamp) {
             Some("unavailable")
         } else if f.issue.is_some() {
             Some("fetch_failed")
+        } else if f
+            .expires_at
+            .as_ref()
+            .and_then(|t| seconds(t))
+            .is_some_and(|t| t <= time)
+        {
+            Some("stale")
         } else if last_reset
             .zip(f.last_reset_at.as_ref().and_then(|s| seconds(s)))
             .is_some_and(|(latest, s)| latest - s > 12 * 3600)
@@ -270,10 +277,17 @@ pub(super) fn evaluate(view: &mut RadarView, at: &UtcTimestamp) {
             direction += entries.iter().map(|e| e.0 * e.1).sum::<f64>() * capped / total;
             shared_authors += entries.iter().filter(|e| e.2).count();
         }
-        // v2 uses a continuous, inspectable prior: no three-author cliff.
+        // Anonymous ballots form one shared group across sites. They are not
+        // verified independent people and never inherit their provider's model.
+        let (poll_direction, poll_effective, poll_samples) =
+            polls::signal(&view.community.polls, hours, time, last_reset);
+        direction += poll_direction;
+        effective += poll_effective;
+        // A continuous, inspectable prior: no author-count cliff.
         // Twelve effective opinions halve shrinkage; two channels give full
         // coverage. 1.5 is an experimental maximum log-odds signal, not fitted.
-        let coverage = (channels.len() as f64 / 2.0).min(1.0);
+        let coverage =
+            ((channels.len() as f64 + if poll_effective > 0.0 { 1.0 } else { 0.0 }) / 2.0).min(1.0);
         let tilt = 1.5 * direction / (effective + 12.0) * coverage;
         CommunityEffect {
             hours,
@@ -281,6 +295,8 @@ pub(super) fn evaluate(view: &mut RadarView, at: &UtcTimestamp) {
             effective_authors: round(effective),
             shared_evidence_authors: shared_authors,
             log_odds_adjustment: tilt,
+            poll_samples,
+            poll_effective: round(poll_effective),
         }
     };
     let e24 = effect(24);

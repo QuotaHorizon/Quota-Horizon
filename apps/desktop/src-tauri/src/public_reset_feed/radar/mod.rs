@@ -6,11 +6,12 @@ use std::collections::{BTreeMap, HashSet};
 
 mod community;
 mod model;
+mod polls;
 mod sources;
 #[cfg(test)]
 mod tests;
 
-const MODEL_VERSION: &str = "horizon-pool-v2";
+const MODEL_VERSION: &str = "horizon-pool-v3";
 const MAX_STATE: usize = 256 * 1024;
 const MAX_HISTORY_BYTES: i64 = 24 * 1024 * 1024;
 
@@ -26,6 +27,8 @@ pub(super) struct Forecast {
     baseline_24h: Option<f64>,
     baseline_48h: Option<f64>,
     updated_at: Option<String>,
+    #[serde(default)]
+    expires_at: Option<String>,
     collected_at: String,
     last_reset_at: Option<String>,
     evidence_urls: Vec<String>,
@@ -43,6 +46,8 @@ pub(super) struct Point {
     probability_48h: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    observed_at: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +61,8 @@ pub(super) struct Channel {
     issue: Option<SourceIssue>,
     scanned: usize,
     truncated: bool,
+    #[serde(default)]
+    partial: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +98,20 @@ pub(super) struct Community {
     window_hours: u32,
     #[serde(default)]
     effects: Vec<CommunityEffect>,
+    #[serde(default)]
+    polls: Vec<polls::Poll>,
+    #[serde(default)]
+    history: Vec<CommunityPoint>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CommunityPoint {
+    at: String,
+    optimistic_share: Option<f64>,
+    directional_authors: usize,
+    adjustment_24h: Option<f64>,
+    adjustment_48h: Option<f64>,
+    model_version: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,6 +121,10 @@ pub(super) struct CommunityEffect {
     effective_authors: f64,
     shared_evidence_authors: usize,
     log_odds_adjustment: f64,
+    #[serde(default)]
+    poll_samples: usize,
+    #[serde(default)]
+    poll_effective: f64,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -136,6 +161,7 @@ pub(super) fn uses_current_model(view: &RadarView) -> bool {
 pub(super) struct Collected {
     forecasts: Vec<(&'static str, Result<Forecast, SourceIssue>)>,
     community: Vec<(Channel, Vec<Opinion>)>,
+    polls: Vec<(&'static str, Result<polls::Poll, SourceIssue>)>,
 }
 
 fn seconds(value: &str) -> Option<i64> {
@@ -181,6 +207,7 @@ fn public_url(value: &str) -> bool {
                         | "codexreset.org"
                         | "codexreset.app"
                         | "quotacue.com"
+                        | "nextreset.ai"
                 )
             )
     })
@@ -197,10 +224,12 @@ fn urls(value: &Value) -> Vec<String> {
 pub(super) fn collect(at: &UtcTimestamp) -> Collected {
     std::thread::scope(|scope| {
         let forecasts = scope.spawn(|| sources::collect(at));
+        let polls = scope.spawn(|| polls::collect(at));
         let community = community::collect(at);
         Collected {
             forecasts: forecasts.join().unwrap_or_default(),
             community,
+            polls: polls.join().unwrap_or_default(),
         }
     })
 }
@@ -243,6 +272,10 @@ fn load_snapshot(conn: &Connection, at: &UtcTimestamp) -> Result<RadarView, Stri
 
 pub(super) fn load(conn: &Connection, at: &UtcTimestamp) -> Result<RadarView, String> {
     let mut view = load_snapshot(conn, at)?;
+    view.community.history.clear();
+    for poll in &mut view.community.polls {
+        poll.history.clear();
+    }
     if view.updated_at.is_none() {
         return Ok(view);
     }
@@ -260,14 +293,17 @@ pub(super) fn load(conn: &Connection, at: &UtcTimestamp) -> Result<RadarView, St
                     probability_24h: r.get(1)?,
                     probability_48h: r.get(2)?,
                     model_version: r.get(3)?,
+                    observed_at: None,
                 })
             },
         )
         .map_err(db_error)?;
     view.history = rows.collect::<Result<Vec<_>, _>>().map_err(db_error)?;
-    // Observed source values extend their own series, never Horizon's history.
-    // Preserve a provider's native history when both have the same timestamp.
-    let mut stmt = conn.prepare("SELECT s.at, f.value FROM radar_snapshots s, json_each(s.payload, '$.forecasts') f WHERE s.at >= ?1 AND s.at <= ?2 ORDER BY s.at").map_err(db_error)?;
+    // Reconstruct from immutable snapshots. Source generation time is the x-axis;
+    // local observation time stays metadata, never an extra forecast point.
+    let mut stmt = conn
+        .prepare("SELECT at, payload FROM radar_snapshots WHERE at >= ?1 AND at <= ?2 ORDER BY at")
+        .map_err(db_error)?;
     let observed = stmt
         .query_map(
             params![
@@ -279,27 +315,70 @@ pub(super) fn load(conn: &Connection, at: &UtcTimestamp) -> Result<RadarView, St
         .map_err(db_error)?;
     for row in observed {
         let (time, payload) = row.map_err(db_error)?;
-        let old: Forecast = serde_json::from_str(&payload).map_err(db_error)?;
-        if old.issue.is_some() || old.exclusion.is_some() {
-            continue;
+        let old: RadarView = serde_json::from_str(&payload).map_err(db_error)?;
+        if old.model_version == MODEL_VERSION {
+            let c = &old.community;
+            let complete = c.channels.iter().all(|c| c.issue.is_none() && !c.partial);
+            view.community.history.push(CommunityPoint {
+                at: time.clone(),
+                optimistic_share: (complete && c.optimistic + c.pessimistic > 0)
+                    .then_some(c.optimistic_share)
+                    .flatten(),
+                directional_authors: c.optimistic + c.pessimistic,
+                adjustment_24h: old.estimate.as_ref().map(|e| e.community_adjustment_24h),
+                adjustment_48h: old.estimate.as_ref().map(|e| e.community_adjustment_48h),
+                model_version: old.model_version.clone(),
+            });
         }
-        if let (Some(p24), Some(p48), Some(f)) = (
-            old.probability_24h,
-            old.probability_48h,
-            view.forecasts.iter_mut().find(|f| f.id == old.id),
-        ) {
-            if !f.history.iter().any(|p| p.at == time) {
+        for poll in &old.community.polls {
+            if poll.issue.is_some() {
+                continue;
+            }
+            if let Some(current) = view
+                .community
+                .polls
+                .iter_mut()
+                .find(|p| p.source_id == poll.source_id)
+            {
+                current.history.push(polls::PollPoint {
+                    at: poll.collected_at.clone(),
+                    round_id: poll.round.id.clone(),
+                    mean_probability: poll.round.mean_probability,
+                    samples: poll.round.samples,
+                });
+            }
+        }
+        for old in old.forecasts {
+            if old.issue.is_some() || old.exclusion.is_some() {
+                continue;
+            }
+            if let (Some(p24), Some(p48), Some(generated), Some(f)) = (
+                old.probability_24h,
+                old.probability_48h,
+                old.updated_at,
+                view.forecasts.iter_mut().find(|f| f.id == old.id),
+            ) {
+                if seconds(&generated)
+                    .is_none_or(|t| t < start.timestamp() || t > seconds(at.as_str()).unwrap())
+                    || f.history
+                        .iter()
+                        .any(|p| seconds(&p.at) == seconds(&generated))
+                {
+                    continue;
+                }
                 f.history.push(Point {
-                    at: time,
+                    at: generated,
                     probability_24h: p24,
                     probability_48h: p48,
                     model_version: None,
+                    observed_at: Some(old.collected_at),
                 });
             }
         }
     }
     for f in &mut view.forecasts {
         f.history.sort_by_key(|p| seconds(&p.at));
+        f.history.dedup_by_key(|p| seconds(&p.at));
     }
     Ok(view)
 }
@@ -312,6 +391,10 @@ pub(super) fn save(
 ) -> Result<(), String> {
     let mut view = load_snapshot(conn, at)?;
     view.history.clear();
+    view.community.history.clear();
+    for poll in &mut view.community.polls {
+        poll.history.clear();
+    }
     // Historic snapshots retain retired inputs for replay; new collections do not.
     view.forecasts
         .retain(|f| !matches!(f.id.as_str(), "reset_app" | "quota_cue"));
@@ -351,6 +434,7 @@ pub(super) fn save(
                 baseline_24h: f.model_probability_24h,
                 baseline_48h: f.model_probability_48h,
                 updated_at: Some(f.updated_at.clone()),
+                expires_at: None,
                 collected_at: f.checked_at.clone(),
                 last_reset_at: f.last_reset_at.clone(),
                 evidence_urls: f.evidence_urls.clone(),
@@ -363,8 +447,15 @@ pub(super) fn save(
         );
     }
     for (channel, opinions) in collected.community {
-        if channel.issue.is_none() {
-            view.community.opinions.retain(|v| v.channel != channel.id);
+        if channel.issue.is_none() || channel.partial {
+            if channel.partial {
+                let ids: HashSet<_> = opinions.iter().map(|p| p.id.as_str()).collect();
+                view.community
+                    .opinions
+                    .retain(|v| !ids.contains(v.id.as_str()));
+            } else {
+                view.community.opinions.retain(|v| v.channel != channel.id);
+            }
             view.community.opinions.extend(opinions);
         }
         let prior_success = view
@@ -378,6 +469,72 @@ pub(super) fn save(
             success_at: channel.success_at.clone().or(prior_success),
             ..channel
         });
+    }
+    view.community
+        .opinions
+        .sort_by_key(|p| std::cmp::Reverse(seconds(&p.published_at)));
+    let mut counts = BTreeMap::new();
+    view.community.opinions.retain(|p| {
+        let count = counts.entry(p.channel.clone()).or_insert(0_usize);
+        *count += 1;
+        *count <= 64
+    });
+    for c in &mut view.community.channels {
+        c.truncated |= counts.get(&c.id).is_some_and(|n| *n > 64);
+    }
+    for (id, result) in collected.polls {
+        let prior_success = view
+            .community
+            .channels
+            .iter()
+            .find(|c| c.id == id)
+            .and_then(|c| c.success_at.clone());
+        let (name, url, query) = if id == "nextreset_poll" {
+            (
+                "NextReset",
+                "https://nextreset.ai/#community",
+                "Anonymous daily probability poll",
+            )
+        } else {
+            (
+                "Codex Reset",
+                "https://codex-reset.com/codex-usage#reset-poll",
+                "Anonymous reset timing poll",
+            )
+        };
+        view.community.channels.retain(|c| c.id != id);
+        view.community.channels.push(Channel {
+            id: id.into(),
+            name: name.into(),
+            url: url.into(),
+            query: query.into(),
+            attempted_at: at.as_str().into(),
+            success_at: if result.is_ok() {
+                Some(at.as_str().into())
+            } else {
+                prior_success
+            },
+            issue: result.as_ref().err().copied(),
+            scanned: result.as_ref().map(|p| p.round.samples).unwrap_or(0),
+            truncated: false,
+            partial: false,
+        });
+        match result {
+            Ok(poll) => {
+                view.community.polls.retain(|p| p.source_id != id);
+                view.community.polls.push(poll);
+            }
+            Err(issue) => {
+                for poll in view
+                    .community
+                    .polls
+                    .iter_mut()
+                    .filter(|p| p.source_id == id)
+                {
+                    poll.issue = Some(issue);
+                }
+            }
+        }
     }
     model::evaluate(&mut view, at);
     let json = serde_json::to_string(&view).map_err(db_error)?;

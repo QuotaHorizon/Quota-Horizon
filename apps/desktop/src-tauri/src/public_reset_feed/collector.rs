@@ -5,7 +5,7 @@ fn public_client_builder() -> reqwest::blocking::ClientBuilder {
         .connect_timeout(Duration::from_secs(4))
         .timeout(Duration::from_secs(12))
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent("QuotaHorizon/PublicSources")
+        .user_agent("QuotaHorizon/PublicSources (+https://github.com/QuotaHorizon/Quota-Horizon)")
 }
 
 fn public_client() -> Result<reqwest::blocking::Client, SourceIssue> {

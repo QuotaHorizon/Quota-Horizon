@@ -1,7 +1,15 @@
 import type { RadarForecast, RadarOpinion, RadarPoint } from "./types";
 
-export const forecastColor = (id: string) => ({ horizon: "var(--radar-accent)", reset_monitor: "var(--radar-blue)", codex_reset: "var(--radar-amber)" }[id] ?? "var(--muted)");
-export const acceptedForecasts = (sources: RadarForecast[]) => sources.filter(s => s.id !== "reset_app" && s.method !== "mixed" && !["source_retired", "method_unverified", "missing_timestamp"].includes(s.exclusion ?? ""));
+export const forecastColor = (id: string) => ({ horizon: "var(--radar-accent)", reset_monitor: "var(--radar-blue)", codex_reset: "var(--radar-amber)", nextreset: "var(--radar-violet)" }[id] ?? "var(--muted)");
+export const acceptedForecasts = (sources: RadarForecast[]) => sources.filter(s => !["reset_app", "quota_cue"].includes(s.id) && !["source_retired", "method_unverified", "missing_timestamp"].includes(s.exclusion ?? ""));
+
+export function forecastSeries(radar: { history: RadarPoint[]; forecasts: RadarForecast[] }, now: number) {
+  return [{ id: "horizon", name: "Horizon", history: radar.history }, ...acceptedForecasts(radar.forecasts)].map(s => {
+    const unique = new Map<number, RadarPoint>();
+    for (const p of s.history) { const time = Date.parse(p.at); if (time <= now && time >= now - 86400_000 && !unique.has(time)) unique.set(time, p); }
+    return { ...s, points: [...unique].sort((a, b) => a[0] - b[0]).map(([,p]) => p) };
+  });
+}
 
 export function historyDelta(points: RadarPoint[], now: number, hours: 24 | 48): number | null {
   const current = points.filter(p => Date.parse(p.at) <= now).at(-1);
