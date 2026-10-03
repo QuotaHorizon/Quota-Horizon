@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reset Intelligence consumer contract v1",
+  "type": "object",
+  "required": ["schema_version", "horizons_hours", "forecasts"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "reset-intelligence-consumer/1"},
+    "horizons_hours": {"type": "array", "minItems": 72, "maxItems": 72, "items": {"type": "integer", "minimum": 1, "maximum": 72}},
+    "forecasts": {"type": "array", "items": {"$ref": "#/$defs/forecast"}}
+  },
+  "$defs": {
+    "probability": {"type": "number", "minimum": 0, "maximum": 1},
+    "range": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/probability"}},
+    "forecast": {
+      "type": "object",
+      "required": ["target", "status", "issued_at", "model_version", "curve", "valid_until", "training_state", "sources", "community", "statements", "source_health"],
+      "additionalProperties": false,
+      "properties": {
+        "target": {"enum": ["broad_quota_relief", "automatic_reset"]},
+        "status": {"enum": ["current", "stale", "unavailable"]},
+        "issued_at": {"type": "string", "format": "date-time"},
+        "valid_until": {"type": ["string", "null"], "format": "date-time"},
+        "model_version": {"type": "string"},
+        "reason": {"type": ["string", "null"]},
+        "training_state": {"enum": ["cold_start_prior", "learned", null]},
+        "coherence": {"type": ["string", "null"]},
+        "evaluation_windows": {"type": "integer", "minimum": 0},
+        "event_count": {"type": "integer", "minimum": 0},
+        "curve": {"type": "array", "items": {"$ref": "#/$defs/point"}},
+        "sources": {"type": "array", "items": {"type": "object"}},
+        "source_health": {"type": "array", "items": {"type": "object"}},
+        "community": {"type": ["object", "null"]},
+        "statements": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "point": {
+      "type": "object",
+      "required": ["hours", "probability", "baseline", "baseline_parameter_interval_80", "component_range"],
+      "additionalProperties": false,
+      "properties": {
+        "hours": {"type": "integer", "minimum": 1, "maximum": 72},
+        "probability": {"$ref": "#/$defs/probability"},
+        "baseline": {"$ref": "#/$defs/probability"},
+        "unconstrained_probability": {"$ref": "#/$defs/probability"},
+        "baseline_parameter_interval_80": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/range"}]},
+        "component_range": {"$ref": "#/$defs/range"}
+      }
+    }
+  }
+}

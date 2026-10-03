@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reset observer report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "module_version", "implementation_hash", "generated_at", "state", "started_at", "estimand", "policy", "summary", "latest", "indicators", "outcome_providers", "outcomes", "scorecards", "comparisons", "curves"],
+  "properties": {
+    "schema_version": {"const": "reset-observer/1"},
+    "module_version": {"type": "string"},
+    "implementation_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "state": {"enum": ["collecting_forward_evidence", "scoring"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "estimand": {"type": "string"},
+    "policy": {"type": "object", "required": ["version", "hash", "grid_seconds", "reporting_grace_seconds", "headline_sampling", "zero_label"]},
+    "summary": {"type": "object", "required": ["forecast_snapshots", "frozen_trials", "scored_nonoverlapping_trials", "settlements", "outcomes", "settlement_revisions", "next_maturity"]},
+    "latest": {"type": "array", "items": {"type": "object", "required": ["source", "version", "target", "track", "origin", "received_at", "valid_until", "state", "probabilities_at_publication", "support_hours"]}},
+    "indicators": {"type": "array", "items": {"type": "object"}},
+    "outcome_providers": {"type": "array", "items": {"type": "object"}},
+    "outcomes": {"type": "array", "items": {"type": "object", "required": ["id", "status", "reason", "kind", "from", "to", "references", "time_basis"]}},
+    "scorecards": {"type": "array", "items": {"type": "object", "required": ["source", "version", "target", "track", "hours", "scheduled_windows", "forecast_coverage", "settlement_states", "scores", "alerts"]}},
+    "comparisons": {"type": "array", "items": {"type": "object", "required": ["left", "right", "target", "hours", "n", "loss_difference", "error_correlation", "brier_skill"]}},
+    "curves": {"type": "array", "items": {"type": "object", "required": ["source", "version", "target", "track", "hours", "points"]}},
+    "runtime": {"type": "object", "required": ["producer", "import", "pid"]}
+  }
+}
