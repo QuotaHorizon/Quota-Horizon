@@ -820,6 +820,91 @@ mod tests {
         assert!(report.candidates[0].version.is_none());
     }
 
+    #[test]
+    fn windows_path_discovers_exe_without_executing_unconfirmed_candidates() {
+        let root = TempDir::new().unwrap();
+        let bin = root.path().join("Program Files/Codex");
+        let executable = bin.join("codex.exe");
+        make_executable(&executable);
+        make_executable(&bin.join("codex"));
+        make_executable(&bin.join("codex.cmd"));
+        let mut options = options(&root, HostPlatform::Windows);
+        // The host encodes PATH; this exercises Windows candidate selection,
+        // while native Windows filesystem validation still needs a Windows run.
+        options.path_environment = Some(env::join_paths([&bin]).unwrap());
+        let report = discover(&options, &FakeProbe::default());
+        assert_eq!(report.outcome, DiscoveryOutcome::ConfirmationRequired);
+        assert_eq!(report.candidates.len(), 1);
+        assert_eq!(
+            report.candidates[0].canonical_path,
+            fs::canonicalize(&executable).unwrap().to_string_lossy()
+        );
+        assert!(report.candidates[0].version.is_none());
+        assert_eq!(
+            verify_executable_identity(&report.candidates[0]),
+            Err(ExecutableIdentityError::CandidateNotVerified)
+        );
+    }
+
+    #[test]
+    fn windows_discovery_ignores_current_directory_and_requires_explicit_choice() {
+        let root = TempDir::new().unwrap();
+        make_executable(&root.path().join("codex.exe"));
+        let one = root.path().join("first");
+        let two = root.path().join("second");
+        make_executable(&one.join("codex.exe"));
+        make_executable(&two.join("codex.exe"));
+        let mut options = options(&root, HostPlatform::Windows);
+        options.path_environment = Some(env::join_paths([root.path(), &one, &two]).unwrap());
+        let report = discover(&options, &FakeProbe::default());
+        assert_eq!(report.outcome, DiscoveryOutcome::Ambiguous);
+        assert_eq!(report.candidates.len(), 2);
+        assert!(report.selected_executable_id.is_none());
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.code.as_str() == "cwd_path_entry_ignored"));
+    }
+
+    #[test]
+    fn explicitly_selected_windows_exe_rejects_a_replacement() {
+        let root = TempDir::new().unwrap();
+        let executable = root.path().join("Program Files/Codex/codex.exe");
+        make_executable(&executable);
+        let canonical = fs::canonicalize(&executable).unwrap();
+        let mut probe = FakeProbe::default();
+        probe
+            .versions
+            .insert(canonical, Ok("codex-cli test".into()));
+        let mut options = options(&root, HostPlatform::Windows);
+        options.explicit_path = Some(executable.clone());
+        let report = discover(&options, &probe);
+        assert_eq!(report.outcome, DiscoveryOutcome::Selected);
+        let candidate = report.selected_candidate().unwrap();
+        assert_eq!(verify_executable_identity(candidate), Ok(()));
+        fs::write(&executable, b"updated executable with different metadata").unwrap();
+        assert_eq!(
+            verify_executable_identity(candidate),
+            Err(ExecutableIdentityError::Changed)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_windows_validation_accepts_exe_case_insensitively_and_rejects_scripts() {
+        let root = TempDir::new().unwrap();
+        for (name, valid) in [
+            ("codex.exe", true),
+            ("codex.EXE", true),
+            ("codex.cmd", false),
+            ("codex", false),
+        ] {
+            let path = root.path().join(name);
+            make_executable(&path);
+            assert_eq!(validate_executable(&path).is_ok(), valid, "{name}");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn registry_candidate_requires_confirmation_and_is_not_probed() {
@@ -958,12 +1043,10 @@ mod tests {
         let report = discover(&options, &FakeProbe::default());
 
         assert_eq!(report.outcome, DiscoveryOutcome::NotFound);
-        assert!(
-            report
-                .diagnostics
-                .iter()
-                .any(|item| item.code.as_str() == "cwd_path_entry_ignored")
-        );
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|item| item.code.as_str() == "cwd_path_entry_ignored"));
     }
 
     #[test]
