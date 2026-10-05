@@ -27,22 +27,37 @@ def parse_count_market(spec: dict, raw: object, at: float) -> Observation:
     if at_generated > at + 60 or not start < end:
         raise ValueError("invalid count-market clock")
     rows = []
+    labels = set()
     for m in d["markets"]:
         label = m["groupItemTitle"]
-        if label not in spec["outcomes"]:
+        if label not in spec["outcomes"] or label in labels:
             raise ValueError("unreviewed count outcome")
+        labels.add(label)
         meaning = spec["outcomes"][label]
         outcomes, prices = json.loads(m["outcomes"]), json.loads(m["outcomePrices"])
         p = probability(float(prices[outcomes.index("Yes")]))
-        bid = probability(float(m.get("bestBid") or 0))
-        ask = probability(float(m.get("bestAsk") or 0))
         if m["closed"]:
+            if p not in (0., 1.):
+                raise ValueError("closed outcome is not resolved")
             bid = ask = p
+        else:
+            if m.get("bestBid") is None or m.get("bestAsk") is None:
+                raise ValueError("missing executable quote")
+            bid = probability(float(m["bestBid"]))
+            ask = probability(float(m["bestAsk"]))
         if bid > ask or ask - bid > .15:
             raise ValueError("unusable quoted spread")
+        updated = stamp(m["updatedAt"])
+        liquidity = float(m.get("liquidity") or 0)
+        if updated > at + 60 or not math.isfinite(liquidity) or liquidity < 0:
+            raise ValueError("invalid quote clock or liquidity")
         rows.append({"count": int(meaning["count"]), "tail": bool(meaning.get("tail")),
-                     "price": p, "bid": bid, "ask": ask, "updated_at": stamp(m["updatedAt"]),
-                     "liquidity": float(m.get("liquidity") or 0)})
+                     "price": p, "bid": bid, "ask": ask, "updated_at": updated, "liquidity": liquidity})
+    if labels != set(spec["outcomes"]) or len({(r["count"], r["tail"]) for r in rows}) != len(rows):
+        raise ValueError("incomplete or duplicate categorical outcomes")
+    liquidity = float(d.get("liquidity") or 0)
+    if not math.isfinite(liquidity) or liquidity < 0:
+        raise ValueError("invalid liquidity")
     total = sum(r["price"] for r in rows)
     if not .8 <= total <= 1.2:
         raise ValueError("incoherent categorical quote mass")
@@ -51,7 +66,7 @@ def parse_count_market(spec: dict, raw: object, at: float) -> Observation:
                       "start": start, "expires": end, "total": None, "private": True,
                       "population": "anonymous_expectations", "timezone": spec["timezone"],
                       "one_per_day": True, "rows": rows, "quoted_mass": total,
-                      "liquidity": float(d.get("liquidity") or 0),
+                      "liquidity": liquidity,
                       "rule_reference": spec["rule_reference"]})
     return obs
 
@@ -74,8 +89,29 @@ def day_slots(start: float, end: float, now: float, timezone: str, event_times: 
     return len(seen), intervals
 
 
+def count_rejection(poll: dict, now: float, event_times: list[float]) -> str | None:
+    if not poll["start"] <= now < poll["expires"]:
+        return "poll_outside_original_window"
+    if not math.isfinite(poll["liquidity"]) or poll["liquidity"] < 500:
+        return "insufficient_quote_liquidity"
+    happened, slots = day_slots(poll["start"], poll["expires"], now, poll["timezone"], event_times)
+    usable_mass = 0.
+    for r in poll["rows"]:
+        remaining = r["count"] - happened
+        if remaining < 0 or remaining > len(slots):
+            if r["price"] > .02:
+                return "quote_conflicts_with_event_count_or_remaining_days"
+            continue
+        if not -60 <= now - r["updated_at"] <= 3600:
+            return "quote_clock_stale_or_future"
+        if r["tail"] and remaining != len(slots):
+            return "open_count_tail_not_identified"
+        usable_mass += r["price"]
+    return None if usable_mass > 0 else "no_usable_quote_mass"
+
+
 def count_curve(poll: dict, now: float, hours: list[float], event_times: list[float]) -> dict | None:
-    if not poll["start"] <= now < poll["expires"] or poll["liquidity"] < 500:
+    if count_rejection(poll, now, event_times):
         return None
     happened, slots = day_slots(poll["start"], poll["expires"], now, poll["timezone"], event_times)
     rows = []
@@ -121,18 +157,35 @@ def count_curve(poll: dict, now: float, hours: list[float], event_times: list[fl
         bounds.append([min(corners), max(corners)] if corners else None)
     return {"probabilities": probs, "quote_sensitivity": bounds, "already_counted_days": happened,
             "remaining_days": len(slots), "quoted_mass": poll["quoted_mass"],
+            "discarded_incompatible_mass": sum(r["price"] for r in poll["rows"]) - float(prices.sum()),
             "coverage_hours": (poll["expires"] - now) / 3600,
             "terminal_probability": float(sum(r["price"] for r, _ in rows if r["count"] > happened) / prices.sum()),
             "assumption": "uniform_remaining_eligible_days_and_uniform_time_within_day"}
 
 
+def ballot_rejection(poll: dict, now: float, last_event: float) -> str | None:
+    if not poll["total"]:
+        return "empty_poll"
+    if not poll["start"] <= now < poll["expires"]:
+        return "poll_outside_original_window"
+    if poll.get("anchor_reset", poll["start"]) < last_event - 3600:
+        return "poll_precedes_latest_event"
+    if poll["kind"] == "interval_votes":
+        bins = poll["bins"]
+        if any(b["end"] is not None and b["end"] <= b["start"] for b in bins):
+            return "invalid_ballot_intervals"
+        if any(a["end"] is None or a["end"] > b["start"] for a,b in zip(bins, bins[1:])):
+            return "overlapping_ballot_intervals"
+        if not any(b["votes"] and (b["end"] is None or b["end"] > now) for b in bins):
+            return "no_remaining_ballot_mass"
+    return None
+
+
 def ballot_curve(poll: dict, now: float, hours: list[float], baseline: Survival,
                  last_event: float, config: ModelConfig) -> dict | None:
+    if ballot_rejection(poll, now, last_event):
+        return None
     n = poll["total"]
-    if not n or not poll["start"] <= now < poll["expires"]:
-        return None
-    if poll.get("anchor_reset", poll["start"]) < last_event - 3600:
-        return None
     effective_n = n / (1 + (n - 1) * config.anonymous_correlation)
     strength = effective_n / (effective_n + config.poll_prior_count)
     output = []
@@ -179,6 +232,13 @@ def ballot_curve(poll: dict, now: float, hours: list[float], baseline: Survival,
         assumption = "uniform_time_within_ballot_intervals_conditioned_on_no_event"
     else:
         return None
-    return {"probabilities": output, "votes": n, "effective_votes": effective_n,
+    terminal = {}
+    if poll["kind"] == "interval_votes":
+        remaining_hours = (poll["expires"] - now) / 3600
+        vote_mass = sum(b["votes"] * max(0., min(poll["expires"], b["end"]) - max(now, b["start"])) / (b["end"] - b["start"])
+                        for b in bins if b["end"] is not None)
+        terminal = {"coverage_hours": remaining_hours,
+                    "terminal_probability": (1 - strength) * baseline.p(remaining_hours) + strength * vote_mass / sum(remaining_mass)}
+    return {"probabilities": output, "votes": n, "effective_votes": effective_n, **terminal,
             "shrinkage_strength": strength, "assumption": assumption,
             "round_id": poll["id"], "deadline": poll["expires"]}

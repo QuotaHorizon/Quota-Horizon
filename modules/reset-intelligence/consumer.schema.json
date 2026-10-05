@@ -31,6 +31,7 @@
         "sources": {"type": "array", "items": {"type": "object"}},
         "source_health": {"type": "array", "items": {"type": "object"}},
         "community": {"type": ["object", "null"]},
+        "changes": {"type": ["object", "null"]},
         "statements": {"type": "array", "items": {"type": "object"}}
       }
     },

@@ -20,9 +20,12 @@ class ModelConfig:
     anonymous_correlation: float = .1
     stacking_regularization: float = .02
     minimum_training_windows: int = 30
+    apply_learned_weights: bool = False
     seed: int = 1703
 
     def __post_init__(self):
+        if not isinstance(self.apply_learned_weights, bool):
+            raise ValueError("apply_learned_weights must be boolean")
         if not self.boundaries or self.boundaries[0] != 0 or any(a >= b for a, b in zip(self.boundaries, self.boundaries[1:])):
             raise ValueError("hazard boundaries must increase from zero")
         if not all(math.isfinite(x) and x > 0 for x in (self.prior_exposure, self.prior_rate, self.half_life_days, self.poll_prior_count)):

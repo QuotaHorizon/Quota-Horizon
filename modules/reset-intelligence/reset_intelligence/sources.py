@@ -22,8 +22,15 @@ CATALOG = [
     {"id": "date_poll", "adapter": "date_poll", "url": "https://codex-reset.com/api/reset-poll"},
     {"id": "community_poll", "adapter": "community_poll", "url": "https://nextreset.ai/api/community"},
     {"id": "statements", "adapter": "statements", "url": "https://codex-reset.pro/api/reset-feed"},
+    {"id": "tibo_posts", "adapter": "tibo_posts", "url": "https://codex-reset.com/api/feed?locale=zh"},
 ]
 USER_AGENT = "ResetIntelligence/0.1 (+https://github.com/QuotaHorizon/Quota-Horizon)"
+
+
+def statement_relevance(text):
+    if re.search(r"\beither\b.{0,350}\bor\b.{0,60}\b(?:full |global )?reset\b", text, re.I | re.S):
+        return "conditional_pledge"
+    return "reset_related" if re.search(r"\b(?:resets?|resetting|banked|quota|usage limits?)\b", text, re.I) else "context"
 
 
 def get_json(url: str, headers: dict | None = None) -> object:
@@ -76,6 +83,9 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
         if not obs.complete:
             obs.issues.append("truncated_ledger")
         for row in d["data"]:
+            if statement_relevance(row["text"]) == "conditional_pledge" and not re.search(r"resets? all propagated|(?:have|has|we.ve) (?:now )?reset|limits (?:have been|are) reset|(?:have )?added a banked reset", row["text"], re.I):
+                obs.facts.append({"kind": "excluded_history_record", "id": str(row["id"]), "reason": "conditional_pledge"})
+                continue
             kind = {"regular": "automatic", "banked": "banked"}.get(row["reset_type"])
             if kind is None:
                 obs.issues.append("unknown_event_kind")
@@ -91,7 +101,8 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
                 kind, basis = "banked", "explicit_grant_in_primary_text"
             obs.events.append(Event(str(row["id"]), event_at, at, kind,
                                     [canonical_url(row["source"]["url"])],
-                                    "observed" if row["source"]["type"] == "observed" else "announcement_proxy", basis))
+                                    "observed" if row["source"]["type"] == "observed" else "announcement_proxy", basis,
+                                    "targeted" if re.search(r"pro\s*500|specific accounts|affected users|everyone who.{0,80}reset|reset to \d+[km]? users|部分.*用户|仅.*用户|非全局", row["text"], re.I) else "unspecified"))
     elif adapter == "codex_reset":
         ps = d["probabilities"]
         c = curve(AUTOMATIC, d["updated_at"], [(24, ps["raw_24h"]), (48, ps["raw_48h"])],
@@ -164,6 +175,22 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
         r = d.get("dates", {}).get("round")
         if r:
             obs.facts.append({"kind": "conditional_date_poll", "source": name, "round": r})
+    elif adapter == "tibo_posts":
+        obs.generated_at = stamp(d["fetched_at"])
+        seen = set()
+        for p in [*d["tweets"], *d.get("radar_context", [])]:
+            identifier = str(p.get("id", ""))
+            if not identifier.isdigit() or identifier in seen or not p.get("text"):
+                continue
+            url = f"https://x.com/thsottiaux/status/{identifier}"
+            if p.get("url") != url:
+                continue
+            seen.add(identifier)
+            obs.facts.append({"kind": "statement", "id": identifier, "at": stamp(p["at"]), "url": url,
+                              "original": p["text"], "translation_zh": p.get("localized_text") if p.get("translation_status") == "translated" else None,
+                              "stage": "conditional" if statement_relevance(p["text"]) == "conditional_pledge" else None,
+                              "event_type": None, "context": None, "source": name,
+                              "relevance": statement_relevance(p["text"])})
     elif adapter == "statements":
         obs.generated_at = stamp(d["generatedAt"])
         for p in d["posts"]:
@@ -172,7 +199,8 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
                                   "url": canonical_url(p["url"]), "original": p["original"],
                                   "translation_zh": p.get("translation"), "stage": p.get("stage"),
                                   "event_type": p.get("eventType"), "scope_note": p.get("reason"),
-                                  "context": p.get("context"), "source": name})
+                                  "context": p.get("context"), "source": name,
+                                  "relevance": statement_relevance(p["original"])})
     elif adapter == "count_market":
         from .community import parse_count_market
         return parse_count_market(spec, raw, at)

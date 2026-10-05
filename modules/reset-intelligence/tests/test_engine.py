@@ -270,9 +270,14 @@ class LedgerTests(unittest.TestCase):
                      {"id": "votes", "probabilities": [.05 + .9 * y] * 72}]}}
                 for y in [0, 1] * 20]
         with patch("reset_intelligence.pipeline.matured", return_value=rows):
-            f = forecast(self.store, NOW, RELIEF)
+            f = forecast(self.store, NOW, RELIEF, ModelConfig(apply_learned_weights=True))
         self.assertEqual(f["training"]["state"], "learned")
         self.assertGreater(f["training"]["weights"]["community"], .9)
+        with patch("reset_intelligence.pipeline.matured", return_value=rows):
+            review = forecast(self.store, NOW, RELIEF)
+        self.assertEqual(review["training"]["weights"]["community"], .5)
+        self.assertGreater(review["training"]["candidate_weights"]["community"], .9)
+        self.assertFalse(review["training"]["apply_learned_weights"])
         with patch("reset_intelligence.pipeline.matured", return_value=rows[:10]):
             f = forecast(self.store, NOW, RELIEF)
         self.assertEqual(f["training"]["state"], "cold_start_prior")

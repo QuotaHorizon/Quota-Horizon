@@ -20,19 +20,42 @@ See [CPA bridge](CPA_BRIDGE.en.md) for environment variables and response format
 
 ## Reset radar
 
-The overview shows Horizon’s experimental 24 / 48-hour estimates, source values and community contributions side by side.
-An active explicit announcement takes precedence at 100% for each covered window; the updates section tracks its timing, covered accounts and reported completion.
-Original estimates from [Codex Reset](https://codex-reset.com/), [Codex Reset Monitor](https://codexreset.org/) and [NextReset](https://nextreset.ai/) remain visible.
-Expand “Evidence & source review” to inspect weights, shared original posts, update times and reasons for excluding other sources. Stale or failed reviewed sources stay visible and are excluded from the combined estimate.
+The overview shows the next 24 / 48-hour outlook side by side. An active explicit announcement takes
+precedence at 100% for each covered window, while retaining model estimates, scheduled times and subsequent completion reports.
 
-One chart uses colors for Horizon and each source, solid lines for 24h, and dashed lines for 48h. The x-axis uses forecast generation time, and the legend shows each series’ first record; repeated reads retain one point. The chart initially fits the local recording period, with a full 24-hour view including Monitor’s earlier history available. Hover for generation time, local collection time and probability.
-The community panel shows the past 24 hours of public GitHub and Hacker News samples, including replies in active reset discussions, and separates predictions, wishes and reported experiences.
-Both automatic-reset and credit-issuance expectations inform sentiment. Unexpired, explicit predictions contribute after author, duplicate-text, shared-evidence and age adjustments. Each horizon shows its effective sample, contribution and trend; “Views, evidence and sampling” lists statements and collection status.
-Quantified community outlook also shows Codex Reset’s timing-vote distribution and NextReset’s daily probability-poll means and past rounds. Charts retain the original deadlines, vote counts and sources. Votes inform only horizons with an identifiable direction, and anonymous ballots share a contribution cap.
-WeChat, Reddit and Linux.do are not connected. Missing directional predictions appear as `—`.
-Tibo’s lead statement is fully visible by default, with English and available translations together in the Chinese interface. “Other posts and replies” includes unrelated activity: filter replies, open full text and available parent context, or visit X for more interactions.
-“How the estimate is calculated” explains the current experimental weights and community adjustment.
-Event history combines records from Codex Reset and [QuotaResets](https://quotaresets.com/); service updates come from [OpenAI Status](https://status.openai.com/).
+The macOS installer includes the [independent forecasting and evaluation modules](DEVELOPMENT.en.md#connect-the-desktop-radar).
+Opening the app starts background collection; no separate Python installation is needed.
+The main estimate covers a reset or a newly issued reset credit, with automatic-reset probabilities alongside it.
+The next-72-hour chart compares the combined estimate, community aggregate and historical baseline. Source comparisons
+retain each radar’s published values, event scope and issue time. Expand model inputs to see aligned 24h / 48h values
+and each source’s supported horizon. Sources awaiting quality or scope review remain in the details. Expired results
+retain their previous values and timestamps.
 
-Reset history uses a three-month calendar to distinguish quota resets, reset-card grants and announcements. Select a date to see event times in your computer's timezone.
-A small dot marks new content, which is marked read when viewed; “Mark all read” is also available. Each source's name and update time accompany its content, and failed connections retain the previous result.
+The community panel shows its aggregate probability, actual group weight and the percentage-point difference between
+the full model and its community-removed counterpart. Original community ballots preserve Codex Reset’s timing
+histogram and NextReset’s daily probability votes, deadlines and counts. The history chart shows Horizon and all
+sources together: solid lines for 24h, dashed for 48h. It records on a shared clock from the evaluator’s actual receipt
+of forecasts and leaves missing windows blank. Hover for time and probability.
+
+“Why the outlook changed” compares forecasts actually issued by the same model revision, with 24h / 48h changes
+and contributions from sources, community inputs and event-scope adjustments. Expand it for before-and-after
+inputs, weights and published source values. New revisions first accumulate a comparison.
+
+“Do the predictions hold up?” shows frozen records, settlement progress and evidence of actual resets and credit grants.
+After windows mature with sufficient outcome coverage, Brier scores, log loss, calibration, alert quality and matched
+comparisons appear automatically; lower loss scores are better. A new evaluator first shows collection progress.
+Corrections to event evidence update the settlement.
+Expand the score count to inspect settled windows, headline scores and rolling checks for 6h / 12h / 24h / 48h.
+Sources are scored separately on shared windows; score counts and actual reset-event counts are shown separately.
+Mature windows with gaps or conflicts in evidence show as awaiting sufficient evidence.
+Horizon periodically checks independent processes and restarts exited workers while the app runs.
+After a computer restart, opening Horizon restores collection.
+
+Installations without a connected independent module continue using the built-in radar, which combines Codex Reset,
+Reset Monitor, NextReset, public discussions and polls, with source status and sampling details.
+Tibo’s lead statement is fully visible; the Chinese interface includes the original English and available translation.
+“Other posts and replies” includes unrelated activity: filter replies, open full text and available context, or visit X for more interactions.
+Conditional commitments such as a daily improvement or full reset stay prominent during their stated period, with the conditions and duration preserved.
+
+Reset history uses a three-month calendar to distinguish quota resets, reset-card grants and announcements. Select a date to see event times in your computer’s timezone.
+A small dot marks new content, which is marked read when viewed; “Mark all read” is also available. Each source’s name and update time accompany its content, and failed connections retain the previous result.

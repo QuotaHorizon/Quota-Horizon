@@ -14,7 +14,7 @@ from .store import Store
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Independent real-time forecast evaluation")
-    parser.add_argument("command", choices=("run", "watch", "start", "stop", "status", "replay"))
+    parser.add_argument("command", choices=("run", "watch", "start", "stop", "status", "replay", "diagnose"))
     parser.add_argument("--db", required=True, help="Observer-owned SQLite database")
     parser.add_argument("--producer-db", help="Optional read-only reset-intelligence database")
     parser.add_argument("--ingest", help="Generic Forecast JSONL input; first arrival is stamped here")
@@ -22,10 +22,29 @@ def main(argv=None):
     parser.add_argument("--output", help="Atomic machine-readable report")
     parser.add_argument("--html", help="Self-contained local report viewer")
     parser.add_argument("--as-of", help="Replay the report actually saved by this ISO-8601 time")
+    parser.add_argument("--origin", help="Frozen UTC window origin for diagnose")
+    parser.add_argument("--hours", type=int, choices=(6, 12, 24, 48), help="Window length for diagnose")
     args = parser.parse_args(argv)
     if args.as_of and args.command != "replay":
         parser.error("--as-of applies only to replay")
-    if args.command == "status":
+    if args.command == "diagnose":
+        if not args.origin or not args.hours or not Path(args.db).is_file():
+            parser.error("diagnose requires --origin, --hours and an existing database")
+        from .contracts import Policy, iso
+        from .diagnostics import coverage_details
+        store = Store(args.db, read_only=True)
+        try:
+            saved = store.get("policy") or {}
+            policy = Policy(**{k: v for k, v in saved.items() if k != "hash"})
+            origin, now = stamp(args.origin), time.time()
+            result = {"origin": iso(origin), "hours": args.hours,
+                      "coverage": coverage_details(store, origin, origin + args.hours * 3600, now, policy),
+                      "policy_hash": policy.hash}
+        finally:
+            store.close()
+        if args.output:
+            atomic_write(args.output, json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+    elif args.command == "status":
         result = status(args.db)
     elif args.command == "stop":
         if Path(args.db).is_file() and running(args.db):

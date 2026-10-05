@@ -3,23 +3,25 @@ import { ChevronDown, MessageCircle } from "lucide-react";
 import type { Language } from "../../i18n";
 import { EvidenceLink } from "./ArchiveView";
 import { publicEvidenceTime } from "./presentation";
-import { resetRelated, selectBriefingPost } from "./resetBriefingModel";
+import { conditionalResetPledge, resetRelated, selectBriefingPost } from "./resetBriefingModel";
 import { PostConversation } from "./ResetPosts";
 import type { PublicReadReceipt, PublicResetTimeline } from "./types";
 import type { UpcomingResetNotice } from "./upcomingResetModel";
 import styles from "./resetBriefing.module.less";
+import { combinedStatements } from "./quantitativeModel";
 
 export function TiboBriefing({ timeline, language, notice, now, failed, onOpenSource, onRead }: {
   timeline: PublicResetTimeline; language: Language; notice: UpcomingResetNotice | null; now: number; failed?: boolean;
   onOpenSource?: (url: string) => void; onRead?: (receipts: PublicReadReceipt[]) => void;
 }) {
   const zh = language === "zh";
-  const posts = [...(timeline.insights?.posts?.posts ?? [])].sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
+  const posts = combinedStatements(timeline);
   const lead = selectBriefingPost(posts, notice) ?? posts[0];
+  const pledge = posts.find(p => { const v = conditionalResetPledge(p); return v && v.start <= now && v.end > now; });
   const [scope, setScope] = useState<"all" | "related" | "replies">("all");
   const [selected, setSelected] = useState<string | null>(null);
   const [limit, setLimit] = useState(4);
-  const other = posts.filter(p => p.id !== lead?.id && (scope === "all" || (scope === "related" ? resetRelated(p) : p.isReply || /^@\w+/u.test(p.text))));
+  const other = posts.filter(p => p.id !== lead?.id && p.id !== pledge?.id && (scope === "all" || (scope === "related" ? resetRelated(p) : p.isReply || /^@\w+/u.test(p.text))));
   const source = timeline.sources.find(s => s.sourceId === "codex_reset_posts");
   const fetched = timeline.insights?.posts?.fetchedAt;
   const stale = failed || !!source?.issue || !fetched || now - Date.parse(fetched) >= 30 * 60_000;
@@ -30,6 +32,7 @@ export function TiboBriefing({ timeline, language, notice, now, failed, onOpenSo
         <EvidenceLink url="https://x.com/thsottiaux/with_replies" label={zh ? "X 上的全部回复" : "All replies on X"} onOpen={onOpenSource} /></div>
     </div>
     {stale && <p className={styles.correction}>{zh ? "发言来源待更新，保留完整正文与原发布时间。" : "Post source update due; complete text and original publication times are retained."}</p>}
+    {pledge && pledge.id !== lead?.id && <div className={styles.pledge}><div className={styles.sectionLabel}>{zh ? "持续关注的重置承诺" : "Ongoing reset commitment"}</div><PostConversation post={pledge} timeline={timeline} language={language} onOpenSource={onOpenSource} onRead={onRead} /></div>}
     <div className={styles.tiboGrid}>
       <div className={styles.tiboLead}><div className={styles.sectionLabel}>{zh ? "重置最新进展" : "Latest reset development"}</div>
         {lead ? <PostConversation key={lead.id} post={lead} timeline={timeline} language={language} onOpenSource={onOpenSource} onRead={onRead} />
@@ -46,6 +49,6 @@ export function TiboBriefing({ timeline, language, notice, now, failed, onOpenSo
       </div>
     </div>
     {active && <div className={styles.selectedConversation}><PostConversation key={active.id} post={active} timeline={timeline} language={language} onOpenSource={onOpenSource} onRead={onRead} /></div>}
-    <p className={styles.tiboFootnote}>{zh ? "Codex Reset 收录 · 点击任一动态阅读完整原文、译文及已取得的父帖；X 入口可查看完整对话和更多互动。" : "Collected by Codex Reset. Select a post for its full text and available parent context; use X for the complete conversation and more interactions."}</p>
+    <p className={styles.tiboFootnote}>{timeline.quantitative?.connected ? (zh ? "Codex Reset / Reset Monitor 收录 · 同一原帖合并；点击动态阅读完整原文、已有译文和上下文。" : "Collected by Codex Reset / Reset Monitor; matching posts are merged. Select a post for its full text and available context.") : (zh ? "Codex Reset 收录 · 点击任一动态阅读完整原文、译文及已取得的父帖；X 入口可查看完整对话和更多互动。" : "Collected by Codex Reset. Select a post for its full text and available parent context; use X for the complete conversation and more interactions.")}</p>
   </article>;
 }

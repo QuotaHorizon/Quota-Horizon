@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import re
 import time
+import zlib
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -19,24 +20,53 @@ FEEDS = {
     "completion_feed": "https://codex-reset.pro/api/reset-feed",
     "public_catalogue": "https://codex-resets.com/api/v1/resets?limit=100",
 }
+INTERPRETATION_VERSION = "event-scoped-claims-v3"
 
 
 def population(text):
-    if re.search(r"pro\s*500|specific accounts|affected users|not all|部分.*用户|仅.*用户|非全局", text, re.I):
+    text = event_clauses(text)
+    if re.search(r"pro\s*500|specific accounts|affected users|not all|everyone who|(?:less than|under) \d+%|reset to \d+[km]? users|部分.*用户|仅.*用户|非全局", text, re.I):
         return "targeted"
-    if re.search(r"\ball\b|everyone|paid (?:users|subscriptions|accounts)|全[部体]|所有|广泛|全球", text, re.I):
+    if re.search(r"\ball\b|everyone|\bglobal\b|(?:usage|rate) limits? (?:across|for) (?:Codex|ChatGPT Work)|paid (?:users|subscriptions|accounts)|全[部体]|所有|广泛|全球", text, re.I):
         return "broad"
     return "unspecified"
 
 
-def text_stage(text):
-    if re.search(r"(?:will|we.ll|going to).{0,45}(?:reset|credit)|reset.{0,25}(?:tomorrow|later today)", text, re.I | re.S):
+def clause_stage(text):
+    if re.search(r"(?:will|we.ll|going to).{0,80}(?:reset|credit)|reset.{0,25}(?:tomorrow|later today)", text, re.I):
         return "announced"
-    if re.search(r"resets? all propagated|all (?:limits )?reset|(?:have|has|we.ve) (?:now )?reset|limits (?:have been|are) reset|(?:have )?added a banked reset|reset was distributed", text, re.I):
+    if re.search(r"resets? all propagated|all (?:limits )?reset|(?:have|has|we.ve) (?:now )?reset|limits (?:have been|are) reset|(?:have )?added a banked reset|reset was distributed|granted a banked reset", text, re.I):
         return "completed"
     if re.search(r"(?:are|we.re) (?:resetting|reseting|loading)|reset.{0,20}rolling out", text, re.I):
         return "started"
-    return "announced"
+    return None
+
+
+def event_clauses(text):
+    """A future global grant cannot widen the scope of an earlier compensation."""
+    clauses = [s for s in re.split(r"(?<=[.!?])\s+|\n+", text) if re.search(r"reset|credit|重置|额度", s, re.I)]
+    completed = [s for s in clauses if clause_stage(s) == "completed"]
+    current = [s for s in clauses if clause_stage(s) != "announced"]
+    return " ".join(completed or current or clauses) or text
+
+
+def text_stage(text):
+    clauses = re.split(r"(?<=[.!?])\s+|\n+", text)
+    conditional = lambda s: re.search(r"\beither\b.{0,350}\bor\b.{0,60}\b(?:full |global )?reset\b", s, re.I)
+    stages = {clause_stage(s) for s in clauses if not conditional(s)}
+    if any(conditional(s) for s in clauses) and not stages.intersection(("completed", "started")):
+        return "conditional"
+    return next((s for s in ("completed", "started", "announced") if s in stages), "announced")
+
+
+def reported_stage(stage, text):
+    if text_stage(text) == "conditional":
+        return "conditional"
+    # Upstream "confirmed" can mean issuing, rather than a completed grant.
+    # Only explicit contrary wording overrides a completed catalogue record.
+    if stage == "completed" and any(clause_stage(s) for s in re.split(r"(?<=[.!?])\s+|\n+", text)):
+        return text_stage(text)
+    return stage
 
 
 def parse(provider, raw, now):
@@ -52,8 +82,7 @@ def parse(provider, raw, now):
             stage = "completed" if r.get("state") == "confirmed" and r.get("confirmedAt") and r.get("countsTowardReset") is not False else "announced"
             if r.get("state") in ("retracted", "cancelled", "disputed"):
                 stage = r["state"]
-            if stage == "completed" and not confirmation and text_stage(text) == "announced" and re.search(r"\bwill\b|tomorrow", text, re.I):
-                stage = "announced"
+            stage = reported_stage(stage, text)
             claims.append(Claim(provider, r["slug"], ["quota:" + r.get("resetId", r["slug"]), *refs], refs,
                                 "banked" if r["type"] == "banked_reset" else "automatic", stage,
                                 population(r.get("cohort", "") + " " + text), stamp(r["announcedAt"]),
@@ -69,12 +98,11 @@ def parse(provider, raw, now):
                 continue
             stage = {"scheduled": "announced", "completed": "completed", "started": "started",
                      "cancelled": "cancelled", "retracted": "retracted"}.get(r.get("stage"), "announced")
-            if stage == "completed" and text_stage(r["original"]) == "announced" and re.search(r"\bwill\b|tomorrow", r["original"], re.I):
-                stage = "announced"
+            stage = reported_stage(stage, r["original"])
             ref = url_key(r["url"])
             claims.append(Claim(provider, str(r["id"]), [ref], [ref],
                                 "banked" if r["eventType"] == "reset_card" else "automatic", stage,
-                                population(r["original"] + " " + r.get("reason", "")), stamp(r["at"]),
+                                population(r["original"]), stamp(r["at"]),
                                 stamp(r["at"]) if stage == "completed" else None, now, r["original"],
                                 "official_relay" if r.get("handle") in ("thsottiaux", "sama", "OpenAI") else "community_report"))
         healthy = 0 <= now - generated <= 3600
@@ -117,9 +145,22 @@ def fetch(provider):
         return provider, time.time(), None, False, None, raw, error
 
 
+def retry_delay(store, provider, now, policy):
+    rows = list(store.db.execute("SELECT error FROM observations WHERE provider=? AND observed_at<=? ORDER BY observed_at DESC,id DESC LIMIT 5", (provider, now)))
+    if not rows or not rows[0]["error"] or rows[0]["error"] in ("http_401", "http_403", "http_404", "http_429"):
+        return policy.collection_seconds
+    failures = 0
+    for row in rows:
+        if not row["error"]:
+            break
+        failures += 1
+    return min(policy.collection_seconds, 60 * 2 ** (failures - 1))
+
+
 def collect(store, policy):
-    last = {o["provider"]: o["observed_at"] for o in store.observations(time.time())}
-    due = [p for p in FEEDS if time.time() - last.get(p, 0) >= policy.collection_seconds]
+    now = time.time()
+    last = {o["provider"]: o["observed_at"] for o in store.observations(now)}
+    due = [p for p in FEEDS if now - last.get(p, 0) >= retry_delay(store, p, now, policy)]
     result = []
     with ThreadPoolExecutor(max_workers=3) as pool:
         for future in as_completed([pool.submit(fetch, p) for p in due]):
@@ -127,6 +168,24 @@ def collect(store, policy):
             store.observation(*values)
             result.append({"provider": values[0], "healthy": values[3], "claims": len(values[4] or []), "error": values[-1]})
     return result
+
+
+def reinterpret_latest(store, now):
+    """Apply parser fixes to saved evidence with today's knowledge timestamp."""
+    if store.get("claim_interpretation") == INTERPRETATION_VERSION:
+        return
+    with store.db:
+        for row in store.observations(now, successful=True):
+            body = store.db.execute("SELECT body FROM payloads WHERE hash=?", (row["payload_hash"],)).fetchone()
+            if row["provider"] not in FEEDS or body is None:
+                continue
+            try:
+                _, _, claims = parse(row["provider"], json.loads(zlib.decompress(body[0])), row["observed_at"])
+            except (KeyError, ValueError, TypeError, AttributeError):
+                continue
+            store.record_claims([{**c, "observed_at": now} for c in claims], now)
+    store.put("claim_interpretation", INTERPRETATION_VERSION)
+    store.runtime_event(now, {"kind": "evidence_reinterpretation", "at": now, "version": INTERPRETATION_VERSION})
 
 
 def reconcile(store, now, policy):
@@ -149,6 +208,8 @@ def reconcile(store, now, policy):
         status, reason = "pending", "no_completion_report"
         if any(c["stage"] in ("retracted", "cancelled", "disputed") for c in group):
             status, reason = "disputed", "conflicting_or_retracted_report"
+        elif not completed and any(c["stage"] == "conditional" for c in group):
+            reason = "conditional_pledge"
         elif not completed and "targeted" in populations:
             status, reason = "targeted", "limited_population"
         elif completed:
@@ -164,6 +225,8 @@ def reconcile(store, now, policy):
                 status, reason = "confirmed", "public_completion_notice"
             elif len({r for c in completed for r in c["references"]}) >= 2:
                 status, reason = "confirmed", "corroborated_public_report"
+            else:
+                reason = "insufficient_primary_confirmation"
         events.append({"id": digest(refs), "status": status, "reason": reason,
                        "kind": next(iter(kinds)) if len(kinds) == 1 else "unknown",
                        "from": min(times) if times else None, "to": max(times) if times else None,
@@ -177,20 +240,5 @@ def reconcile(store, now, policy):
 
 
 def coverage(store, start, end, known_by, policy):
-    if end > known_by:
-        return False
-    healthy_providers = 0
-    gap = policy.maximum_coverage_gap_seconds
-    for provider in FEEDS:
-        rows = list(store.db.execute("SELECT observed_at,healthy FROM observations WHERE provider=? AND observed_at BETWEEN ? AND ? ORDER BY observed_at,id",
-                                    (provider, start - gap, min(end + gap, known_by))))
-        good = [r["observed_at"] for r in rows if r["healthy"]]
-        if not good or good[0] > start or good[-1] < end:
-            continue
-        if any(b - a > gap for a, b in zip(good, good[1:])):
-            continue
-        # Failed attempts are not silently erased by later successful coverage.
-        if any(not r["healthy"] and start <= r["observed_at"] <= end for r in rows):
-            continue
-        healthy_providers += 1
-    return healthy_providers >= policy.minimum_coverage_providers
+    from .diagnostics import coverage_details
+    return coverage_details(store, start, end, known_by, policy)["covered"]

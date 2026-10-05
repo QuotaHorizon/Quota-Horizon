@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { desktopSigningPlan } from "./desktop-signing.mjs";
+import { bundleRuntime } from "./bundle-reset-runtime.mjs";
 
 // Modified by the QuotaHorizon project from Codex Switch v1.3.5.
 
@@ -27,6 +28,13 @@ const buildEnvironment = { ...process.env, VITE_HORIZON_SIGNING_MODE: signing.mo
 
 if (!existsSync(tauriCli)) {
   fail("Tauri CLI is unavailable. Run `npm ci` or `npm install` first.");
+}
+
+const requestedTargetIndex = tauriArgs.indexOf("--target");
+const requestedTarget = requestedTargetIndex >= 0 ? tauriArgs[requestedTargetIndex + 1] : null;
+if (process.platform === "darwin" && (!requestedTarget || requestedTarget === "aarch64-apple-darwin")) {
+  const runtime = bundleRuntime(process.env.QUOTAHORIZON_PYTHON);
+  tauriArgs.push("--config", JSON.stringify({ bundle: { resources: { [`${runtime}/`]: "reset-runtime/" } } }));
 }
 
 // A normal `cargo build --release` and `tauri build` use different Tauri

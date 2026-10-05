@@ -72,9 +72,10 @@ class Event:
     references: list[str]
     precision: str = "announcement_proxy"
     classification_basis: str = "source_label"
+    population: str = "unspecified"
 
     def matches(self, target: str) -> bool:
-        return self.kind == "automatic" or (target == RELIEF and self.kind == "banked")
+        return self.population != "targeted" and (self.kind == "automatic" or (target == RELIEF and self.kind == "banked"))
 
 
 @dataclass

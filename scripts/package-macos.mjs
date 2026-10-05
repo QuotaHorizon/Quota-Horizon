@@ -8,6 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyRuntime, moduleDigest } from "./bundle-reset-runtime.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const target = "aarch64-apple-darwin";
@@ -86,6 +87,8 @@ function run(command, args, cwd = root) {
 }
 
 function inspectBundle(app, config) {
+  const runtime = verifyRuntime(join(app, "Contents/Resources/reset-runtime"));
+  assert.equal(runtime.modules, moduleDigest(), "Bundled reset modules differ from source");
   const info = JSON.parse(execFileSync("/usr/bin/plutil", [
     "-convert", "json", "-o", "-", join(app, "Contents", "Info.plist"),
   ], { encoding: "utf8" }));

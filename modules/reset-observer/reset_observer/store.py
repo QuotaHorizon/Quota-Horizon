@@ -51,10 +51,20 @@ class Store:
           label INTEGER,status TEXT NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS settlements_trial ON settlements(trial,at);
         CREATE TABLE IF NOT EXISTS reports(id INTEGER PRIMARY KEY,at REAL NOT NULL,payload BLOB NOT NULL);
+        CREATE TABLE IF NOT EXISTS runtime_events(id INTEGER PRIMARY KEY,at REAL NOT NULL,payload TEXT NOT NULL);
         """)
 
     def close(self):
         self.db.close()
+
+    def runtime_event(self, now, payload):
+        with self.db:
+            self.db.execute("INSERT INTO runtime_events(at,payload) VALUES (?,?)", (now, packed(payload)))
+
+    def runtime_events(self, now):
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_events'").fetchone():
+            return []
+        return [json.loads(r[0]) for r in self.db.execute("SELECT payload FROM runtime_events WHERE at<=? ORDER BY at,id", (now,))]
 
     def get(self, key):
         row = self.db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
@@ -71,13 +81,17 @@ class Store:
                 self.db.execute("INSERT OR IGNORE INTO payloads VALUES (?,?)", (h, zlib.compress(packed(raw).encode())))
             self.db.execute("INSERT INTO observations(provider,observed_at,generated_at,healthy,claims,payload_hash,error) VALUES (?,?,?,?,?,?,?)",
                             (provider, now, generated, int(healthy), packed(claims) if claims is not None else None, h, error))
-            for claim in claims or []:
-                signature = digest({k: v for k, v in claim.items() if k != "observed_at"})
-                last = self.db.execute("SELECT signature FROM claims WHERE provider=? AND record=? ORDER BY observed_at DESC,id DESC LIMIT 1",
-                                       (provider, claim["record"])).fetchone()
-                if last is None or last[0] != signature:
-                    self.db.execute("INSERT INTO claims(provider,record,observed_at,signature,payload) VALUES (?,?,?,?,?)",
-                                    (provider, claim["record"], now, signature, packed(claim)))
+            self.record_claims(claims or [], now)
+
+    def record_claims(self, claims, now):
+        # Reinterpretation appends knowledge revisions, never monitoring samples.
+        for claim in claims:
+            signature = digest({k: v for k, v in claim.items() if k != "observed_at"})
+            last = self.db.execute("SELECT signature FROM claims WHERE provider=? AND record=? ORDER BY observed_at DESC,id DESC LIMIT 1",
+                                   (claim["provider"], claim["record"])).fetchone()
+            if last is None or last[0] != signature:
+                self.db.execute("INSERT INTO claims(provider,record,observed_at,signature,payload) VALUES (?,?,?,?,?)",
+                                (claim["provider"], claim["record"], now, signature, packed(claim)))
 
     def claims(self, now):
         # A feed dropping an old item is not a retraction. Explicit revisions

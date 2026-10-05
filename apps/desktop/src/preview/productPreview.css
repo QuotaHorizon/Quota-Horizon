@@ -8,4 +8,4 @@ body { min-width: 0; margin: 0; }
 .product-preview--menu .preview-heading { display: block; margin-bottom: 18px; }
 .product-preview--menu .preview-heading p { max-width: none; }
 .preview-popover { width: 388px; height: 452px; margin: 0 auto; }
-.product-preview--radar { max-width: 1050px; }
+.product-preview--radar { max-width: none; container: radar / inline-size; }

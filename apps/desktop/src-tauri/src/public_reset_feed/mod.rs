@@ -86,6 +86,7 @@ pub(crate) struct PublicResetTimeline {
     insights: insights::PublicInsights,
     changes: changes::PublicRevisionHistory,
     radar: radar::RadarView,
+    quantitative: quantitative::View,
 }
 
 struct StoredLedger {
@@ -308,6 +309,7 @@ fn load_timeline(path: &Path, at: &UtcTimestamp) -> Result<PublicResetTimeline, 
             insights: insights::PublicInsights::default(),
             changes: changes::PublicRevisionHistory::default(),
             radar: radar::RadarView::default(),
+            quantitative: quantitative::load(path.parent().unwrap_or(Path::new(".")), at),
         });
     }
     let mut conn = open_store(path, false)?;
@@ -348,6 +350,7 @@ fn load_timeline(path: &Path, at: &UtcTimestamp) -> Result<PublicResetTimeline, 
         insights: insights::read_cache(&tx)?,
         changes,
         radar: radar::load(&tx, at)?,
+        quantitative: quantitative::load(path.parent().unwrap_or(Path::new(".")), at),
     })
 }
 
@@ -355,6 +358,7 @@ include!("collector.rs");
 mod background;
 mod changes;
 pub(crate) mod insights;
+mod quantitative;
 mod radar;
 pub(crate) mod read_state;
 pub(crate) use background::{setup, shutdown};

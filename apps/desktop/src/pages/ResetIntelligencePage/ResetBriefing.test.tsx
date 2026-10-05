@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ResetBriefing } from "./ResetBriefing";
-import { forecastPresentation, postReading, resetRelated, selectBriefingPost } from "./resetBriefingModel";
+import { conditionalResetPledge, forecastPresentation, postReading, resetRelated, selectBriefingPost } from "./resetBriefingModel";
 import { ResetNoticeChip } from "../../components/CapacityPopover/ResetNoticeChip";
 import { upcomingResetNotices } from "./upcomingResetModel";
 import type { PublicInsights, PublicPost, PublicResetTimeline } from "./types";
@@ -47,6 +47,16 @@ function announcedTimeline(target = "2026-09-23T10:00:00Z"): PublicResetTimeline
 const render = (value = timeline()) => renderToStaticMarkup(<ResetBriefing timeline={value} language="zh" now={now} />);
 
 describe("attributed reset briefing", () => {
+  it("keeps daily conditional reset pledges prominent and recognizes plural resets", () => {
+    const p: PublicPost = {...post,kind:"context",isReply:false,parent:null,text:"For the next 28 days, each day we either ship improvements or ship a full reset."};
+    expect(conditionalResetPledge(p)?.days).toBe(28);
+    expect(resetRelated(p)).toBe(true);
+    expect(postReading(p,"zh").title).toBe("28 天：每日改进或完整重置");
+    expect(postReading(p,"en").title).toContain("daily improvement or full reset");
+    expect(resetRelated({...p,text:"More resets coming next week."})).toBe(true);
+    expect(resetRelated({...p,kind:"notice",text:"I challenge you to do the same."})).toBe(false);
+    expect(conditionalResetPledge({...p,text:"A full reset arrives tomorrow."})).toBeNull();
+  });
   it("leads with the completed reset and its new report after an announcement is fulfilled", () => {
     const data = announcedTimeline();
     data.entries[0].signal.semantics = "confirmed_reset";

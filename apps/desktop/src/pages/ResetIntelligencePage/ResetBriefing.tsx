@@ -9,6 +9,7 @@ import { PostConversation, PostUpdate } from "./ResetPosts";
 import shared from "./index.module.less";
 import styles from "./resetBriefing.module.less";
 import { RadarOverview } from "./RadarOverview";
+import { QuantitativeOverview } from "./QuantitativeOverview";
 
 function ProbabilityBar({ label, value, muted = false }: { label: string; value: number | null; muted?: boolean }) {
   return <div className={styles.barRow} data-muted={muted || undefined}>
@@ -22,7 +23,9 @@ type BriefingProps = {
   onRead?: (receipts: PublicReadReceipt[]) => void;
 };
 export function ResetBriefing(props: BriefingProps) {
-  return props.timeline?.radar?.updatedAt
+  return props.timeline?.quantitative?.connected
+    ? <QuantitativeOverview {...props} timeline={props.timeline} />
+    : props.timeline?.radar?.updatedAt
     ? <RadarOverview {...props} timeline={props.timeline} radar={props.timeline.radar} />
     : <LegacyBriefing {...props} />;
 }

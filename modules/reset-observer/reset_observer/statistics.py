@@ -75,11 +75,18 @@ def paired(left, right, policy):
     interval = block_interval(a * a - b * b, [r[0]["origin"] for r in pairs], policy.bootstrap_block_days)
     correlation = float(np.corrcoef(a, b)[0, 1]) if len(pairs) >= 3 and a.std() > 1e-12 and b.std() > 1e-12 else None
     unique_events = len({event for r, _ in pairs for event in r.get("events", []) if r["label"] == 1})
+    eps = policy.probability_epsilon
+    def log_loss(row):
+        p = min(1-eps, max(eps, row["p"]))
+        return -row["label"] * math.log(p) - (1-row["label"]) * math.log1p(-p)
+    log_difference = block_interval([log_loss(a)-log_loss(b) for a,b in pairs],
+                                    [a["origin"] for a,_ in pairs], policy.bootstrap_block_days)
     state = "insufficient_evidence"
     if len(pairs) >= policy.minimum_rank_windows and unique_events >= policy.minimum_rank_events and interval["ci95"]:
         state = "left_lower_loss" if interval["ci95"][1] < 0 else "right_lower_loss" if interval["ci95"][0] > 0 else "inconclusive"
     return {"n": len(pairs), "unique_events": unique_events, "brier_skill": float(1 - np.mean(a*a) / np.mean(b*b)) if np.mean(b*b) > 0 else None,
-            "loss_difference": interval, "error_correlation": correlation, "interpretation": state,
+            "loss_difference": interval, "log_loss_difference": log_difference,
+            "error_correlation": correlation, "interpretation": state,
             "inference": "exploratory_pairwise_no_multiple_comparison_adjustment"}
 
 

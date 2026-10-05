@@ -1,14 +1,18 @@
 // Standalone documentation fixture. Not imported by the native app entry point.
-import React from "react";
+import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ConfigProvider } from "antd";
+import { DashboardNavigation } from "../components/dashboard/DashboardNavigation";
+import radarStyles from "../pages/ResetIntelligencePage/index.module.less";
 import { CapacityPopover } from "../components/CapacityPopover";
 import { AccountsPage } from "../pages/AccountsPage";
 import { LiveSourcesView } from "../pages/ResetIntelligencePage/LiveSourcesPanel";
 import { ResetNoticeChip } from "../components/CapacityPopover/ResetNoticeChip";
+import { quantitativeFixture } from "./quantitativeFixture";
 import type { PublicResetTimeline, RadarView } from "../pages/ResetIntelligencePage/types";
 import type { Account } from "../types";
 import { LANGUAGE_STORAGE_KEY, translate } from "../i18n";
+import { applyThemeColor, DEFAULT_THEME_COLOR } from "../utils/theme";
 import "antd/dist/reset.css";
 import "../styles.css";
 import "./productPreview.css";
@@ -19,6 +23,7 @@ const language = query.get("lang") === "en" ? "en" : "zh";
 const zh = language === "zh";
 document.documentElement.lang = zh ? "zh-CN" : "en";
 document.documentElement.dataset.theme = query.get("theme") === "dark" ? "dark" : "light";
+applyThemeColor(DEFAULT_THEME_COLOR);
 // This origin is the standalone browser preview, never the native app store.
 localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
 const now = Date.now();
@@ -45,6 +50,7 @@ const accounts: Account[] = [
   },
 }));
 const timeline: PublicResetTimeline = {
+  quantitative: query.get("quant") ? quantitativeFixture(now, query.get("quant") === "scored") : undefined,
   sources: [
     { sourceId: "codex_reset", sourceUrl: "https://codex-reset.com/api/forecast", lastAttemptAt: observed, lastSuccessAt: observed,
       issue: null, acceptedRecords: 1, rejectedRecords: 0, skippedRecords: 0 },
@@ -114,8 +120,23 @@ if (scenario === "unavailable") {
   timeline.sources[0].issue = "request_failed";
 }
 
+function DesktopRadarPreview() {
+  const [collapsed, setCollapsed] = useState(false);
+  return <div className={`app-shell sidebar-navigation-shell${collapsed ? " sidebar-collapsed" : ""}`}>
+    <aside className="app-sidebar"><div className="brand sidebar-brand"><span>QuotaHorizon</span></div>
+      <DashboardNavigation page="resetIntelligence" variant="sidebar" collapsed={collapsed} onPageChange={noop} t={(key,values)=>translate(language,key,values)} />
+      <button className="sidebar-collapse-button" onClick={()=>setCollapsed(!collapsed)} aria-label={zh ? "切换侧栏宽度" : "Toggle sidebar width"}>{collapsed ? "»" : "«"}</button>
+    </aside>
+    <header className="app-menu"><small>{query.get("capture") === "radar" ? (zh ? "本机公开数据 · 桌面布局预览" : "Local public data · desktop layout preview") : (zh ? "桌面布局预览 · 合成数据" : "Desktop layout preview · synthetic data")}</small></header>
+    <main className="capacity-main reset-radar-main"><header className="topbar"><div><span className="eyebrow">QuotaHorizon</span><h1>{zh ? "重置情报" : "Reset intelligence"}</h1></div></header>
+      <div className={radarStyles.page}><LiveSourcesView language={language} now={now} state={{timeline,busy:false,failed:false}} onRefresh={noop} onOpenSource={noop} /></div>
+    </main>
+  </div>;
+}
+
 function Preview() {
   if ("__TAURI_INTERNALS__" in window) return <p>This fixture is available only in a browser.</p>;
+  if (scene === "radar" && query.get("shell") === "desktop") return <DesktopRadarPreview />;
   const title = scene === "menu" ? (zh ? "菜单栏弹窗" : "Menu-bar popover")
     : scene === "radar" ? (zh ? "重置雷达" : "Reset radar") : (zh ? "多账号额度" : "Multiple-account quota");
   return <ConfigProvider theme={{ token: { colorPrimary: "#35ada7", borderRadius: 10 } }}>

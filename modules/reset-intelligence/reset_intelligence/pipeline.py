@@ -5,7 +5,7 @@ from dataclasses import asdict
 import numpy as np
 
 from . import MODEL_VERSION, VERSION
-from .community import ballot_curve, count_curve
+from .community import ballot_curve, ballot_rejection, count_curve, count_rejection
 from .contracts import TARGETS, digest, iso
 from .evaluation import canonical_events, matured
 from .quant import ModelConfig, Survival, fit_weights
@@ -87,12 +87,13 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
     result["status"] = "current"
     result["last_event_at"] = events[-1].at
     result["event_audit"] = {"time_basis": "public_notice_or_observed_event",
+                             "excluded_targeted_events": [e.id for e in ledger.events if e.population == "targeted"],
                              "classification_corrections": [asdict(e) for e in events if e.classification_basis != "source_label"]}
     baseline = Survival([e.at for e in events], now, config)
     base = [baseline.p(h) for h in HOURS]
     components = [{"id": "survival_baseline", "family": "history", "dependency": "public_event_history",
                    "probabilities": base, "metadata": baseline.summary(), "private": False}]
-    seen = set()
+    seen, seen_polls = set(), set()
     for obs in observations.values():
         for c in obs.curves:
             if c.target != target:
@@ -119,15 +120,26 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                                "probabilities": values, "metadata": {**c.metadata, **alignment},
                                "source_points": c.points, "private": c.private})
         for poll in obs.polls:
-            if poll["target"] != target or now - obs.observed_at > 1800:
+            if poll["target"] != target:
+                continue
+            health = next(h for h in result["source_health"] if h["id"] == obs.source)
+            if now - obs.observed_at > 1800 or obs.issues:
+                health["issues"].append("poll_observation_stale_or_excluded")
                 continue
             if poll["kind"] == "count_distribution":
+                reason = count_rejection(poll, now, [e.at for e in events])
                 converted = count_curve(poll, now, HOURS, [e.at for e in events])
             else:
+                reason = ballot_rejection(poll, now, events[-1].at)
                 converted = ballot_curve(poll, now, HOURS, baseline, events[-1].at, config)
             if converted is None:
-                next(h for h in result["source_health"] if h["id"] == obs.source)["issues"].append("no_usable_current_poll")
+                health["issues"].append(reason or "no_usable_current_poll")
                 continue
+            fingerprint = digest({k: poll.get(k) for k in ("kind", "target", "population", "id", "start", "expires", "bins", "rows")})
+            if fingerprint in seen_polls:
+                health["issues"].append("duplicate_poll_round")
+                continue
+            seen_polls.add(fingerprint)
             terminal = (converted["coverage_hours"], converted["terminal_probability"]) if "terminal_probability" in converted else None
             values = complete_tail(converted.pop("probabilities"), HOURS, baseline, terminal)
             converted["fresh_until"] = min(obs.observed_at + 1800, poll["expires"])
@@ -157,10 +169,12 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
             ys = np.array([r[1] for r in available])
             prior = np.full(len(group), 1 / len(group))
             learned = len(ys) >= config.minimum_training_windows and ys.sum() >= 5 and (1 - ys).sum() >= 5
-            weight = fit_weights(np.array([r[0] for r in available]), ys, prior, config.stacking_regularization) if learned else prior
+            candidate = fit_weights(np.array([r[0] for r in available]), ys, prior, config.stacking_regularization) if learned else None
+            weight = candidate if learned and config.apply_learned_weights else prior
             groups.append(weight @ np.array([c["probabilities"] for c in group]))
             source_training.append({"family": family, "dependency": dep, "weights": dict(zip(names, weight.tolist())),
-                                    "state": "learned" if learned else "cold_start_prior", "windows": len(available)})
+                                    "state": "learned" if learned and config.apply_learned_weights else "cold_start_prior", "windows": len(available),
+                                    "candidate_weights": dict(zip(names, candidate.tolist())) if candidate is not None else None})
         features[family] = np.mean(groups, axis=0)
     result["features"] = {str(h): {f: float(features[f][i]) for f in families} for i, h in enumerate(HOURS)}
     training = [r for r in training_rows
@@ -170,18 +184,22 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
     learned = len(y) >= config.minimum_training_windows and y.sum() >= 5 and (1 - y).sum() >= 5
     if learned:
         x = np.array([[r["features"][f] for f in families] for r in training])
-        weights = fit_weights(x, y, prior, config.stacking_regularization)
+        candidate_weights = fit_weights(x, y, prior, config.stacking_regularization)
     else:
-        weights = prior
+        candidate_weights = None
+    weights = candidate_weights if learned and config.apply_learned_weights else prior
     matrix = np.array([features[f] for f in families])
     combined = weights @ matrix
     if np.any(np.diff(combined) < -1e-9):
         raise ValueError("nonmonotone component conversion")
     result["components"] = components
-    result["training"] = {"state": "learned" if learned else "cold_start_prior", "windows": len(training),
+    result["training"] = {"state": "learned" if learned and config.apply_learned_weights else "cold_start_prior", "windows": len(training),
                           "events": int(y.sum()), "minimum_windows": config.minimum_training_windows,
                           "objective": "regularized_brier", "weights": dict(zip(families, weights.tolist())),
-                          "prior": "equal_mass_per_available_family", "horizon_trained_hours": 24}
+                          "prior": "equal_mass_per_available_family", "horizon_trained_hours": 24,
+                          "candidate_weights": dict(zip(families, candidate_weights.tolist())) if candidate_weights is not None else None,
+                          "candidate_state": "ready_for_review" if learned else "insufficient_training_windows",
+                          "apply_learned_weights": config.apply_learned_weights}
     result["training"]["within_groups"] = source_training
     for i, h in enumerate(HOURS):
         lo, hi = baseline.interval(h) if h in (6, 12, 24, 48, 72) else (None, None)
@@ -225,9 +243,11 @@ def consumer_export(results: list[dict]) -> dict:
                 "coherence": result.get("coherence"),
                 "evaluation_windows": result.get("training", {}).get("windows", 0),
                 "event_count": result["event_count"], "sources": [], "community": None,
+                "changes": result.get("changes"),
                 "source_health": [{k: h.get(k) for k in ("id", "last_success", "generated_at", "error", "issues")}
                                   for h in result["source_health"] if not h["private"]],
-                "statements": [{k: f.get(k) for k in ("id", "at", "url", "original", "translation_zh", "stage", "event_type", "scope_note", "context")}
+                "statements": [{**{k: f.get(k) for k in ("id", "at", "url", "original", "translation_zh", "stage", "event_type", "scope_note", "context", "relevance")},
+                                "collector": "Codex Reset" if f.get("source") == "tibo_posts" else "Reset Monitor"}
                                for f in result["facts"]]}
         for c in result["components"]:
             if not c["private"] and c["family"] == "history":

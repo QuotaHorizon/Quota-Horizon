@@ -30,12 +30,23 @@ pub(crate) fn setup(app: &tauri::AppHandle) -> Result<(), String> {
     std::thread::Builder::new()
         .name("horizon-public-reset-refresh".into())
         .spawn(move || {
+            let mut quantitative_signature = String::new();
+            let mut supervisor = quantitative::runtime::Supervisor::bundled(
+                app.path().resource_dir().ok(),
+                path.parent().unwrap_or(&path),
+            );
             run_until_stopped(receiver, WAKE_CHECK, || {
+                if let Some(directory) = path.parent() {
+                    supervisor.tick(directory, Utc::now());
+                }
                 match refresh_at_path(&path, false) {
-                    Ok((_, true)) => {
-                        let _ = app.emit("public-reset-timeline-changed", ());
+                    Ok((timeline, collected)) => {
+                        let signature = quantitative::signature(&timeline.quantitative);
+                        if collected || signature != quantitative_signature {
+                            let _ = app.emit("public-reset-timeline-changed", ());
+                        }
+                        quantitative_signature = signature;
                     }
-                    Ok((_, false)) => {}
                     // A local-store failure must not stop the worker forever.
                     Err(_) => {
                         let _ = app.emit("public-reset-timeline-unavailable", ());

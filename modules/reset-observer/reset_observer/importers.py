@@ -16,7 +16,7 @@ def fixed_weight_variants(payload):
     components = {c["id"]: c for c in payload["components"]}
     training = payload.get("training", {})
 
-    def combine(exclude):
+    def combine(exclude, community_weight=None):
         families = {}
         for group in training.get("within_groups", []):
             weights = {k: v for k, v in group["weights"].items() if k in components and k not in exclude}
@@ -25,6 +25,10 @@ def fixed_weight_variants(payload):
             values = sum(np.asarray(components[k]["probabilities"]) * w for k, w in weights.items()) / sum(weights.values())
             families.setdefault(group["family"], []).append(values)
         weights = {k: w for k, w in training.get("weights", {}).items() if k in families}
+        if community_weight is not None:
+            if set(families) != {"history", "community"}:
+                return None
+            weights = {"history": 1 - community_weight, "community": community_weight}
         if not weights or sum(weights.values()) <= 0:
             return None
         return (sum(np.mean(families[k], axis=0) * w for k, w in weights.items()) / sum(weights.values())).tolist()
@@ -33,6 +37,8 @@ def fixed_weight_variants(payload):
     community = {k for k, c in components.items() if c["family"] == "community"}
     if community:
         variants["without_community"] = combine(community)
+        for weight in (.25, .50, .75):
+            variants[f"community_weight_{round(weight * 100)}pct"] = combine(set(), weight)
     for name in components:
         if name != "survival_baseline":
             variants["without:" + name] = combine({name})

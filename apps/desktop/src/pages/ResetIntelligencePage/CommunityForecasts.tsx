@@ -34,7 +34,7 @@ function TimingPoll({ poll, language, now }: { poll: RadarPoll; language: Langua
       </svg>
       <div className={styles.voteWindows}>{r.distribution.map((b,i) => <div key={i}><span>{b.deadlineAt ? `${i > 0 && r.distribution[i-1].deadlineAt ? `${deadline(r.distribution[i-1].deadlineAt!)} – ` : (zh ? "截至 " : "By ")}${deadline(b.deadlineAt)}` : zh ? "更晚 / 暂不看好近期" : "Later / not soon"}</span><strong>{votes(b.count, zh)}</strong></div>)}</div>
     </>}
-    <p className={styles.meta}>{zh ? "票数按原始日期区间保留；曲线标出累计节点。跨越 24h/48h 边界的票暂不指定方向。" : "Votes retain their original date intervals; the curve marks cumulative endpoints. Votes spanning a 24h/48h boundary receive no directional assignment."}</p>
+    <p className={styles.meta}>{zh ? "票数按原始日期区间保留；曲线标出各截止日期的累计票数占比，24h / 48h 的模型换算结果见综合判断。" : "Votes retain their original date intervals. The curve shows cumulative shares at each deadline; the combined outlook shows the model’s 24h / 48h conversion."}</p>
   </div>;
 }
 function ProbabilityPoll({ poll, language }: { poll: RadarPoll; language: Language }) {
@@ -56,7 +56,7 @@ function ProbabilityPoll({ poll, language }: { poll: RadarPoll; language: Langua
     <p className={styles.meta}>{zh ? "历史点为各日轮次的最终投票均值，当前点持续更新。每轮预测的截止日不同；匿名浏览器投票，样本较少。" : "Past points are final means for each daily round; the current point updates. Each round has a different deadline. Anonymous browser votes, with a small sample."}</p>
   </div>;
 }
-export function CommunityForecasts({ radar, language, now, onOpenSource }: { radar: RadarView; language: Language; now: number; onOpenSource?: (url: string) => void }) {
+export function CommunityForecasts({ radar, language, now, onOpenSource, independent = false }: { radar: RadarView; language: Language; now: number; onOpenSource?: (url: string) => void; independent?: boolean }) {
   const zh = language === "zh"; const polls = [...(radar.community.polls ?? [])].sort((a,b) => Number(b.round.kind === "timing") - Number(a.round.kind === "timing"));
   return <article className={styles.card}>
     <div className={styles.cardHeading}><h2>{zh ? "社区量化预期" : "Quantified community outlook"}</h2><span>{zh ? "实际投票 · 日期分布与概率变化" : "Actual ballots · timing and probability trends"}</span></div>
@@ -65,7 +65,7 @@ export function CommunityForecasts({ radar, language, now, onOpenSource }: { rad
       {p.round.kind === "timing" ? <TimingPoll poll={p} language={language} now={now} /> : <ProbabilityPoll poll={p} language={language} />}
       <p className={styles.pollSource}><EvidenceLink url={p.url} label={zh ? `投票资料：${p.name}` : `Poll data: ${p.name}`} onOpen={onOpenSource} /><span>{zh ? "读取 " : "Collected "}{publicEvidenceTime(p.collectedAt,language)}</span></p>
     </div>)}</div> : <p className={styles.meta}>{zh ? "等待社区投票接口返回首份数据。" : "Awaiting the first community poll response."}</p>}
-    <p className={styles.meta}>{zh ? "直接重置和发卡都可形成额度恢复的乐观预期。投票沿用各站的原始问题与期限；匿名投票合并限制贡献，重复的官方事实不会再作为独立确认。" : "Automatic resets and new reset credits can both support a positive allowance outlook. Polls retain their original questions and deadlines; anonymous ballots share a contribution cap, while repeated official facts are not independent confirmations."}</p>
+    <p className={styles.meta}>{independent ? (zh ? "此处保留公开投票的原问题、票数与期限。模型纳入情况和贡献以上方独立预测结果为准。" : "These are the public ballots’ original questions, counts and deadlines. Model inclusion and contribution are shown in the independent forecast above.") : (zh ? "直接重置和发卡都可形成额度恢复的乐观预期。投票沿用各站的原始问题与期限；匿名投票合并限制贡献，重复的官方事实不会再作为独立确认。" : "Automatic resets and new reset credits can both support a positive allowance outlook. Polls retain their original questions and deadlines; anonymous ballots share a contribution cap, while repeated official facts are not independent confirmations.")}</p>
   </article>;
 }
 

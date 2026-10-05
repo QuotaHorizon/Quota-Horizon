@@ -70,6 +70,7 @@ export interface PublicTimelineEntry {
 }
 
 export interface PublicResetTimeline {
+  quantitative?: import("./quantitativeTypes").QuantitativeView;
   sources: PublicSourceStatus[];
   entries: PublicTimelineEntry[];
   revisionCount: number;
@@ -100,6 +101,8 @@ export interface PublicParentPost {
 }
 
 export interface PublicPost {
+  collectorName?: string;
+  contextZh?: { text: string; url: string };
   id: string; url: string; text: string; translatedText: string | null; publishedAt: string;
   kind: "grant" | "reset_report" | "notice" | "limits" | "context";
   isReply: boolean | null; parent: PublicParentPost | null;

@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+import numpy as np
 
 from .contracts import TARGETS, iso, stamp
 from .evaluation import canonical_events, forward_report, retrospective
@@ -17,6 +18,8 @@ from .pipeline import consumer_export, forecast_all
 from .quant import ModelConfig
 from .sources import CATALOG, collect
 from .store import Store
+from .audit import source_audit
+from .changes import explain_change, previous_forecast
 
 
 def write_json(path: str, payload: dict):
@@ -38,10 +41,11 @@ def write_json(path: str, payload: dict):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Independent public quota event intelligence")
-    parser.add_argument("command", choices=("collect", "run", "watch", "forecast", "replay", "evaluate"))
+    parser.add_argument("command", choices=("collect", "run", "watch", "forecast", "replay", "evaluate", "audit"))
     parser.add_argument("--db", required=True, help="Module-owned SQLite path; never an application's database")
     parser.add_argument("--config", help="Local JSON source and model configuration")
     parser.add_argument("--output", help="Atomic consumer JSON output, or evaluation report for evaluate")
+    parser.add_argument("--audit-output", help="Separate source admission and issued-weight JSON")
     parser.add_argument("--as-of", help="Timezone-qualified historical time (replay/evaluate only)")
     parser.add_argument("--target", choices=TARGETS, help="Default: both targets")
     args = parser.parse_args(argv)
@@ -51,7 +55,7 @@ def main(argv=None) -> int:
         parser.error("replay requires --as-of")
     if args.command == "watch":
         run_args = ["run", "--db", args.db]
-        for flag, value in (("--config", args.config), ("--output", args.output), ("--target", args.target)):
+        for flag, value in (("--config", args.config), ("--output", args.output), ("--target", args.target), ("--audit-output", args.audit_output)):
             if value:
                 run_args.extend([flag, value])
         try:
@@ -68,10 +72,16 @@ def main(argv=None) -> int:
     specs = [s for s in [*CATALOG, *extra] if s["id"] not in disabled]
     config = ModelConfig(**config_data.get("model", {}))
     # Read commands must not silently create an empty data store.
-    if args.command in ("replay", "evaluate", "forecast") and not Path(args.db).is_file():
+    if args.command in ("replay", "evaluate", "forecast", "audit") and not Path(args.db).is_file():
         parser.error("collect or run must create the data store first")
-    store = Store(args.db, read_only=args.command in ("replay", "evaluate"))
+    store = Store(args.db, read_only=args.command in ("replay", "evaluate", "audit"))
     try:
+        if args.command == "audit":
+            payload = source_audit(store, time.time())
+            if args.output:
+                write_json(args.output, payload)
+            print(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False))
+            return 0
         outcomes = collect(store, specs) if args.command in ("collect", "run") else []
         now = stamp(args.as_of) if args.as_of else round(time.time(), 3)
         if now > time.time() + 1:
@@ -79,7 +89,8 @@ def main(argv=None) -> int:
         from .contracts import digest
         implementation = digest({p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                                  for p in sorted(Path(__file__).parent.glob("*.py"))})
-        full_config = {"model": asdict(config), "sources": specs, "implementation_hash": implementation}
+        full_config = {"model": asdict(config), "sources": specs, "implementation_hash": implementation,
+                       "runtime": {"python": ".".join(map(str, sys.version_info[:3])), "numpy": np.__version__}}
         if args.command == "replay":
             saved = store.config_at(now)
             if saved is None:
@@ -107,10 +118,14 @@ def main(argv=None) -> int:
         source_ids = {s["id"] for s in full_config["sources"]}
         private_ids = {s["id"] for s in full_config["sources"] if s["adapter"] == "count_market" or s.get("private")}
         results = [r for r in forecast_all(store, now, config, config_hash, source_ids, private_ids) if r["target"] in targets]
+        for result in results:
+            result["changes"] = explain_change(result, previous_forecast(store, result))
         if args.command != "replay":
             for result in results:
                 store.forecast(result)
         payload = consumer_export(results)
+        if args.audit_output:
+            write_json(args.audit_output, source_audit(store, now, results))
         if args.output:
             write_json(args.output, payload)
         summary = {"issued_at": iso(now), "mode": args.command, "sources": outcomes,

@@ -44,8 +44,8 @@ Tests marked `ignored` have individual account, system credential or network req
 
 `modules/reset-intelligence/` runs independently with Python 3.11+ and NumPy 2.x.
 It collects public data, stores raw responses, events and forecasts in its own SQLite database,
-and exports versioned JSON. The desktop app currently uses its existing radar;
-this tool has a separate runtime and data directory.
+and exports versioned JSON. Its runtime and data directory are separate from the desktop app,
+which reads results through the JSON connection described below.
 
 Run in a Python environment with those dependencies available:
 
@@ -62,6 +62,10 @@ and collects each source at most once per 15 minutes; press `Ctrl+C` to stop.
 `replay --as-of <ISO-8601>` replays inputs and configuration known at that time, using the corresponding code revision.
 `evaluate` reports retrospective event backtests separately from scores for actual issued forecasts.
 All commands take `--db`; `--output` writes JSON atomically, and `--config` selects a local source and model configuration.
+`audit --db <path> --output audit.json` reads source admission, collection clocks, original supported horizons,
+and community weights for issued forecasts. Add `--audit-output audit.json` to `run` / `watch` for continuous output.
+By default, fitted weights remain review candidates while issued combinations use fixed priors.
+Set `model.apply_learned_weights: true` explicitly to apply fitted weights after the training requirements are met.
 
 The output follows [consumer.schema.json](../modules/reset-intelligence/consumer.schema.json).
 Probabilities range from `0–1`, with a curve for the next 1–72 hours. Targets cover broad quota relief,
@@ -90,7 +94,9 @@ event evidence, coverage, scorecards and paired comparisons. The optional HTML r
 
 Use `watch` with the same arguments for continuous evaluation, or `start` to detach it into the background.
 `status --db <path>` shows its heartbeat; `stop --db <path>` requests a clean stop.
-It checks every minute and collects each outcome feed at most once per 15 minutes.
+It checks every minute and normally collects each outcome feed every 15 minutes. Transient request or decode
+failures retry after 1, 2, 4, 8 and 15 minutes. Rate limits, access restrictions and successfully read but stale
+content retain the 15-minute interval.
 Keep the producer running separately, or use `--config` with `producer_command` (an argument array)
 and `producer_cwd` to refresh a producer each collection interval or when its forecasts expire. Policy overrides go in `policy`;
 a changed policy requires a separate evaluation database. Background mode lasts until stopped or the computer restarts.
@@ -103,14 +109,74 @@ variants become available as windows mature. Missing observations remain missing
 negative outcomes require continuous evidence coverage. Event corrections append settlement revisions.
 `replay --db <path> --as-of <ISO-8601>` retrieves the report saved at or before that time;
 unchanged reports share one saved snapshot.
+The report's `diagnostics` separates collection gaps, request failures, stale source content and unchanged
+content, grouping source trials by their underlying event window. Use
+`diagnose --db <path> --origin <ISO-8601> --hours 6` to inspect a window's coverage without writing to the database;
+`--hours` also accepts 12, 24 and 48. Parser corrections append a current knowledge revision while preserving
+original observation clocks and saved reports. `dependence` provides matched-clock level and change correlations.
+Predeclared community weights of 25% / 50% / 75% run alongside no-community, baseline and equal-component
+variants, compared using Brier and log loss on matching windows. The evaluator leaves weight replacement to review.
+
+## Connect the desktop radar
+
+The macOS installer bundles the independent modules and their runtime. First launch creates their own databases
+and JSON exports in app data, then starts background collection and recovery. During an upgrade the old worker
+finishes its current tick and exits before the new revision starts; data stays in place. Existing custom connections
+and runtime configurations remain active. The commands below are for development or connecting another output.
+
+With the forecasting and evaluation processes running, connect their JSON outputs from the repository root:
+
+```sh
+node scripts/connect-reset-modules.mjs --forecast /absolute/path/forecast.json --evaluation /absolute/path/report.json
+```
+
+The script checks contract versions and writes read-only paths to `reset-radar-connection.json` in the app data directory.
+Use `--data-dir /absolute/app/data` for another app data directory. Defaults are
+`~/Library/Application Support/io.github.halfmelon.quotahorizon` on macOS,
+`%APPDATA%/io.github.halfmelon.quotahorizon` on Windows, or
+`$XDG_DATA_HOME/io.github.halfmelon.quotahorizon` on Linux (default base: `~/.local/share`).
+Alternatively, write exports directly to `reset-intelligence/consumer.json` and `reset-observer/report.json`
+inside that directory; the app discovers them automatically.
+
+Horizon reads results at startup and checks for changes every minute in the background. The main window and menu
+share the same estimate. It validates structure, probabilities and timestamps, filters displayable fields, and
+retains the previous result with its status when a read fails. Custom external modules retain their own
+`start` / `watch` lifecycle. Horizon can also check and restore the independent evaluator while the app runs:
+
+```sh
+node scripts/connect-reset-modules.mjs --forecast /absolute/path/forecast.json --evaluation /absolute/path/report.json \
+  --python /absolute/path/python --observer-dir /absolute/path/modules/reset-observer \
+  --observer-db /absolute/path/observer.sqlite --producer-db /absolute/path/producer.sqlite \
+  --config /absolute/path/observer-config.json --html /absolute/path/report.html
+```
+
+The script verifies the existing Python environment and initialized data files, then writes `reset-radar-runtime.json`.
+`--producer-db`, `--config` and `--html` are optional. To refresh predictions automatically, supply
+`producer_command` and `producer_cwd` in the evaluator configuration as described above. About once a minute,
+Horizon calls the independent module's `start` command to reuse its single worker or restart it after exit.
+Failed starts retry with increasing delays, up to 15 minutes. After a computer restart, opening Horizon restores
+these processes. Workers already running continue after Horizon exits. The overview shows process status;
+output freshness still reflects actual update times.
+Changing managed output paths, input databases or configuration requests a graceful worker handoff on the next check,
+then starts with the new arguments. Existing databases and reports remain in place.
+
+To manage or stop the modules yourself, rerun the JSON connection command with `--external`, then use the module's
+`stop` command. This disables automatic recovery and preserves existing processes and data. The desktop reads JSON;
+module processes manage their databases and models. Removing custom connection and runtime configuration restores
+the bundled modules on macOS. Existing event history and reading state are preserved.
 
 ## Build
 
 ```sh
+export QUOTAHORIZON_PYTHON=/absolute/path/to/conda/environment/bin/python
 npm run build:app -- --target aarch64-apple-darwin
 ```
 
 `build:app` builds the frontend, Rust executable and application bundle, then checks embedded assets and the local signature.
+macOS builds use an existing Conda Python 3.11–3.14 and NumPy 2.x, with all binaries compatible with macOS 13.
+The script copies the standard library, NumPy, both modules, required dynamic libraries and notices into the build,
+then checks isolation and system requirements. Used Conda packages must retain `info/licenses` in their cache.
+The script installs no dependencies. Private source configurations and databases remain outside the app bundle.
 Use `npm run build` for frontend assets alone.
 The macOS bundle is at `apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/QuotaHorizon.app`.
 See [installation](INSTALLATION.en.md) for the next steps.
