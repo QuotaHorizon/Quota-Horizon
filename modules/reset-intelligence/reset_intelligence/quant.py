@@ -17,21 +17,37 @@ class ModelConfig:
     prior_rate: float = 1 / 168
     half_life_days: float = 60
     poll_prior_count: float = 4
+    poll_half_life_hours: float = 2
+    minimum_recent_votes: int = 50
     anonymous_correlation: float = .1
+    baseline_budget: float = .15
+    radar_budget: float = .65
+    community_budget: float = .20
+    community_overlap: float = .5
+    response_window_hours: float = 6
+    response_minimum_revision: float = .1
     stacking_regularization: float = .02
     minimum_training_windows: int = 30
     apply_learned_weights: bool = False
     seed: int = 1703
 
     def __post_init__(self):
+        if isinstance(self.minimum_recent_votes, bool) or not isinstance(self.minimum_recent_votes, int) or self.minimum_recent_votes < 50:
+            raise ValueError("at least 50 recent ballots are required")
         if not isinstance(self.apply_learned_weights, bool):
             raise ValueError("apply_learned_weights must be boolean")
         if not self.boundaries or self.boundaries[0] != 0 or any(a >= b for a, b in zip(self.boundaries, self.boundaries[1:])):
             raise ValueError("hazard boundaries must increase from zero")
-        if not all(math.isfinite(x) and x > 0 for x in (self.prior_exposure, self.prior_rate, self.half_life_days, self.poll_prior_count)):
+        if not all(math.isfinite(x) and x > 0 for x in (self.prior_exposure, self.prior_rate, self.half_life_days, self.poll_prior_count, self.poll_half_life_hours)):
             raise ValueError("invalid model prior")
         if not 0 <= self.anonymous_correlation < 1 or self.stacking_regularization < 0 or self.minimum_training_windows < 1:
             raise ValueError("invalid pooling parameters")
+        if not all(math.isfinite(x) and x > 0 for x in (self.baseline_budget, self.radar_budget, self.community_budget)):
+            raise ValueError("family budgets must be positive")
+        if not 0 <= self.community_overlap <= 1 or self.community_budget > 1:
+            raise ValueError("invalid community residual budget")
+        if not 0 < self.response_window_hours <= 48 or not 0 < self.response_minimum_revision <= 1:
+            raise ValueError("invalid response cohort parameters")
 
 
 def exposure(age: float, hours: float, boundaries: tuple[float, ...]) -> np.ndarray:

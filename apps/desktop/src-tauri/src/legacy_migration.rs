@@ -71,12 +71,20 @@ mod tests {
 
     #[test]
     fn explicit_legacy_source_requires_a_safe_absolute_path() {
+        let source = std::env::temp_dir().join("quota-horizon-legacy-source");
         assert!(legacy_source_path(Some("relative/source".to_string())).is_err());
-        assert!(legacy_source_path(Some("/tmp/../source".to_string())).is_err());
-        assert!(legacy_source_path(Some("/tmp/source\nother".to_string())).is_err());
+        assert!(legacy_source_path(Some(
+            source
+                .join("..")
+                .join("other")
+                .to_string_lossy()
+                .into_owned()
+        ))
+        .is_err());
+        assert!(legacy_source_path(Some(format!("{}\nother", source.display()))).is_err());
         assert_eq!(
-            legacy_source_path(Some("/tmp/source".to_string())).unwrap(),
-            PathBuf::from("/tmp/source")
+            legacy_source_path(Some(source.to_string_lossy().into_owned())).unwrap(),
+            source
         );
     }
 

@@ -7,6 +7,7 @@
 - Node.js `^20.19.0 || >=22.12.0` and npm.
 - Rust stable, configured by `rust-toolchain.toml`.
 - macOS: Xcode Command Line Tools; Apple Silicon bundles use the `aarch64-apple-darwin` target.
+- Windows: Visual Studio 2022 Build Tools with Desktop development with C++ (MSVC and Windows SDK), the Rust stable MSVC toolchain, and Microsoft Edge WebView2 Runtime.
 
 Frontend dependencies are locked in `apps/desktop/package-lock.json`.
 The root `Cargo.lock` belongs to the shared Rust workspace; `apps/desktop/src-tauri/Cargo.lock` belongs to the desktop workspace.
@@ -40,6 +41,20 @@ cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
 The two Cargo commands cover the shared services and desktop respectively. Add `--offline` to use cached dependencies.
 Tests marked `ignored` have individual account, system credential or network requirements documented in their source.
 
+### GitHub Actions
+
+[Desktop CI](../.github/workflows/desktop.yml) runs on pushes and pull requests to `dev` and `main`,
+and supports manual runs from Actions. Each run tests the frontend and Rust code on macOS Apple Silicon
+and Windows x64, then builds a DMG and an NSIS `.exe` from the same source revision and desktop version.
+The macOS job also tests and bundles the independent forecasting and evaluation modules.
+Its Python and NumPy build dependencies are declared in [macos-runtime.yml](../.github/ci/macos-runtime.yml).
+
+Download the installers from the run's artifacts; their names include the platform and source commit.
+Artifacts are retained for 14 days. The DMG job checks the bundled runtime, signature, image and install copy;
+both jobs verify that the native executable contains the current frontend assets.
+Public installers remain on [Releases](https://github.com/QuotaHorizon/Quota-Horizon/releases).
+Publishing a release is a separate step after both platform jobs pass.
+
 ## Standalone forecasting module
 
 `modules/reset-intelligence/` runs independently with Python 3.11+ and NumPy 2.x.
@@ -57,15 +72,16 @@ python -m reset_intelligence evaluate --db ../../private-data/reset-intelligence
 ```
 
 `run` collects data and produces one forecast. `watch` runs continuously, updates forecasts every minute,
-and collects each source at most once per 15 minutes; press `Ctrl+C` to stop.
+and checks primary sources every minute; other sources follow their own intervals. Press `Ctrl+C` to stop.
 `collect` only collects; `forecast` uses stored observations.
+`run --refresh` requests new data before computing, retaining a five-second duplicate-read guard and failure backoff.
 `replay --as-of <ISO-8601>` replays inputs and configuration known at that time, using the corresponding code revision.
 `evaluate` reports retrospective event backtests separately from scores for actual issued forecasts.
 All commands take `--db`; `--output` writes JSON atomically, and `--config` selects a local source and model configuration.
 `audit --db <path> --output audit.json` reads source admission, collection clocks, original supported horizons,
 and community weights for issued forecasts. Add `--audit-output audit.json` to `run` / `watch` for continuous output.
-By default, fitted weights remain review candidates while issued combinations use fixed priors.
-Set `model.apply_learned_weights: true` explicitly to apply fitted weights after the training requirements are met.
+The current combination uses configured priors; keep `model.apply_learned_weights` set to `false`.
+The evaluator records forward results for issued predictions and comparison models.
 
 The output follows [consumer.schema.json](../modules/reset-intelligence/consumer.schema.json).
 Probabilities range from `0–1`, with a curve for the next 1–72 hours. Targets cover broad quota relief,
@@ -94,9 +110,9 @@ event evidence, coverage, scorecards and paired comparisons. The optional HTML r
 
 Use `watch` with the same arguments for continuous evaluation, or `start` to detach it into the background.
 `status --db <path>` shows its heartbeat; `stop --db <path>` requests a clean stop.
-It checks every minute and normally collects each outcome feed every 15 minutes. Transient request or decode
-failures retry after 1, 2, 4, 8 and 15 minutes. Rate limits, access restrictions and successfully read but stale
-content retain the 15-minute interval.
+It waits 60 seconds after each cycle, then checks and collects healthy outcome feeds. Transient request or decode
+failures retry after 1, 2, 4, 8 and 15 minutes. Rate limits and access restrictions retain at least a 15-minute interval.
+`refresh` takes the same arguments as `start` and wakes the existing worker to update evidence, predictions and evaluation.
 Keep the producer running separately, or use `--config` with `producer_command` (an argument array)
 and `producer_cwd` to refresh a producer each collection interval or when its forecasts expire. Policy overrides go in `policy`;
 a changed policy requires a separate evaluation database. Background mode lasts until stopped or the computer restarts.
@@ -181,6 +197,47 @@ Use `npm run build` for frontend assets alone.
 The macOS bundle is at `apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/QuotaHorizon.app`.
 See [installation](INSTALLATION.en.md) for the next steps.
 
+### Windows installer
+
+On a Windows x64 host, run:
+
+```sh
+npm --prefix apps/desktop ci --no-audit --no-fund
+npm --prefix apps/desktop run build:app:win
+```
+
+Tauri automatically merges `tauri.windows.conf.json` to produce an NSIS `.exe` installer instead of a macOS `.app`.
+The expected output directory is `apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`.
+The installer defaults to per-user installation and requires internet access to download WebView2 if the target machine lacks it.
+Without Windows code-signing configuration, the package has no publisher signature; this does not establish compatibility with SmartScreen or enterprise policies.
+
+`build:app:win-arm64` additionally requires MSVC ARM64 build tools and the `aarch64-pc-windows-msvc` Rust target.
+Passing x64 builds or tests does not verify ARM64. On Windows, `npm run test:scripts` skips the macOS-only POSIX permissions/symlink test.
+
+Windows discovers the official desktop runtime at `%LOCALAPPDATA%/OpenAI/Codex/bin/<build>/codex.exe`, even when it is absent from `PATH`.
+The first read requires installation confirmation. The selection stays host-local; restart revalidates its file digest and version, and updates require confirmation again.
+History identity uses current-user Windows Credential Manager and the system random generator, without a plaintext key-file fallback.
+Mutation locks and restore points use Windows file identity, private DACLs, reparse-point checks and real file/directory flushes.
+Restore points currently require a local fixed disk and reject network paths, hard links and unsafe paths; unsupported filesystem flushes fail explicitly.
+Conversation and migration regressions use disposable synthetic data, not real account switching, cloud operations or physical power-loss experiments.
+
+The first bundle downloads NSIS tools. If the network requires a proxy, explicitly pass `HTTPS_PROXY` / `HTTP_PROXY` to the current build process.
+The bundler may not pick up Windows system proxy settings automatically. Do not disable TLS or hash verification to make downloads work.
+
+The standalone native tray test does not read accounts or use the network:
+
+```sh
+cargo run --locked -p capacity-desktop --features native-smoke --example tray_thread_smoke
+```
+
+`native-smoke` is only for the standalone test host; the desktop dependency must not enable it, which would link duplicate Windows version resources.
+Windows explicitly skips history fixtures requiring Unix file credentials; separate tests cover native credentials, locks, ACL drift, recovery and rollback.
+The native credential roundtrip uses a unique random test name, is ignored by default, and deletes its own credential after an explicit run:
+
+```sh
+cargo test --locked -p capacity-vault native_unique_credential_roundtrip -- --ignored
+```
+
 ## Build a DMG
 
 ```sh
@@ -189,7 +246,7 @@ npm run package:mac
 
 This command builds the Apple Silicon app, packages the DMG and verifies an installed copy.
 The installer uses the ready-made [create-dmg](https://github.com/sindresorhus/create-dmg) template,
-with a drag-and-drop arrow, app icon and Applications folder shortcut. The tool is installed with the project's development dependencies.
+with a drag-and-drop arrow, app icon and Applications folder shortcut. The tool is an optional dependency so its macOS-only dependencies do not block Windows `npm ci`; `package:mac` fails explicitly if the tool is missing.
 
 The DMG installer is at `dist/releases/<version>/QuotaHorizon_<version>_macos-arm64.dmg`.
 
@@ -202,6 +259,7 @@ The script checks the image, installed copy, version, architecture, resources, s
 | File | Configuration |
 | --- | --- |
 | `apps/desktop/src-tauri/tauri.conf.json` | App version, name, macOS 13.0 minimum and bundled resources |
+| `apps/desktop/src-tauri/tauri.windows.conf.json` | Windows NSIS installer target and ICO icon |
 | `apps/desktop/package.json` | Desktop version, packaging dependencies and Apple Silicon build shortcut |
 | `apps/desktop/src-tauri/Cargo.toml` | Desktop Rust package version |
 | `scripts/package-macos.mjs` | `aarch64-apple-darwin` target, DMG template, filenames and verification |

@@ -9,8 +9,8 @@ import json
 import hashlib
 from pathlib import Path
 
-from . import VERSION, POLICY_VERSION
-from .contracts import HORIZONS, digest, iso
+from . import VERSION, POLICY_VERSION, SETTLEMENT_VERSION
+from .contracts import HORIZONS, Forecast, digest, iso, stamp
 from .statistics import alert_metrics, paired, scores
 from .diagnostics import dependence, provider_health, window_diagnostics
 
@@ -55,6 +55,37 @@ def scoring_progress(trials, settlements):
     return progress
 
 
+def publication_curves(store, now):
+    """Plot what sources published when first received; scoring stays on trials.
+
+    A 24h-only forecast remains a valid published 24h observation even if its
+    receipt is a minute late. It cannot score a later, unsupported 24h window.
+    Keep the latest receipt in each hour/version, with explicit expiry gaps.
+    """
+    rows = store.db.execute("""SELECT f.payload FROM forecasts f JOIN (SELECT id,
+        ROW_NUMBER() OVER (PARTITION BY source,target,track,version,CAST(available_at/3600 AS INTEGER)
+        ORDER BY available_at DESC,origin DESC,id DESC) rank FROM forecasts
+        WHERE available_at BETWEEN ? AND ? AND track IN ('native','model')
+        ) selected ON selected.id=f.id WHERE selected.rank=1 ORDER BY f.available_at,f.origin""", (now-7*86400, now))
+    curves, previous = defaultdict(list), {}
+    for row in rows:
+        f = Forecast(**json.loads(row[0]))
+        if f.private:
+            continue
+        for h in (24,48):
+            key = f.source, f.version, f.target, f.track, h
+            if key in previous and previous[key] + 60 < f.available_at and curves[key][-1]["p"] is not None:
+                curves[key].append({"at":iso(previous[key]), "p":None})
+            p = f.cdf(h) if not f.issues and f.origin <= f.available_at < f.expires_at else None
+            curves[key].append({"at":iso(f.available_at), "p":p})
+            previous[key] = f.expires_at
+    for key, expiry in previous.items():
+        if expiry + 60 < now and curves[key][-1]["p"] is not None:
+            curves[key].append({"at":iso(expiry), "p":None})
+    return [{"source":k[0], "version":k[1], "target":k[2], "track":k[3], "hours":k[4], "points":v}
+            for k,v in sorted(curves.items())]
+
+
 def build_report(store, now, policy, evidence):
     forecasts = store.forecasts(now, latest=True)
     private = {f.source for f in forecasts if f.private}
@@ -94,6 +125,8 @@ def build_report(store, now, policy, evidence):
             if label.get("score_eligible") and r["p"] is not None
         ]
         headline = [r for r in usable if r["headline"]]
+        partial_events = [{**r, **label} for r, label in labels
+                          if r["headline"] and label.get("event_score_eligible") and not label.get("coverage_complete")]
         scored[key], all_scored[key] = headline, usable
         missing = Counter(r["missing_reason"] for r in members if r["p"] is None)
         row = {
@@ -109,6 +142,8 @@ def build_report(store, now, policy, evidence):
             "missing_forecasts": dict(missing),
             "settlement_states": dict(Counter(s["status"] for _, s in labels)),
             "scores": scores(headline, policy),
+            "observed_event_scores": {**scores(partial_events, policy),
+                "scope": "confirmed_events_with_partial_coverage_not_for_ranking"},
             "hourly_scored_windows": len(usable),
             "alerts": alert_metrics(usable, evidence["events"], policy),
         }
@@ -221,24 +256,7 @@ def build_report(store, now, policy, evidence):
         + min(HORIZONS) * 3600
         + policy.reporting_grace_seconds,
     )
-    curves = defaultdict(list)
-    # Shared-clock time series for plotting; maintain gaps instead of drawing
-    # unsupported observations as zero or forward-filling a missing source.
-    for trial in trials:
-        if (
-            trial["hours"] not in (24, 48)
-            or trial["origin"] < now - 7 * 86400
-            or trial["track"] == "shadow"
-        ):
-            continue
-        key = (
-            safe(trial["source"]),
-            trial["version"],
-            trial["target"],
-            trial["track"],
-            trial["hours"],
-        )
-        curves[key].append({"at": iso(trial["origin"]), "p": trial["p"]})
+    from .preferences import report as preference_report
     return {
         "schema_version": "reset-observer/1",
         "module_version": VERSION,
@@ -249,12 +267,15 @@ def build_report(store, now, policy, evidence):
         "estimand": evidence["estimand"],
         "policy": {
             "version": POLICY_VERSION,
+            "settlement_version": SETTLEMENT_VERSION,
             "hash": policy.hash,
             **asdict(policy),
             "headline_sampling": "non_overlapping_UTC_windows_per_horizon",
             "log_loss": "natural_log_clipped_at_probability_epsilon",
             "native_alignment": "conditional_CDF_without_extrapolation",
             "zero_label": "continuous_healthy_outcome_coverage_required",
+            "positive_label": "confirmed_in_window_completion",
+            "score_sampling": "full_coverage_for_both_labels_partial_positives_separate",
             "shadow_variants": "fixed_issued_weights_no_retraining",
             "inference": "exploratory_paired_UTC_block_bootstrap_minimum_8_blocks",
         },
@@ -274,6 +295,7 @@ def build_report(store, now, policy, evidence):
         },
         "latest": latest_rows,
         "indicators": indicators,
+        "calendar_sentiment": preference_report(store, now),
         "outcome_providers": providers,
         "outcomes": outcomes,
         "scorecards": rows,
@@ -286,6 +308,11 @@ def build_report(store, now, policy, evidence):
             "candidates": [
                 "horizon",
                 "without_community",
+                "without_radars",
+                "without_information",
+                "without_response_cohort",
+                "without_comment_estimates",
+                "without_baseline",
                 "survival_baseline",
                 "equal_components",
                 "community_weight_25pct",
@@ -298,17 +325,8 @@ def build_report(store, now, policy, evidence):
             "selection": "prospective_matched_losses_then_fresh_holdout",
             "note": "candidate_screening_is_exploratory_not_automatic_optimization",
         },
-        "curves": [
-            {
-                "source": k[0],
-                "version": k[1],
-                "target": k[2],
-                "track": k[3],
-                "hours": k[4],
-                "points": v,
-            }
-            for k, v in sorted(curves.items())
-        ],
+        "curve_basis": "received_publication_values",
+        "curves": publication_curves(store, now),
     }
 
 
@@ -319,6 +337,10 @@ def html_report(report):
         "horizon": "Horizon",
         "survival_baseline": "历史生存基线",
         "without_community": "移除社区信息",
+        "without_information": "移除来源修正",
+        "without_comment_estimates": "移除独立承诺判断",
+        "without_radars": "移除雷达预测",
+        "without_baseline": "移除历史基准",
         "equal_components": "各分量等权",
         **{f"community_weight_{n}pct": f"社区权重 {n}%" for n in (25, 50, 75)},
     }
@@ -494,6 +516,35 @@ def html_report(report):
         + "</tbody></table></div>"
     )
     diagnostic_html += "<p>社区 25% / 50% / 75% 与移除社区、历史基线、等权组合同步前瞻记录。仅在相同时间窗比较误差；候选筛选后还需新的留出窗口验证，再人工决定权重。没有自动替换线上模型。</p>"
+    preference_html = ""
+    preference = report.get("calendar_sentiment", {})
+    if preference.get("latest"):
+        states = {"ready_for_evaluation": "已达样本门槛", "insufficient_recent_votes": "新增票不足 50",
+                  "upcoming": "等待该日开始", "closed": "已结束", "stale": "采集待更新"}
+        current = [p for p in preference["latest"] if p["window_end"] > stamp(report["generated_at"])
+                   and p["window_start"] < stamp(report["generated_at"])+72*3600]
+        rows = []
+        for p in current:
+            rows.append("<tr>" + "".join(f"<td>{escape(str(v))}</td>" for v in
+                (p["date"], p["total_clicks"], p["recent_votes"], pct(p["reset_share"]),
+                 f'{p["repeat_adjusted_units"]:.2f}', iso(p["latest_vote_at"]) if p["latest_vote_at"] else "—", states[p["state"]])) + "</tr>")
+        preference_html = ('<h2>Did Codex Reset · 实时新增投票</h2><p>按太平洋日历日采样，近 6 小时至少 50 个新增点击后冻结候选；'
+            '重复点击敏感性按每 IP 每 24 小时最多 100 次折算。独立参与人数未知。愿望与预测混合，当前主概率权重为 0。</p>'
+            '<div class="panel"><table><thead><tr><th>活动日</th><th>累计点击</th><th>实际新增</th><th>新增重置占比</th>'
+            '<th>重复折算单位</th><th>最后增票 · UTC</th><th>状态</th></tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>')
+        evaluations = []
+        for trial in preference.get("trials", []):
+            settlement = trial.get("settlement") or {}
+            for name, p in {**trial["candidates"], **{c["source"]+":"+c["version"]: c["probability"] for c in trial["comparisons"]}}.items():
+                loss = settlement.get("candidate_losses", {}).get(name, {})
+                state = "已记分" if settlement.get("score_eligible") else "完成事件单列误差" if settlement.get("event_score_eligible") else "待窗口成熟或证据完整"
+                evaluations.append("<tr>"+"".join(f"<td>{escape(str(v))}</td>" for v in
+                    (trial["features"]["date"], name, pct(p), f'{loss["brier"]:.4f}' if loss else "—", state))+"</tr>")
+        preference_html += (f'<p>已冻结 {len(preference.get("trials", []))} 个独立日样本，已记分 {preference.get("scored_days", 0)} 个。'
+                            '候选与同一时刻的 Horizon、来源预测按相同剩余日窗口核验；每一天只冻结一次。</p>')
+        if evaluations:
+            preference_html += ('<div class="panel"><table><thead><tr><th>活动日</th><th>候选 / 对照</th><th>冻结值</th>'
+                '<th>Brier</th><th>状态</th></tr></thead><tbody>'+"".join(evaluations)+'</tbody></table></div>')
     data = json.dumps(report["curves"], ensure_ascii=False).replace("<", "\\u003c")
     return (
         """<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -515,6 +566,7 @@ h1{font-size:32px;margin:0}h2{font-size:21px;margin:28px 0 14px}p{color:#aebeb5}
         + "".join(scored)
         + "</tbody></table></div>"
         + diagnostic_html
+        + preference_html
         + """<h2>近期事件核验</h2><p>评估目标是公开可核验的广泛重置或发卡完成。预告、发放中、局部补偿分别保留；完成时间有分歧时延后记分。</p><div class="panel"><table><thead><tr><th>时间 · UTC</th><th>类别</th><th>核验状态</th><th>完成证据</th></tr></thead><tbody>
 """
         + "".join(outcome_rows)

@@ -16,7 +16,7 @@ class ChangesTests(unittest.TestCase):
 
     def test_contributions_sum_to_actual_change_including_projection_and_entry(self):
         before = forecast(self.store, NOW, RELIEF)
-        curve = Curve("lunar", RELIEF, NOW, NOW, NOW, NOW + 3600, [(24,.8),(48,.9)])
+        curve = Curve("lunar", RELIEF, NOW, NOW, NOW, NOW + 3600, [(24,.8),(48,.9)], metadata={"baseline_points":[(24,.2),(48,.4)]})
         poll = {"kind":"probability_votes", "target":RELIEF, "population":"private", "id":"round",
                 "start":NOW-3600, "expires":NOW+86400, "total":20, "bins":[{"p":.9,"votes":20}], "private":True}
         self.store.save("lunar", NOW, {}, Observation("lunar", NOW, NOW, curves=[curve]))
@@ -27,10 +27,10 @@ class ChangesTests(unittest.TestCase):
         self.assertNotIn("private_identity", json.dumps(change))
         for w in change["windows"]:
             self.assertAlmostEqual(sum(d["effect"] for d in w["drivers"]) + w["coherence_effect"], w["after"] - w["before"])
-            entered = next(d for d in w["drivers"] if d["id"] == "lunar")
-            self.assertIsNone(entered["before"])
-            self.assertEqual(entered["input_effect"], 0)
-            self.assertGreater(entered["weight_effect"], 0)
+            entered = next(d for d in w["drivers"] if d["id"] == "radar_revision")
+            self.assertEqual(entered["before"], 0)
+            self.assertGreater(entered["input_effect"], 0)
+            self.assertEqual(entered["weight_effect"], 0)
         self.assertAlmostEqual(change["windows"][0]["coherence_effect"], .01)
 
     def test_version_boundaries_and_future_comparisons_are_excluded(self):

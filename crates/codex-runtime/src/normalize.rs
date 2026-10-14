@@ -1104,7 +1104,7 @@ mod tests {
 
             assert_eq!(
                 actual,
-                expected.trim_end(),
+                expected.replace("\r\n", "\n").trim_end(),
                 "normalized status changed for fixture {name}"
             );
         }

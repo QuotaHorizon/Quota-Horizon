@@ -35,7 +35,7 @@ from reset_observer.importers import (
     json_lines,
     paired_variants,
 )
-from reset_observer.reporting import build_report, html_report
+from reset_observer.reporting import build_report, html_report, publication_curves
 from reset_observer.runtime import (
     atomic_write,
     exclusive,
@@ -337,7 +337,7 @@ class EvidenceTests(TemporaryStore):
         self.store.observation(
             "public_catalogue", T + 1000, None, False, None, None, "timeout"
         )
-        self.assertFalse(coverage(self.store, T, T + 7200, T + 10000, self.policy))
+        self.assertTrue(coverage(self.store, T, T + 7200, T + 10000, self.policy))
 
 
 class BenchmarkTests(TemporaryStore):
@@ -509,6 +509,26 @@ class StatisticalTests(unittest.TestCase):
 
 
 class ImportAndReportTests(TemporaryStore):
+    def test_published_24h_trend_survives_late_receipt_without_relaxing_scoring(self):
+        f = forecast(points=[[6,.1],[24,.4]], available_at=T+60, expires_at=T+3600)
+        self.store.add_forecast(f)
+        curves = publication_curves(self.store,T+120)
+        short = next(c for c in curves if c["hours"] == 24)
+        self.assertEqual(short["points"], [{"at":iso(T+60),"p":.4}])
+        self.assertEqual(next(c for c in curves if c["hours"] == 48)["points"][0]["p"], None)
+        self.assertIsNone(f.align(T+60,24))
+        self.assertEqual(self.store.trials(T+120), [])
+
+    def test_publication_trends_keep_expiry_gaps_versions_and_private_inputs_out(self):
+        self.store.add_forecast(forecast(available_at=T+60,expires_at=T+300))
+        self.store.add_forecast(forecast(origin=T+3600,generated_at=T+3600,available_at=T+3660,expires_at=T+7200))
+        self.store.add_forecast(forecast(source="secret",private=True,available_at=T+3660))
+        self.store.add_forecast(forecast(version="v2",origin=T+7200,generated_at=T+7200,available_at=T+7260))
+        curves = publication_curves(self.store,T+7270)
+        self.assertNotIn("secret",json.dumps(curves))
+        v1 = next(c for c in curves if c["version"]=="v1" and c["hours"]==24)
+        self.assertEqual(v1["points"][1],{"at":iso(T+300),"p":None})
+        self.assertEqual({c["version"] for c in curves},{"v1","v2"})
     def test_scoring_progress_separates_rolling_windows_from_headline_scores(self):
         initialize(self.store, T, self.policy)
         for source in ("radar", "comparison"):
@@ -772,6 +792,33 @@ class ImportAndReportTests(TemporaryStore):
         result = paired_variants([model(RELIEF, 0.2), model(AUTOMATIC, 0.3, 0.9)])
         self.assertEqual(result[RELIEF]["without_community"]["points"], [0.25])
         self.assertEqual(result[AUTOMATIC]["without_community"]["points"], [0.25])
+
+    def test_three_family_ablations_preserve_group_mass_and_relative_budgets(self):
+        payload = {"components": [
+            {"id":"survival_baseline", "family":"baseline", "probabilities":[.1,.2]},
+            {"id":"a", "family":"radars", "probabilities":[.4,.6]},
+            {"id":"b", "family":"radars", "probabilities":[.8,.9]},
+            {"id":"votes", "family":"community", "probabilities":[.7,.8]}],
+            "training": {"weights":{"baseline":.15,"radars":.65,"community":.2}, "within_groups":[
+                {"family":"baseline", "weights":{"survival_baseline":1.}, "group_weight":1.},
+                {"family":"radars", "weights":{"a":1.}, "group_weight":.75},
+                {"family":"radars", "weights":{"b":1.}, "group_weight":.25},
+                {"family":"community", "weights":{"votes":1.}, "group_weight":1.}]}}
+        variants = fixed_weight_variants(payload)
+        radar = .75*np.array([.4,.6]) + .25*np.array([.8,.9])
+        without = (.15*np.array([.1,.2])+.65*radar)/.8
+        np.testing.assert_allclose(variants["without_community"], without)
+        np.testing.assert_allclose(variants["without_radars"], (.15*np.array([.1,.2])+.2*np.array([.7,.8]))/.35)
+        np.testing.assert_allclose(variants["community_weight_50pct"], .5*without+.5*np.array([.7,.8]))
+
+    def test_increment_ablations_use_the_deployed_floor_and_supplied_recomputation(self):
+        def payload(target, full, without):
+            return {"target":target,"status":"current","valid_until":T+1000,"components":[],
+                    "combination_method":"baseline_plus_revisions","coherence":"broad_inherits_automatic_floor",
+                    "curve":[{"hours":1,"probability":full}], "counterfactuals":{"without_community":[without]}}
+        rows=paired_variants([payload(RELIEF,.3,.32),payload(AUTOMATIC,.5,.55)])
+        self.assertEqual(rows[RELIEF]["without_community"]["points"],[.55])
+        self.assertEqual(rows[AUTOMATIC]["without_community"]["points"],[.55])
 
     def test_private_provenance_does_not_leave_report(self):
         initialize(self.store, T, self.policy)

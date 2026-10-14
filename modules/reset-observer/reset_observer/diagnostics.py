@@ -14,7 +14,7 @@ def coverage_details(store, start, end, known_by, policy):
     gap = policy.maximum_coverage_gap_seconds
     for provider in FEEDS:
         rows = [dict(r) for r in store.db.execute(
-            "SELECT observed_at,generated_at,healthy,claims,error FROM observations WHERE provider=? AND observed_at BETWEEN ? AND ? ORDER BY observed_at,id",
+            "SELECT observed_at,generated_at,healthy,error FROM observations WHERE provider=? AND observed_at BETWEEN ? AND ? ORDER BY observed_at,id",
             (provider, start - gap, min(end + gap, known_by)))]
         good = [r["observed_at"] for r in rows if r["healthy"]]
         left = max((t for t in good if t <= start), default=None)
@@ -44,8 +44,11 @@ def coverage_details(store, start, end, known_by, policy):
         counts = Counter("request_or_decode_failure" if r["error"] else
                          "stale_source_content" if r["generated_at"] is not None and r["observed_at"] - r["generated_at"] > 3600 else
                          "incomplete_source_evidence" for r in failed)
+        # A failed request between timely healthy observations does not erase
+        # that coverage. Preserve failures as diagnostics, not a second gate.
+        qualifies = not reasons and end <= known_by
         reasons.extend(sorted(counts))
-        providers.append({"provider": provider, "qualifies": not reasons and end <= known_by,
+        providers.append({"provider": provider, "qualifies": qualifies,
                           "reasons": reasons, "gaps": spans, "failed_attempts": dict(counts),
                           "first_failure": iso(failed[0]["observed_at"]) if failed else None,
                           "last_failure": iso(failed[-1]["observed_at"]) if failed else None})
@@ -94,7 +97,7 @@ def window_diagnostics(store, now, policy, trials, settlements):
         label = settlements.get(members[0]["id"], {"status": "pending", "reason": "window_not_mature", "label": None})
         end = origin + hours * 3600
         detail = None
-        if label["status"] == "unresolved":
+        if label["status"] == "unresolved" and len(windows) < 200:
             key = (origin, hours)
             if key not in cache:
                 cache[key] = coverage_details(store, origin, end, now, policy)

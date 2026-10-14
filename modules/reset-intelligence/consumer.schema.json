@@ -2,50 +2,370 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Reset Intelligence consumer contract v1",
   "type": "object",
-  "required": ["schema_version", "horizons_hours", "forecasts"],
+  "required": [
+    "schema_version",
+    "horizons_hours",
+    "forecasts"
+  ],
   "additionalProperties": false,
   "properties": {
-    "schema_version": {"const": "reset-intelligence-consumer/1"},
-    "horizons_hours": {"type": "array", "minItems": 72, "maxItems": 72, "items": {"type": "integer", "minimum": 1, "maximum": 72}},
-    "forecasts": {"type": "array", "items": {"$ref": "#/$defs/forecast"}}
+    "schema_version": {
+      "const": "reset-intelligence-consumer/1"
+    },
+    "horizons_hours": {
+      "type": "array",
+      "minItems": 72,
+      "maxItems": 72,
+      "items": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 72
+      }
+    },
+    "forecasts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/forecast"
+      }
+    }
   },
   "$defs": {
-    "probability": {"type": "number", "minimum": 0, "maximum": 1},
-    "range": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/probability"}},
+    "probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "range": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "$ref": "#/$defs/probability"
+      }
+    },
     "forecast": {
       "type": "object",
-      "required": ["target", "status", "issued_at", "model_version", "curve", "valid_until", "training_state", "sources", "community", "statements", "source_health"],
+      "required": [
+        "target",
+        "status",
+        "issued_at",
+        "model_version",
+        "curve",
+        "valid_until",
+        "training_state",
+        "sources",
+        "community",
+        "statements",
+        "source_health"
+      ],
       "additionalProperties": false,
       "properties": {
-        "target": {"enum": ["broad_quota_relief", "automatic_reset"]},
-        "status": {"enum": ["current", "stale", "unavailable"]},
-        "issued_at": {"type": "string", "format": "date-time"},
-        "valid_until": {"type": ["string", "null"], "format": "date-time"},
-        "model_version": {"type": "string"},
-        "reason": {"type": ["string", "null"]},
-        "training_state": {"enum": ["cold_start_prior", "learned", null]},
-        "coherence": {"type": ["string", "null"]},
-        "evaluation_windows": {"type": "integer", "minimum": 0},
-        "event_count": {"type": "integer", "minimum": 0},
-        "curve": {"type": "array", "items": {"$ref": "#/$defs/point"}},
-        "sources": {"type": "array", "items": {"type": "object"}},
-        "source_health": {"type": "array", "items": {"type": "object"}},
-        "community": {"type": ["object", "null"]},
-        "changes": {"type": ["object", "null"]},
-        "statements": {"type": "array", "items": {"type": "object"}}
+        "target": {
+          "enum": [
+            "broad_quota_relief",
+            "automatic_reset"
+          ]
+        },
+        "status": {
+          "enum": [
+            "current",
+            "stale",
+            "unavailable"
+          ]
+        },
+        "issued_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "valid_until": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "model_version": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "training_state": {
+          "enum": [
+            "cold_start_prior",
+            "learned",
+            null
+          ]
+        },
+        "coherence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evaluation_windows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "event_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "curve": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/point"
+          }
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "comment": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "probability",
+                  "url",
+                  "at",
+                  "included",
+                  "state",
+                  "deadline",
+                  "timing_sources",
+                  "adjustment_24h",
+                  "adjustment_48h"
+                ],
+                "properties": {
+                  "probability": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "at": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "included": {
+                    "type": "boolean"
+                  },
+                  "state": {
+                    "enum": [
+                      "included",
+                      "closed_or_superseded",
+                      "awaiting_event_window",
+                      "awaiting_source_baseline"
+                    ]
+                  },
+                  "deadline": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "timing_sources": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "adjustment_24h": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "adjustment_48h": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "source_health": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "community": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "family_weights": {
+          "type": "object"
+        },
+        "community_inputs": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "community_coverage": {
+          "type": "object"
+        },
+        "changes": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "statements": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "combination_method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_event_at": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "response": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "at",
+            "url",
+            "reviewed",
+            "changed"
+          ],
+          "properties": {
+            "at": {
+              "type": "number"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "reviewed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "changed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "announcement",
+                "revision",
+                null
+              ]
+            },
+            "deadline": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        },
+        "statements_checked_at": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
       }
     },
     "point": {
       "type": "object",
-      "required": ["hours", "probability", "baseline", "baseline_parameter_interval_80", "component_range"],
+      "required": [
+        "hours",
+        "probability",
+        "baseline",
+        "baseline_parameter_interval_80",
+        "component_range"
+      ],
       "additionalProperties": false,
       "properties": {
-        "hours": {"type": "integer", "minimum": 1, "maximum": 72},
-        "probability": {"$ref": "#/$defs/probability"},
-        "baseline": {"$ref": "#/$defs/probability"},
-        "unconstrained_probability": {"$ref": "#/$defs/probability"},
-        "baseline_parameter_interval_80": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/range"}]},
-        "component_range": {"$ref": "#/$defs/range"}
+        "hours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 72
+        },
+        "probability": {
+          "$ref": "#/$defs/probability"
+        },
+        "baseline": {
+          "$ref": "#/$defs/probability"
+        },
+        "unconstrained_probability": {
+          "$ref": "#/$defs/probability"
+        },
+        "baseline_parameter_interval_80": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/range"
+            }
+          ]
+        },
+        "component_range": {
+          "$ref": "#/$defs/range"
+        },
+        "radar_adjustment": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "community_adjustment": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "coherence_adjustment": {
+          "type": "number",
+          "minimum": -2,
+          "maximum": 2
+        },
+        "comment_adjustment": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "The separate source-comment contribution already included in radar_adjustment; subtract it to display the other source revisions."
+        }
       }
     }
   }

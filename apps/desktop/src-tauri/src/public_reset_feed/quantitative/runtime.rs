@@ -35,6 +35,9 @@ impl Configuration {
             .all(|p| p.is_absolute())
     }
     fn command(&self) -> Command {
+        self.action("start")
+    }
+    fn action(&self, action: &str) -> Command {
         let mut command = Command::new(&self.python_path);
         if let Some(root) = self
             .python_path
@@ -47,7 +50,7 @@ impl Configuration {
         }
         command
             .current_dir(&self.module_directory)
-            .args(["-m", "reset_observer", "start", "--db"])
+            .args(["-m", "reset_observer", action, "--db"])
             .arg(&self.database_path)
             .arg("--output")
             .arg(&self.output_path);
@@ -79,6 +82,23 @@ pub(crate) struct Status {
     issue: Option<String>,
 }
 static STATUS: Mutex<Option<(PathBuf, Status)>> = Mutex::new(None);
+static ACTIVE: Mutex<Option<(PathBuf, Configuration)>> = Mutex::new(None);
+
+pub(crate) fn refresh(directory: &Path) -> Result<(), String> {
+    let configuration = ACTIVE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .filter(|(path, _)| path == directory)
+        .map(|(_, config)| config.clone())
+        .or_else(|| read_json::<Configuration>(&directory.join("reset-radar-runtime.json")).ok())
+        .filter(Configuration::valid);
+    if let Some(config) = configuration {
+        invoke(config.action("refresh"), Duration::from_secs(45))
+            .map_err(|_| "独立雷达更新未完成，后台将继续重试。".to_string())?;
+    }
+    Ok(())
+}
 
 pub(crate) fn status(directory: &Path) -> Status {
     if let Some((path, status)) = STATUS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
@@ -118,6 +138,8 @@ impl Supervisor {
         });
         *STATUS.lock().unwrap_or_else(|e| e.into_inner()) =
             Some((directory.into(), self.state.clone()));
+        *ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) =
+            self.configuration.clone().map(|c| (directory.into(), c));
     }
     fn check(
         &mut self,
@@ -256,6 +278,8 @@ fn invoke(mut command: Command, timeout: Duration) -> Result<&'static str, &'sta
     match value.get("state").and_then(|s| s.as_str()) {
         Some("already_running") => Ok("running"),
         Some("starting" | "restarting") => Ok("starting"),
+        Some("refreshed") => Ok("running"),
+        Some("refreshing") => Ok("refreshing"),
         _ => Err("start_failed"),
     }
 }

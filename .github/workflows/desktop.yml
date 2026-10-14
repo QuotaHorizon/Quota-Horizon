@@ -1,0 +1,139 @@
+name: Desktop CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            build: build:app:mac
+            installer: dist/releases/*/QuotaHorizon_*_macos-arm64.dmg
+          - platform: windows-x64
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            build: build:app:win
+            installer: apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Prepare Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup target add "${{ matrix.target }}"
+          rustc --version
+
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          key: ${{ matrix.platform }}
+          workspaces: |
+            . -> target
+            apps/desktop/src-tauri -> target
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Install frontend and packaging dependencies
+        run: npm --prefix apps/desktop ci --no-audit --no-fund
+
+      - name: Check source, types and frontend
+        run: |
+          npm run check:source
+          npm run typecheck
+          npm run test:scripts
+          npm test
+
+      - name: Check Rust formatting and native tests
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+          cargo test --locked --workspace
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - name: Prepare the macOS forecasting runtime
+        if: runner.os == 'macOS'
+        uses: conda-incubator/setup-miniconda@04b72d7799e2bae3771b041de9b46c710d29caab # v4
+        env:
+          CONDA_OVERRIDE_OSX: "13.0"
+        with:
+          miniforge-version: latest
+          architecture: arm64
+          activate-environment: horizon-build
+          environment-file: .github/ci/macos-runtime.yml
+          channel-priority: strict
+          auto-activate-base: false
+          remove-profiles: false
+
+      - name: Test independent forecasting and evaluation modules
+        if: runner.os == 'macOS'
+        shell: bash -el {0}
+        run: |
+          python -c 'import sys, numpy; print(sys.executable); print(numpy.__version__)'
+          echo "QUOTAHORIZON_PYTHON=$CONDA_PREFIX/bin/python" >> "$GITHUB_ENV"
+          (cd modules/reset-intelligence && python -m unittest discover -s tests)
+          (cd modules/reset-observer && python -m unittest discover -s tests)
+
+      - name: Build the native application and verify embedded assets
+        run: npm --prefix apps/desktop run "${{ matrix.build }}" -- -- --locked
+
+      - name: Package and verify the macOS installer
+        if: runner.os == 'macOS'
+        run: npm run package:mac -- --skip-build
+
+      - name: Retain the installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: QuotaHorizon-${{ matrix.platform }}-${{ github.sha }}
+          path: ${{ matrix.installer }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Record the artifact version and source
+        env:
+          BUILD_PLATFORM: ${{ matrix.platform }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            `### ${process.env.BUILD_PLATFORM}\n\nVersion: ${version}\n\nSource: \`${process.env.GITHUB_SHA}\`\n\nInstaller attached to this workflow run.\n`);
+          NODE
+
+      - name: Remove the temporary macOS application bundle
+        if: runner.os == 'macOS'
+        run: rm -rf apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/QuotaHorizon.app

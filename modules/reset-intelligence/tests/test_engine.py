@@ -87,11 +87,13 @@ class CommunityTests(unittest.TestCase):
     def setUp(self):
         self.base = Survival([e.at for e in history()], NOW)
 
-    def test_small_poll_shrinkage_and_expiry(self):
+    def test_small_poll_is_excluded_and_eligible_poll_expires(self):
         p = {"kind": "probability_votes", "start": NOW - 3600, "expires": NOW + 23 * 3600,
              "id": "today", "total": 1, "bins": [{"p": .9, "votes": 1}]}
         out = ballot_curve(p, NOW, [12, 24, 48], self.base, NOW - 3 * 86400, ModelConfig())
-        self.assertAlmostEqual(out["shrinkage_strength"], .2)
+        self.assertIsNone(out)
+        p.update(total=50, bins=[{"p": .9, "votes": 50}])
+        out = ballot_curve(p, NOW, [12, 24, 48], self.base, NOW - 3 * 86400, ModelConfig())
         self.assertGreater(out["probabilities"][1], self.base.p(24))
         self.assertLess(out["probabilities"][1], .9)
         self.assertIsNone(ballot_curve(p, p["expires"], [24], self.base, 0, ModelConfig()))
@@ -105,13 +107,12 @@ class CommunityTests(unittest.TestCase):
 
     def test_interval_ballot_conditions_on_survival(self):
         p = {"kind": "interval_votes", "start": NOW - 86400, "expires": NOW + 7 * 86400,
-             "id": "week", "anchor_reset": NOW - 86400, "total": 10,
-             "bins": [{"start": NOW - 86400, "end": NOW, "votes": 5},
-                      {"start": NOW, "end": NOW + 48 * 3600, "votes": 5},
+             "id": "week", "anchor_reset": NOW - 86400, "total": 100,
+             "bins": [{"start": NOW - 86400, "end": NOW, "votes": 50},
+                      {"start": NOW, "end": NOW + 48 * 3600, "votes": 50},
                       {"start": NOW + 48 * 3600, "end": None, "votes": 0}]}
         out = ballot_curve(p, NOW, [24, 48], self.base, NOW - 86400, ModelConfig())
-        w = out["shrinkage_strength"]
-        self.assertAlmostEqual(out["probabilities"][0], (1 - w) * self.base.p(24) + w * .5)
+        self.assertAlmostEqual(out["probabilities"][0], .5)
         self.assertIsNone(ballot_curve(p, NOW, [24], self.base, NOW - 10, ModelConfig()))
 
     def test_count_quotes_are_additional_events_not_headline_price(self):
@@ -229,7 +230,7 @@ class LedgerTests(unittest.TestCase):
         self.assertGreater(r["windows"]["24"]["piecewise_survival"]["windows"], 20)
 
     def test_invalid_cumulative_probabilities_fail_adapter(self):
-        raw = {"updated_at": "2026-10-03T14:00:00Z", "probabilities": {"raw_24h": .9, "raw_48h": .2},
+        raw = {"updated_at": "2026-10-03T14:00:00Z", "probabilities": {"raw_24h": .9, "raw_48h": .2, "rounded_24h": 90, "rounded_48h": 20},
                "last_reset_at": "2026-10-02T21:00:00Z", "model": {"version": "test"}}
         with self.assertRaises(ValueError):
             parse({"id": "s", "adapter": "codex_reset"}, raw, NOW)
@@ -260,27 +261,12 @@ class LedgerTests(unittest.TestCase):
         f = forecast(self.store, NOW, RELIEF, source_ids={"event_ledger"})
         self.assertEqual([c["id"] for c in f["components"]], ["survival_baseline"])
 
-    def test_pipeline_learns_family_weights_only_from_matured_windows(self):
-        poll = {"kind": "probability_votes", "target": RELIEF, "population": "sample", "id": "round",
-                "start": NOW - 3600, "expires": NOW + 86400, "total": 10, "bins": [{"p": .9, "votes": 10}]}
-        self.store.save("votes", NOW, {}, Observation("votes", NOW, polls=[poll]))
-        rows = [{"label": y, "features": {"history": .5, "community": .05 + .9 * y},
-                 "forecast": {"components": [
-                     {"id": "survival_baseline", "probabilities": [.5] * 72},
-                     {"id": "votes", "probabilities": [.05 + .9 * y] * 72}]}}
-                for y in [0, 1] * 20]
-        with patch("reset_intelligence.pipeline.matured", return_value=rows):
-            f = forecast(self.store, NOW, RELIEF, ModelConfig(apply_learned_weights=True))
-        self.assertEqual(f["training"]["state"], "learned")
-        self.assertGreater(f["training"]["weights"]["community"], .9)
-        with patch("reset_intelligence.pipeline.matured", return_value=rows):
-            review = forecast(self.store, NOW, RELIEF)
-        self.assertEqual(review["training"]["weights"]["community"], .5)
-        self.assertGreater(review["training"]["candidate_weights"]["community"], .9)
-        self.assertFalse(review["training"]["apply_learned_weights"])
-        with patch("reset_intelligence.pipeline.matured", return_value=rows[:10]):
-            f = forecast(self.store, NOW, RELIEF)
+    def test_increment_model_does_not_silently_reuse_old_family_weight_fits(self):
+        with self.assertRaisesRegex(ValueError, "separately reviewed forward fit"):
+            forecast(self.store, NOW, RELIEF, ModelConfig(apply_learned_weights=True))
+        f = forecast(self.store, NOW, RELIEF)
         self.assertEqual(f["training"]["state"], "cold_start_prior")
+        self.assertFalse(f["training"]["apply_learned_weights"])
 
 
 if __name__ == "__main__":

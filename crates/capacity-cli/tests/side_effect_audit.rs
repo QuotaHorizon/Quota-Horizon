@@ -121,7 +121,30 @@ fn codex_read_path_has_no_common_production_file_write_api() {
             }
             let source = fs::read_to_string(&path).unwrap();
             let production = source.split("\n#[cfg(test)]").next().unwrap_or(&source);
+            // Executable hashing needs a read-only Windows handle with restricted
+            // sharing. Keep every mutating option forbidden, including here.
+            let read_only_identity =
+                path == workspace.join("crates/codex-runtime/src/discovery/mod.rs");
+            if read_only_identity {
+                for option in [
+                    ".write(true)",
+                    ".append(true)",
+                    ".create(true)",
+                    ".create_new(true)",
+                    ".truncate(true)",
+                ] {
+                    assert!(
+                        !production.contains(option),
+                        "executable identity probe must remain read-only"
+                    );
+                }
+                assert!(production.contains(".read(true)"));
+                assert!(production.contains(".share_mode(1)"));
+            }
             for token in forbidden {
+                if token == "OpenOptions::" && read_only_identity {
+                    continue;
+                }
                 assert!(
                     !production.contains(token),
                     "production Codex read boundary contains forbidden write API {token}"

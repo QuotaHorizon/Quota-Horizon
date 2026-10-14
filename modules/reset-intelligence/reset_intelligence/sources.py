@@ -21,10 +21,14 @@ CATALOG = [
     {"id": "dreaife", "adapter": "dreaife", "url": "https://codexreset.dreaife.tokyo/api/health"},
     {"id": "date_poll", "adapter": "date_poll", "url": "https://codex-reset.com/api/reset-poll"},
     {"id": "community_poll", "adapter": "community_poll", "url": "https://nextreset.ai/api/community"},
+    {"id": "didcodex_poll", "adapter": "calendar_preference", "url": "https://didcodexreset.com/api/oct28/votes",
+     "calendar_url": "https://didcodexreset.com/zh-hk/oct28.html"},
     {"id": "statements", "adapter": "statements", "url": "https://codex-reset.pro/api/reset-feed"},
     {"id": "tibo_posts", "adapter": "tibo_posts", "url": "https://codex-reset.com/api/feed?locale=zh"},
 ]
 USER_AGENT = "ResetIntelligence/0.1 (+https://github.com/QuotaHorizon/Quota-Horizon)"
+SOURCE_INTERVALS = {s["id"]: 60 for s in CATALOG}
+SOURCE_INTERVALS.update(lunar=300, observatory=300, dreaife=300)
 
 
 def statement_relevance(text):
@@ -34,6 +38,10 @@ def statement_relevance(text):
 
 
 def get_json(url: str, headers: dict | None = None) -> object:
+    return json.loads(get_text(url, headers), parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON")))
+
+
+def get_text(url: str, headers: dict | None = None) -> str:
     canonical_url(url)  # Reject non-HTTPS and embedded credentials.
     req = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json", **(headers or {})})
     with urlopen(req, timeout=25) as response:
@@ -41,7 +49,7 @@ def get_json(url: str, headers: dict | None = None) -> object:
         data = response.read(4 * 1024 * 1024 + 1)
         if len(data) > 4 * 1024 * 1024:
             raise ValueError("response exceeds adapter limit")
-        return json.loads(data, parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON")))
+        return data.decode("utf-8")
 
 
 def inert(node: dict, depth: int = 0):
@@ -105,9 +113,30 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
                                     "targeted" if re.search(r"pro\s*500|specific accounts|affected users|everyone who.{0,80}reset|reset to \d+[km]? users|部分.*用户|仅.*用户|非全局", row["text"], re.I) else "unspecified"))
     elif adapter == "codex_reset":
         ps = d["probabilities"]
-        c = curve(AUTOMATIC, d["updated_at"], [(24, ps["raw_24h"]), (48, ps["raw_48h"])],
-                  3600, d["last_reset_at"], metadata={"source_model": d["model"]["version"]})
-        c.evidence = [f"https://x.com/i/status/{i}" for i in d.get("context", {}).get("evidence_ids", [])]
+        c = curve(AUTOMATIC, d["updated_at"], [(24, probability(ps["rounded_24h"], 100)),
+                  (48, probability(ps["rounded_48h"], 100))], 3600, d["last_reset_at"],
+                  metadata={"source_model": str(d["model"]["version"]) + ":published-v2",
+                            "upstream_model": d["model"]["version"], "estimate_kind": "published_complete",
+                            "baseline_points": [(24, probability(ps["raw_24h"])), (48, probability(ps["raw_48h"]))]})
+        c.evidence = [f"https://x.com/i/status/{i}" for i in d.get("context", {}).get("evidence_ids", []) if str(i).isdigit()]
+        # An evidence inventory is not a review of every listed post. Preserve
+        # the post the source says actually drives its published adjustment.
+        primary = d.get("context", {}).get("primary_post") or {}
+        c.metadata["reviewed_references"] = [canonical_url(primary["url"])] if primary.get("url") else []
+        c.metadata["response_version"] = 2
+        c.metadata["comment_version"] = 1
+        official, alert = d.get("official_signal") or {}, d.get("latest_alert") or {}
+        # Alert v3 publishes a separate commitment floor. It is neither the
+        # cadence curve nor the newer tease floor, and has its own event scope.
+        if (d.get("mode") == "announced" and ps.get("commitment_floor_percent") is not None
+                and official.get("url") and official.get("at") and alert.get("state") == "active"
+                and alert.get("url") and canonical_url(alert["url"]) == canonical_url(official["url"])):
+            score = probability(ps["commitment_floor_percent"], 100)
+            if ps.get("commitment") is not None and abs(score - probability(ps["commitment"])) > 1e-6:
+                raise ValueError("inconsistent source commitment score")
+            c.metadata["comment_estimate"] = {"probability": score, "url": canonical_url(official["url"]),
+                "at": stamp(official["at"]), "kind": "published_commitment_floor"}
+            c.metadata["reviewed_references"] = sorted(set(c.metadata["reviewed_references"] + [canonical_url(official["url"])]))
     elif adapter == "monitor":
         if "t" in d:
             d = inert(d)["result"]
@@ -115,14 +144,39 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
         c = curve(AUTOMATIC, d["updatedAt"], [(24, probability(d["forecast"]["score24h"], 100)),
                   (48, probability(d["forecast"]["score48h"], 100))], 7 * 3600, last,
                   metadata={"upstream_health": d["status"], "forecast_status": d["forecastStatus"]})
+        if all(k in d["forecast"] for k in ("baseScore24h", "baseScore48h")):
+            c.metadata["baseline_points"] = [(24, probability(d["forecast"]["baseScore24h"], 100)),
+                                              (48, probability(d["forecast"]["baseScore48h"], 100))]
+        c.metadata["decomposition_version"] = 1
+        c.metadata["revision_reviewed"] = bool(d["forecast"].get("semanticSignals"))
         if d["forecastStatus"] != "current":
             c.issues.append("upstream_forecast_not_current")
         c.evidence = [canonical_url(s["sourceUrl"]) for s in d.get("activeSignals", []) if s.get("sourceUrl")]
+        c.metadata["reviewed_references"] = [canonical_url(s["sourceUrl"]) for s in d["forecast"].get("semanticSignals", []) if s.get("sourceUrl")]
+        c.metadata["response_version"] = 2
     elif adapter == "nextreset":
-        curve(AUTOMATIC, d["asOf"], [(w["hours"], w["probability"]) for w in d["windows"]], 900,
+        c = curve(AUTOMATIC, d["asOf"], [(w["hours"], w["probability"]) for w in d["windows"]], 900,
               d["history"]["last"]["date"], expires=d["expiresAt"],
               issues=[] if d["checks"]["history"]["ok"] else ["unhealthy_outcome_history"],
-              metadata={"source_model": d["version"], "upstream_health": d["degraded"]})
+              metadata={"source_model": d["version"], "upstream_health": d["degraded"],
+                        "decomposition_version": 1,
+                        "baseline_points": [(w["hours"], probability(w["baseline"])) for w in d["windows"]]
+                            if all("baseline" in w for w in d["windows"]) else None})
+        c.metadata.update(response_version=2, reviewed_references=[])
+        social = d.get("social") or {}
+        # Consume a structured upstream interpretation, never score prose or
+        # substitute signal strength for the provider's full probability.
+        if (d.get("state") == "announced" and social.get("classification") == "promise"
+                and not (d.get("signalAudit") or {}).get("needsReview")
+                and social.get("source") and social.get("publishedAt") and social.get("expectedBy")
+                and any(w.get("probabilityReason") == "announcement_conditioned_estimate" for w in d["windows"])):
+            url = canonical_url(social["source"])
+            published, deadline = stamp(social["publishedAt"]), stamp(social["expectedBy"])
+            if published <= c.generated_at and published < deadline:
+                c.evidence = [url]
+                c.metadata["reviewed_references"] = [url]
+                c.metadata["revision_reviewed"] = True
+                c.metadata["announcement"] = {"url": url, "at": published, "deadline": deadline}
     elif adapter == "observatory":
         vm = d["viewModel"]
         curve(RELIEF, d["checkedAt"], [(h, vm[f"probability{h}h"]) for h in (12, 24, 48, 72)],
@@ -133,7 +187,10 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
         curve(RELIEF, d["generatedAt"], [(d["nearTerm"]["hours"], d["nearTerm"]["probability"]),
               (24, d["next24Hours"]["probability"])], 3600, d["lastResetAt"],
               metadata={"source_interval_24h": [d["next24Hours"]["low"], d["next24Hours"]["high"]],
-                        "source_model": d["comparisons"]["modelVersion"]})
+                        "source_model": d["comparisons"]["modelVersion"], "decomposition_version": 1,
+                        "baseline_points": [(d["nearTerm"]["hours"], probability(d["comparisons"]["withoutHints"]["sixHours"])),
+                                            (24, probability(d["comparisons"]["withoutHints"]["twentyFourHours"]))]
+                            if "withoutHints" in d["comparisons"] else None})
     elif adapter == "dreaife":
         d = raw["snapshot"]["data"]
         obs.generated_at = stamp(d["issued_at"])
@@ -190,7 +247,11 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
                               "original": p["text"], "translation_zh": p.get("localized_text") if p.get("translation_status") == "translated" else None,
                               "stage": "conditional" if statement_relevance(p["text"]) == "conditional_pledge" else None,
                               "event_type": None, "context": None, "source": name,
-                              "relevance": statement_relevance(p["text"])})
+                              "is_reply": p.get("is_reply"),
+                              "parent": {"id": str(p["in_reply_to_tweet_id"]), "author": p.get("replying_to") or "i",
+                                         "url": f"https://x.com/i/status/{p['in_reply_to_tweet_id']}", "text": None}
+                                        if str(p.get("in_reply_to_tweet_id", "")).isdigit() else None,
+                              "relevance": p.get("tibo_lane") or statement_relevance(p["text"])})
     elif adapter == "statements":
         obs.generated_at = stamp(d["generatedAt"])
         for p in d["posts"]:
@@ -200,10 +261,13 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
                                   "translation_zh": p.get("translation"), "stage": p.get("stage"),
                                   "event_type": p.get("eventType"), "scope_note": p.get("reason"),
                                   "context": p.get("context"), "source": name,
-                                  "relevance": statement_relevance(p["original"])})
+                                  "relevance": "reset_related" if p.get("eventType") in ("usage_reset", "reset_card") else statement_relevance(p["original"])})
     elif adapter == "count_market":
         from .community import parse_count_market
         return parse_count_market(spec, raw, at)
+    elif adapter == "calendar_preference":
+        from .preference import parse_calendar
+        return parse_calendar(spec, raw, at)
     else:
         raise ValueError("unknown source adapter")
     if obs.generated_at is not None and obs.generated_at > at + 60:
@@ -215,7 +279,17 @@ def fetch(spec: dict) -> tuple[dict, float, object | None, Observation | None, s
     raw = None
     try:
         headers = {"x-tsr-serverFn": "true"} if spec["adapter"] == "monitor" else None
-        raw = get_json(spec["url"], headers)
+        url = spec.get("discovery", {}).get("url", spec["url"]) if spec["adapter"] == "count_market" else spec["url"]
+        if urlsplit(url).netloc != urlsplit(spec["url"]).netloc:
+            raise ValueError("series discovery changes source host")
+        if spec["adapter"] == "calendar_preference":
+            from .preference import calendar_bootstrap
+            if urlsplit(spec["calendar_url"]).netloc != urlsplit(url).netloc:
+                raise ValueError("calendar changes source host")
+            raw = {"calendar": calendar_bootstrap(get_text(spec["calendar_url"], {"Accept": "text/html"})),
+                   "votes": get_json(url)}
+        else:
+            raw = get_json(url, headers)
         if spec["adapter"] == "dreaife":
             path = raw["current_prediction_ref"]["snapshot_url"]
             url = urljoin(spec["url"], path)
@@ -231,12 +305,39 @@ def fetch(spec: dict) -> tuple[dict, float, object | None, Observation | None, s
         return spec, time.time(), raw, None, code
 
 
-def collect(store, specs: list[dict] | None = None, minimum_interval: float = 900) -> list[dict]:
+def collect(store, specs: list[dict] | None = None, minimum_interval: float | None = None) -> list[dict]:
     specs = CATALOG if specs is None else specs
     if len({s["id"] for s in specs}) != len(specs):
         raise ValueError("duplicate source id")
-    latest = {a["source"]: a["observed_at"] for a in store.attempts(time.time())}
-    due = [s for s in specs if time.time() - latest.get(s["id"], 0) >= minimum_interval]
+    latest = {a["source"]: a for a in store.attempts(time.time())}
+    observations = store.observations(time.time())
+    outdated = {s["id"] for s in specs if s.get("adapter") == "codex_reset"
+                and (obs := observations.get(s["id"])) is not None
+                and any(c.metadata.get("estimate_kind") != "published_complete" for c in obs.curves)}
+    outdated.update(s["id"] for s in specs if s.get("adapter") in ("monitor", "lunar", "nextreset")
+                    and (obs := observations.get(s["id"])) is not None
+                    and any(c.metadata.get("decomposition_version") != 1 for c in obs.curves))
+    outdated.update(s["id"] for s in specs if s.get("adapter") in ("codex_reset", "monitor", "nextreset")
+                    and (obs := observations.get(s["id"])) is not None
+                    and any(c.metadata.get("response_version") != 2 for c in obs.curves))
+    outdated.update(s["id"] for s in specs if s.get("adapter") == "codex_reset"
+                    and (obs := observations.get(s["id"])) is not None
+                    and any(c.metadata.get("comment_version") != 1 for c in obs.curves))
+    def interval(spec):
+        normal = minimum_interval if minimum_interval is not None else SOURCE_INTERVALS.get(spec["id"], 900)
+        last = latest.get(spec["id"], {})
+        if last.get("error"):
+            if last["error"] in ("http_401", "http_403", "http_404", "http_429"):
+                return max(normal, 900)
+            rows = store.db.execute("SELECT error FROM observations WHERE source=? ORDER BY observed_at DESC,id DESC LIMIT 5", (spec["id"],))
+            failures = 0
+            for row in rows:
+                if not row["error"]:
+                    break
+                failures += 1
+            return min(900, 60 * 2 ** max(0, failures - 1))
+        return 0 if spec["id"] in outdated else normal
+    due = [s for s in specs if time.time() - latest.get(s["id"], {}).get("observed_at", 0) >= interval(s)]
     outcomes = []
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = [pool.submit(fetch, s) for s in due]

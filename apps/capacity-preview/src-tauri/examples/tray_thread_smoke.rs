@@ -1,6 +1,6 @@
 //! Native regression smoke test; no windows, account reads, or network requests.
 //! Run on a logged-in desktop with:
-//! cargo run --offline --locked -p capacity-desktop --example tray_thread_smoke
+//! cargo run --offline --locked -p capacity-desktop --features native-smoke --example tray_thread_smoke
 
 use capacity_desktop_lib::with_tray_on_main_thread;
 use std::{

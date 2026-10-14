@@ -23,6 +23,11 @@ const config = JSON.parse(readFileSync(join(tauriRoot, "tauri.conf.json"), "utf8
 const signing = desktopSigningPlan({ platform: process.platform, args: process.argv.slice(2),
   config, environment: process.env });
 const tauriArgs = signing.args;
+const cargoArguments = tauriArgs.indexOf("--");
+const tauriOptions = cargoArguments < 0 ? tauriArgs : tauriArgs.slice(0, cargoArguments);
+const targetIndex = tauriOptions.indexOf("--target");
+const target = targetIndex >= 0 ? tauriOptions[targetIndex + 1]
+  : tauriOptions.find((arg) => arg.startsWith("--target="))?.slice("--target=".length);
 // A non-secret build fact, not a system environment change or signing identity.
 const buildEnvironment = { ...process.env, VITE_HORIZON_SIGNING_MODE: signing.mode };
 
@@ -30,11 +35,10 @@ if (!existsSync(tauriCli)) {
   fail("Tauri CLI is unavailable. Run `npm ci` or `npm install` first.");
 }
 
-const requestedTargetIndex = tauriArgs.indexOf("--target");
-const requestedTarget = requestedTargetIndex >= 0 ? tauriArgs[requestedTargetIndex + 1] : null;
-if (process.platform === "darwin" && (!requestedTarget || requestedTarget === "aarch64-apple-darwin")) {
+if (process.platform === "darwin" && (!target || target === "aarch64-apple-darwin")) {
   const runtime = bundleRuntime(process.env.QUOTAHORIZON_PYTHON);
-  tauriArgs.push("--config", JSON.stringify({ bundle: { resources: { [`${runtime}/`]: "reset-runtime/" } } }));
+  tauriArgs.splice(cargoArguments < 0 ? tauriArgs.length : cargoArguments, 0,
+    "--config", JSON.stringify({ bundle: { resources: { [`${runtime}/`]: "reset-runtime/" } } }));
 }
 
 // A normal `cargo build --release` and `tauri build` use different Tauri
@@ -51,6 +55,7 @@ run("cargo", [
   "--release",
   "--package",
   "quota-horizon-desktop",
+  ...(target ? ["--target", target] : []),
 ]);
 
 if (signing.mode === "ad_hoc") {
@@ -64,8 +69,6 @@ run(process.execPath, [tauriCli, "build", ...tauriArgs], desktopRoot);
 // resources consistently. This never replaces a configured distribution
 // signature because it runs only for explicitly unsigned builds.
 if (signing.sealAdHoc) {
-  const targetIndex = tauriArgs.indexOf("--target");
-  const target = targetIndex >= 0 ? tauriArgs[targetIndex + 1] : null;
   const targetRoot = target
     ? join(tauriRoot, "target", target, "release")
     : join(tauriRoot, "target", "release");

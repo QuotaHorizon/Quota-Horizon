@@ -14,12 +14,22 @@ pub struct Forecast {
     issued_at: String,
     valid_until: Option<String>,
     model_version: String,
+    combination_method: Option<String>,
     training_state: Option<String>,
     evaluation_windows: usize,
     event_count: usize,
+    last_event_at: Option<f64>,
+    response: Option<NewsResponse>,
+    statements_checked_at: Option<f64>,
     curve: Vec<Prediction>,
     sources: Vec<Input>,
     community: Option<Community>,
+    #[serde(default)]
+    family_weights: BTreeMap<String, f64>,
+    #[serde(default)]
+    community_inputs: Vec<CommunityInput>,
+    #[serde(default)]
+    community_coverage: Option<CommunityCoverage>,
     #[serde(default)]
     statements: Vec<Statement>,
     #[serde(default)]
@@ -27,6 +37,7 @@ pub struct Forecast {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ForecastChanges {
+    basis: Option<String>,
     since: String,
     until: String,
     windows: Vec<ChangedWindow>,
@@ -65,6 +76,25 @@ struct Statement {
     event_type: Option<String>,
     context: Option<StatementContext>,
     collector: Option<String>,
+    relevance: Option<String>,
+    is_reply: Option<bool>,
+    parent: Option<StatementParent>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct StatementParent {
+    id: String,
+    author: String,
+    url: String,
+    text: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct NewsResponse {
+    at: f64,
+    url: String,
+    reviewed: Vec<String>,
+    changed: Vec<String>,
+    kind: Option<String>,
+    deadline: Option<f64>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct StatementContext {
@@ -77,6 +107,10 @@ struct Prediction {
     probability: f64,
     baseline: f64,
     component_range: [f64; 2],
+    radar_adjustment: Option<f64>,
+    comment_adjustment: Option<f64>,
+    community_adjustment: Option<f64>,
+    coherence_adjustment: Option<f64>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Input {
@@ -84,7 +118,50 @@ struct Input {
     probabilities: Vec<f64>,
     source_points: Option<Vec<[f64; 2]>>,
     origin: Option<f64>,
+    expires_at: Option<f64>,
     source_coverage_hours: Option<f64>,
+    weight: Option<f64>,
+    baseline_points: Option<Vec<[f64; 2]>>,
+    role: Option<String>,
+    signal_baseline: Option<Vec<f64>>,
+    baseline_weight: Option<f64>,
+    response_state: Option<String>,
+    comment: Option<CommentEstimate>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommentEstimate {
+    probability: f64,
+    url: String,
+    at: f64,
+    included: bool,
+    state: String,
+    deadline: Option<f64>,
+    timing_sources: Vec<String>,
+    adjustment_24h: f64,
+    adjustment_48h: f64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommunityInput {
+    id: String,
+    weight: f64,
+    votes: Option<usize>,
+    effective_votes: Option<f64>,
+    coverage_hours: Option<f64>,
+    probability_24h: f64,
+    probability_48h: f64,
+    total_votes: Option<usize>,
+    recent_votes: Option<usize>,
+    observation_window_hours: Option<f64>,
+    latest_vote_at: Option<f64>,
+    freshness_weight: Option<f64>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommunityCoverage {
+    included: usize,
+    unavailable: usize,
+    supplementary_included: usize,
+    supplementary_checked: usize,
+    supplementary_weight: f64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Community {
@@ -168,6 +245,7 @@ struct Scorecard {
     forecast_coverage: Option<f64>,
     settlement_states: BTreeMap<String, usize>,
     scores: Scores,
+    observed_event_scores: Option<Scores>,
     alerts: Alerts,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -240,6 +318,8 @@ pub struct Report {
     summary: Summary,
     latest: Vec<Latest>,
     curves: Vec<Curve>,
+    #[serde(default)]
+    curve_basis: Option<String>,
     scorecards: Vec<Scorecard>,
     comparisons: Vec<Comparison>,
     outcomes: Vec<Outcome>,
@@ -312,7 +392,14 @@ fn identity(i: &Identity) -> bool {
         || (i.source == "horizon" && i.track == "model")
         || (matches!(
             i.source.as_str(),
-            "survival_baseline" | "without_community" | "equal_components"
+            "survival_baseline"
+                | "without_community"
+                | "without_radars"
+                | "without_information"
+                | "without_response_cohort"
+                | "without_comment_estimates"
+                | "without_baseline"
+                | "equal_components"
         ) && i.track == "shadow")
 }
 fn public_reference(s: &str) -> bool {
@@ -343,6 +430,9 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
         return Err("invalid".into());
     }
     for f in &mut c.forecasts {
+        if f.combination_method.as_deref() != Some("baseline_plus_revisions") {
+            f.combination_method = None;
+        }
         if !target(&f.target)
             || !timestamp(&f.issued_at)
             || f.valid_until.as_ref().is_some_and(|s| !timestamp(s))
@@ -353,7 +443,27 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
                 p.hours as usize != i + 1
                     || !probability(p.probability)
                     || !probability(p.baseline)
+                    || p.comment_adjustment.is_some_and(|v| !probability(v))
                     || p.component_range.iter().any(|v| !probability(*v))
+                    || [
+                        p.radar_adjustment,
+                        p.community_adjustment,
+                        p.coherence_adjustment,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .any(|v| !v.is_finite() || v.abs() > 2.0000001)
+                    || (f.combination_method.is_some()
+                        && (p.radar_adjustment.is_none()
+                            || p.community_adjustment.is_none()
+                            || p.coherence_adjustment.is_none()
+                            || (p.baseline
+                                + p.radar_adjustment.unwrap_or(0.)
+                                + p.community_adjustment.unwrap_or(0.)
+                                + p.coherence_adjustment.unwrap_or(0.)
+                                - p.probability)
+                                .abs()
+                                > 1e-7))
             })
             || f.curve
                 .windows(2)
@@ -363,11 +473,48 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
         }
         f.sources
             .retain(|s| source(&s.id) || s.id == "survival_baseline");
+        for s in &mut f.sources {
+            if let Some(c) = &mut s.comment {
+                c.timing_sources.retain(|id| source(id));
+                if !probability(c.probability)
+                    || !public_reference(&c.url)
+                    || !epoch(c.at)
+                    || c.deadline.is_some_and(|d| !epoch(d) || d <= c.at)
+                    || (c.included && (c.deadline.is_none() || c.timing_sources.is_empty()))
+                    || !probability(c.adjustment_24h)
+                    || !probability(c.adjustment_48h)
+                    || !matches!(
+                        c.state.as_str(),
+                        "included"
+                            | "closed_or_superseded"
+                            | "awaiting_event_window"
+                            | "awaiting_source_baseline"
+                    )
+                {
+                    s.comment = None;
+                }
+            }
+            if !matches!(s.response_state.as_deref(), Some("reviewed" | "awaiting")) {
+                s.response_state = None;
+            }
+            if !matches!(
+                s.role.as_deref(),
+                Some("information" | "background" | "comparison")
+            ) {
+                s.role = None;
+            }
+        }
         f.statements
             .retain(|s| public_reference(&s.url) && s.original.len() <= 32_768 && epoch(s.at));
         f.statements.truncate(512);
         if let Some(c) = &mut f.changes {
-            let signed = |n: f64| n.is_finite() && n.abs() <= 1.0000001;
+            let increments =
+                c.basis.as_deref() == Some("increment_terms") && f.combination_method.is_some();
+            if !increments {
+                c.basis = None;
+            }
+            let signed =
+                |n: f64| n.is_finite() && n.abs() <= if increments { 4.0000001 } else { 1.0000001 };
             if !timestamp(&c.since)
                 || c.until != f.issued_at
                 || c.since >= c.until
@@ -387,11 +534,20 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
                             > 1e-7
                         || w.drivers.iter().any(|d| {
                             !(source(&d.id)
-                                || matches!(d.id.as_str(), "community" | "survival_baseline"))
+                                || matches!(
+                                    d.id.as_str(),
+                                    "community" | "survival_baseline" | "radar_revision"
+                                ))
                                 || [d.before, d.after, d.raw_before, d.raw_after]
                                     .into_iter()
                                     .flatten()
-                                    .any(|p| !probability(p))
+                                    .any(|p| {
+                                        if increments {
+                                            !p.is_finite() || p.abs() > 1.0000001
+                                        } else {
+                                            !probability(p)
+                                        }
+                                    })
                                 || !probability(d.weight_before)
                                 || !probability(d.weight_after)
                                 || [d.input_effect, d.weight_effect, d.effect]
@@ -409,7 +565,7 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
         for s in &mut f.statements {
             if !matches!(
                 s.collector.as_deref(),
-                Some("Codex Reset" | "Reset Monitor")
+                Some("Codex Reset" | "Reset Monitor" | "Codex Reset FM")
             ) {
                 s.collector = None;
             }
@@ -419,9 +575,99 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
             {
                 s.context = None;
             }
+            if s.parent.as_ref().is_some_and(|p| {
+                !public_reference(&p.url)
+                    || p.id.len() > 24
+                    || !p.id.bytes().all(|b| b.is_ascii_digit())
+                    || p.author.len() > 64
+                    || p.text.as_ref().is_some_and(|s| s.len() > 32_768)
+            }) {
+                s.parent = None;
+            }
+            if !matches!(
+                s.relevance.as_deref(),
+                Some("reset_related" | "conditional_pledge" | "context")
+            ) {
+                s.relevance = None;
+            }
+        }
+        if f.last_event_at.is_some_and(|t| {
+            !t.is_finite()
+                || t < 0.
+                || t > DateTime::parse_from_rfc3339(&f.issued_at)
+                    .map(|t| t.timestamp() as f64 + 60.)
+                    .unwrap_or(0.)
+        }) {
+            return Err("invalid".into());
+        }
+        if let Some(r) = &mut f.response {
+            r.reviewed.retain(|id| source(id));
+            r.changed.retain(|id| source(id));
+            if !matches!(r.kind.as_deref(), Some("announcement" | "revision")) {
+                r.kind = None;
+            }
+            if r.deadline.is_some_and(|t| !t.is_finite() || t <= r.at) {
+                r.deadline = None;
+                r.kind = None;
+            }
+            if !r.at.is_finite() || r.at < 0. || !public_reference(&r.url) {
+                f.response = None;
+            }
+        }
+        if f.statements_checked_at
+            .is_some_and(|t| !t.is_finite() || t < 0.)
+        {
+            f.statements_checked_at = None;
+        }
+        f.family_weights
+            .retain(|k, _| matches!(k.as_str(), "history" | "baseline" | "radars" | "community"));
+        f.community_inputs
+            .retain(|c| matches!(c.id.as_str(), "date_poll" | "community_poll"));
+        if f.family_weights.values().any(|w| !probability(*w))
+            || (!f.family_weights.is_empty()
+                && (f.family_weights.values().sum::<f64>() - 1.).abs() > 1e-6)
+            || f.community_inputs.len() > 2
+            || f.community_inputs.iter().any(|c| {
+                !probability(c.weight)
+                    || !probability(c.probability_24h)
+                    || !probability(c.probability_48h)
+                    || c.probability_24h > c.probability_48h
+                    || c.effective_votes.is_some_and(|n| {
+                        !n.is_finite() || n < 0. || n > c.votes.unwrap_or(0) as f64
+                    })
+                    || c.coverage_hours.is_some_and(|h| !h.is_finite() || h < 0.)
+                    || c.recent_votes
+                        .is_some_and(|n| n > c.total_votes.unwrap_or(n))
+                    || c.observation_window_hours
+                        .is_some_and(|h| !h.is_finite() || !(0.0..=6.0001).contains(&h))
+                    || c.latest_vote_at
+                        .is_some_and(|at| !at.is_finite() || at < 0.)
+                    || c.freshness_weight.is_some_and(|w| !probability(w))
+            })
+            || f.community_coverage.as_ref().is_some_and(|c| {
+                !probability(c.supplementary_weight)
+                    || c.included > 64
+                    || c.unavailable > 64
+                    || c.supplementary_checked > 64
+                    || c.supplementary_included > c.supplementary_checked
+                    || c.supplementary_included > c.included
+            })
+        {
+            return Err("invalid".into());
         }
         if f.sources.iter().any(|s| {
             s.probabilities.len() != 72
+                || s.weight.is_some_and(|w| !probability(w))
+                || s.baseline_weight.is_some_and(|w| !probability(w))
+                || s.signal_baseline
+                    .as_ref()
+                    .is_some_and(|ps| ps.len() != 72 || ps.iter().any(|p| !probability(*p)))
+                || s.baseline_points.as_ref().is_some_and(|ps| {
+                    ps.len() > 200
+                        || ps
+                            .iter()
+                            .any(|p| !p[0].is_finite() || p[0] < 0. || !probability(p[1]))
+                })
                 || s.probabilities.iter().any(|p| !probability(*p))
                 || s.source_points.as_ref().is_some_and(|ps| {
                     ps.len() > 200 || ps.iter().any(|p| p[0] < 0. || !probability(p[1]))
@@ -438,6 +684,9 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
 }
 fn parse_report(path: &Path) -> Result<Report, String> {
     let mut r: Report = read_json(path)?;
+    if r.curve_basis.as_deref() != Some("received_publication_values") {
+        r.curve_basis = None;
+    }
     if r.schema_version != "reset-observer/1"
         || !timestamp(&r.generated_at)
         || !timestamp(&r.started_at)

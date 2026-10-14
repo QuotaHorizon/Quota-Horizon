@@ -502,18 +502,22 @@ mod tests {
         candidate.semantics = PublicSignalSemantics::Retracted;
         ledger.append(candidate).unwrap();
         assert!(ledger.as_of(&time(1)).is_empty());
-        assert!(ledger
-            .dated_confirmations_at(&time(2), PublicEventKind::GlobalFullReset)
-            .is_empty());
+        assert!(
+            ledger
+                .dated_confirmations_at(&time(2), PublicEventKind::GlobalFullReset)
+                .is_empty()
+        );
         assert_eq!(
             ledger
                 .dated_confirmations_at(&time(3), PublicEventKind::GlobalFullReset)
                 .len(),
             1
         );
-        assert!(ledger
-            .dated_confirmations_at(&time(4), PublicEventKind::GlobalFullReset)
-            .is_empty());
+        assert!(
+            ledger
+                .dated_confirmations_at(&time(4), PublicEventKind::GlobalFullReset)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -646,8 +650,10 @@ mod tests {
         second.occurred_at = Some(time(2));
         ledger.append(first).unwrap();
         ledger.append(second).unwrap();
-        assert!(ledger
-            .dated_confirmations_at(&time(3), PublicEventKind::GlobalFullReset)
-            .is_empty());
+        assert!(
+            ledger
+                .dated_confirmations_at(&time(3), PublicEventKind::GlobalFullReset)
+                .is_empty()
+        );
     }
 }

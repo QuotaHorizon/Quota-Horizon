@@ -2,7 +2,7 @@ mod jsonrpc;
 mod model;
 mod process;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -21,6 +21,7 @@ pub use process::AppServerConnection;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeConfig {
+    pub codex_home: Option<PathBuf>,
     pub startup_timeout: Duration,
     pub request_timeout: Duration,
     pub idle_child_timeout: Duration,
@@ -32,6 +33,7 @@ pub struct RuntimeConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
+            codex_home: None,
             startup_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(10),
             idle_child_timeout: Duration::from_secs(60),
@@ -45,6 +47,10 @@ impl Default for RuntimeConfig {
 impl RuntimeConfig {
     fn validate(&self) -> Result<(), RuntimeError> {
         if self.startup_timeout.is_zero()
+            || self
+                .codex_home
+                .as_ref()
+                .is_some_and(|path| !path.is_absolute())
             || self.request_timeout.is_zero()
             || self.idle_child_timeout.is_zero()
             || self.max_jsonl_line_bytes == 0

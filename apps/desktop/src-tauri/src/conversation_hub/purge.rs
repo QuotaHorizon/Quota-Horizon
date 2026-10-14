@@ -504,9 +504,11 @@ fn purge_restore_root<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, 
 }
 
 fn sync_purge_directory(path: &Path) -> Result<(), String> {
-    File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| format!("无法同步永久清除恢复点目录：{error}"))
+    #[cfg(windows)]
+    let result = sync_windows_directory(path);
+    #[cfg(not(windows))]
+    let result = File::open(path).and_then(|directory| directory.sync_all());
+    result.map_err(|error| format!("无法同步永久清除恢复点目录：{error}"))
 }
 
 fn harden_purge_restore_permissions(path: &Path, directory: bool) -> Result<(), String> {
@@ -741,6 +743,8 @@ fn create_purge_restore_point(
         payload_file
             .sync_all()
             .map_err(|error| format!("无法同步永久清除恢复 payload：{error}"))?;
+        // Windows cannot rename the staging directory while its payload is open.
+        drop(payload_file);
         let manifest = PurgeRestoreManifest {
             format: PURGE_RESTORE_FORMAT.to_string(),
             id: id.clone(),

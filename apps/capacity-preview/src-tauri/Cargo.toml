@@ -8,6 +8,13 @@ rust-version.workspace = true
 name = "capacity_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+native-smoke = []
+
+[[example]]
+name = "tray_thread_smoke"
+required-features = ["native-smoke"]
+
 [build-dependencies]
 tauri-build.workspace = true
 

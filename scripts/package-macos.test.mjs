@@ -55,7 +55,26 @@ test("a distributable executable uses only system libraries", () => {
   assert.throws(() => verifySystemLibraries(header), /no reported system libraries/);
 });
 
-test("bundle comparison covers nested files, executable permissions and symlinks", () => {
+test("bundle comparison detects changed nested files", () => {
+  const work = mkdtempSync(join(tmpdir(), "quotahorizon-package-test-"));
+  try {
+    const app = join(work, "Test.app");
+    mkdirSync(join(app, "Contents"), { recursive: true });
+    const executable = join(app, "Contents", "executable");
+    writeFileSync(executable, "synthetic executable");
+    const original = bundleInventory(app);
+    assert.deepEqual(bundleInventory(app), original);
+    assert.ok(original.some((entry) => entry[0] === join("Contents", "executable") && entry[1] === "file"));
+    writeFileSync(executable, "changed executable");
+    assert.notDeepEqual(bundleInventory(app), original);
+  } finally {
+    rmSync(work, { recursive: true });
+  }
+});
+
+test("macOS bundle comparison covers POSIX permissions and symlinks", {
+  skip: process.platform === "win32" ? "Requires POSIX permissions and unprivileged file symlinks" : false,
+}, () => {
   const work = mkdtempSync(join(tmpdir(), "quotahorizon-package-test-"));
   try {
     const app = join(work, "Test.app");

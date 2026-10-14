@@ -101,6 +101,8 @@ export interface PublicParentPost {
 }
 
 export interface PublicPost {
+  stage?: string | null;
+  relevance?: string | null;
   collectorName?: string;
   contextZh?: { text: string; url: string };
   id: string; url: string; text: string; translatedText: string | null; publishedAt: string;

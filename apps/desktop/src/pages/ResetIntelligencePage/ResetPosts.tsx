@@ -20,7 +20,7 @@ export function PostConversation({ post, timeline, language, onOpenSource, onRea
   const seen = useVisibleResetRead(postReadReceipts(timeline, post), onRead);
   return <article className={styles.post} data-tone={reading.tone} ref={seen}>
     <div className={styles.postHeading}><h3>{reading.title}</h3><time dateTime={post.publishedAt}>{publicEvidenceTime(post.publishedAt, language)}</time></div>
-    <p className={styles.meaning}>{reading.meaning}</p>
+    {reading.corrected && <p className={styles.correction}>{reading.meaning}</p>}
     {post.isReply && <div className={styles.parent}>
       <div className={styles.byline}><MessageCircle size={13} aria-hidden="true" /><strong>{zh ? "父帖" : "Parent post"}{post.parent && ` · @${post.parent.author}`}</strong>
         {post.parent && <EvidenceLink url={post.parent.url} label={zh ? "父帖来源" : "Parent source"} onOpen={onOpenSource} />}</div>

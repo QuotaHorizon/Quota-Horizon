@@ -5,7 +5,7 @@ use std::sync::mpsc;
 struct BackgroundCollection(Mutex<Option<mpsc::Sender<()>>>);
 
 // Check the wall clock at least once a minute, including after wake. The shared
-// collector's persisted 15-minute gate prevents duplicate network requests.
+// collector's persisted minute gate prevents duplicate network requests.
 const WAKE_CHECK: Duration = Duration::from_secs(60);
 
 fn run_until_stopped(receiver: mpsc::Receiver<()>, interval: Duration, mut collect: impl FnMut()) {

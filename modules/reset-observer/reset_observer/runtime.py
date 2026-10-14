@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -97,7 +98,9 @@ def producer_due(store, now, interval):
     )
 
 
-def run_once(args, config):
+def run_once(args, config, refresh=False, evaluator=None):
+    began = time.monotonic()
+    timings = {}
     policy = Policy(**config.get("policy", {}))
     store = Store(args.db)
     try:
@@ -117,14 +120,16 @@ def run_once(args, config):
             }
         )
         if config.get("producer_command") and (
-            store.get("producer_signature") != producer_signature
-            or producer_due(store, time.time(), policy.collection_seconds)
+            refresh or store.get("producer_signature") != producer_signature
+            or producer_due(store, time.time(), 60)
         ):
             command = config["producer_command"]
             if not isinstance(command, list) or not all(
                 isinstance(s, str) for s in command
             ):
                 raise ValueError("producer_command must be an argument array")
+            if refresh and any(command[i:i+2] == ["-m", "reset_intelligence"] for i in range(len(command)-1)):
+                command = [*command, "--refresh"]
             try:
                 result = subprocess.run(
                     command,
@@ -143,7 +148,11 @@ def run_once(args, config):
                 producer = {"status": "unavailable", "error": type(exc).__name__}
             store.put("last_producer", {"at": time.time(), "result": producer})
             store.put("producer_signature", producer_signature)
-        collected = collect(store, policy)
+        timings["producer"] = time.monotonic() - began
+        phase = time.monotonic()
+        collected = collect(store, policy, refresh=True) if refresh else collect(store, policy)
+        timings["outcome_collection"] = time.monotonic() - phase
+        phase = time.monotonic()
         now = round(time.time(), 3)
         reinterpret_latest(store, now)
         imported = {}
@@ -154,54 +163,131 @@ def run_once(args, config):
                 imported = {"error": type(exc).__name__}
         if args.ingest:
             imported["jsonl"] = json_lines(store, args.ingest, now)
+        timings["import"] = time.monotonic() - phase
+        phase = time.monotonic()
         freeze_grid(store, now, policy)
         evidence = reconcile(store, now, policy)
+        from .preferences import freeze as freeze_preferences
+        freeze_preferences(store, now, policy, evidence)
+        timings["freeze_and_reconcile"] = time.monotonic() - phase
+        timings["capture_total"] = time.monotonic() - began
+        runtime = {"producer": producer, "import": imported, "pid": os.getpid(), "phase_seconds": timings}
+        store.put("heartbeat", {"at": time.time(), "captured_at": now, "pid": os.getpid(),
+                                "state": "running", "error": None, "phase_seconds": timings})
+        if evaluator is None:
+            result = evaluate(args, policy, now, evidence, runtime)
+        else:
+            evaluator.submit(args, policy, now, evidence, runtime)
+            result = {"state": "captured", "evaluation": "background"}
+        return {"at": iso(now), "collected": collected, "import": imported,
+                "phase_seconds": timings,
+                "refresh_state": "failed" if producer["status"] == "unavailable" else "refreshed", **result}
+    finally:
+        store.close()
+
+
+def evaluate(args, policy, now, evidence, runtime):
+    """One evaluator per locked worker; collection owns a separate connection.
+
+    Capture and forecast publication continue while historical scoring runs.
+    Evaluation only appends outcome revisions/reports, never capture records.
+    """
+    store = Store(args.db)
+    try:
+        phase = time.monotonic()
         revisions = settle_all(store, now, policy, evidence)
+        from .preferences import settle as settle_preferences
+        settle_preferences(store, now, policy, evidence)
+        timings = dict(runtime["phase_seconds"])
+        timings["settlement"] = time.monotonic() - phase
+        phase = time.monotonic()
         report = build_report(store, now, policy, evidence)
-        report["runtime"] = {
-            "producer": producer,
-            "import": imported,
-            "pid": os.getpid(),
-        }
-        semantic = {
-            k: v
-            for k, v in report.items()
-            if k not in ("generated_at", "runtime", "latest")
-        }
-        semantic["latest"] = [
-            {k: v for k, v in row.items() if k != "age_seconds"}
-            for row in report["latest"]
-        ]
+        timings["report"] = time.monotonic() - phase
+        report["runtime"] = {**runtime, "phase_seconds": timings, "published_at": iso(time.time())}
+        semantic = {k: v for k, v in report.items() if k not in ("generated_at", "runtime", "latest")}
+        semantic["latest"] = [{k: v for k, v in row.items() if k != "age_seconds"} for row in report["latest"]]
         report_hash = digest(semantic)
         if store.get("last_report_hash") != report_hash:
             store.report(now, report)
             store.put("last_report_hash", report_hash)
         if args.output:
-            atomic_write(
-                args.output,
-                json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2)
-                + "\n",
-            )
+            atomic_write(args.output, json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2) + "\n")
         if args.html:
             atomic_write(args.html, html_report(report))
-        store.put(
-            "heartbeat",
-            {"at": now, "pid": os.getpid(), "state": "running", "error": None},
-        )
-        return {
-            "at": iso(now),
-            "state": report["state"],
-            "collected": collected,
-            "import": imported,
-            "settlement_updates": revisions,
-            "summary": report["summary"],
-        }
+        return {"state": report["state"], "settlement_updates": revisions, "summary": report["summary"]}
     finally:
         store.close()
 
 
+class BackgroundEvaluation:
+    """Coalesce requests without running competing historical evaluations."""
+    def __init__(self):
+        self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reset-evaluation")
+        self.future = None
+        self.pending = None
+        self.database = None
+
+    def submit(self, *job):
+        self.pending = job
+        self.database = job[0].db
+        self.poll()
+
+    def poll(self):
+        if self.future is not None:
+            if not self.future.done():
+                return
+            try:
+                self.future.result()
+            except Exception as exc:
+                store = Store(self.database)
+                try:
+                    store.runtime_event(time.time(), {"kind": "evaluation_failed", "error": type(exc).__name__})
+                finally:
+                    store.close()
+            self.future = None
+        if self.pending is not None:
+            self.future = self.pool.submit(evaluate, *self.pending)
+            self.pending = None
+
+    def close(self):
+        self.pending = None
+        self.pool.shutdown(wait=True)
+        self.poll()
+
+
 def stop_path(db):
     return Path(str(Path(db).resolve()) + ".stop")
+
+
+def refresh_path(db):
+    return Path(str(Path(db).resolve()) + ".refresh")
+
+
+def refresh_request(db):
+    try:
+        return refresh_path(db).read_text()[:128]
+    except FileNotFoundError:
+        return None
+
+
+def request_refresh(args):
+    """Wake the existing single writer; never launch a competing evaluation."""
+    import uuid
+    request = refresh_request(args.db) or uuid.uuid4().hex
+    atomic_write(refresh_path(args.db), request)
+    if not running(args.db):
+        start(args)
+    end = time.monotonic() + 40
+    while time.monotonic() < end:
+        ack = Path(str(refresh_path(args.db)) + ".result")
+        try:
+            result = json.loads(ack.read_text())
+            if result.get("id") == request:
+                return {"state": result["state"]}
+        except (FileNotFoundError, ValueError):
+            pass
+        time.sleep(.2)
+    return {"state": "refreshing"}
 
 
 def bundled_revision():
@@ -251,6 +337,7 @@ def watch(args, config):
             )
         store.close()
         previous_wall, previous_mono = now, time.monotonic()
+        evaluator = BackgroundEvaluation()
         try:
             while not marker.exists():
                 # An app replacement can change the runtime on disk while this
@@ -266,11 +353,12 @@ def watch(args, config):
                     store.runtime_event(wall, gap)
                     store.close()
                 previous_wall, previous_mono = wall, began
+                request = refresh_request(args.db)
+                refresh_state = "failed"
                 try:
-                    print(
-                        json.dumps(run_once(args, config), ensure_ascii=False),
-                        flush=True,
-                    )
+                    result = run_once(args, config, refresh=True, evaluator=evaluator) if request else run_once(args, config, evaluator=evaluator)
+                    print(json.dumps(result, ensure_ascii=False), flush=True)
+                    refresh_state = result.get("refresh_state", "refreshed")
                 except Exception as exc:
                     # Keep collecting after a transient provider/parse failure.
                     # Logs contain categories only, not responses or private URLs.
@@ -291,13 +379,22 @@ def watch(args, config):
                         ),
                         flush=True,
                     )
-                remaining = max(0.0, 60 - (time.monotonic() - began))
-                until = time.monotonic() + remaining
-                while not marker.exists() and time.monotonic() < until:
+                finally:
+                    if request:
+                        atomic_write(str(refresh_path(args.db)) + ".result", json.dumps({"id": request, "state": refresh_state}))
+                        if refresh_request(args.db) == request:
+                            refresh_path(args.db).unlink(missing_ok=True)
+                # Source intervals start when collection finishes. Starting
+                # this timer before the work skips the next collection tick.
+                # Manual requests still wake this wait immediately.
+                until = time.monotonic() + 60
+                while not marker.exists() and time.monotonic() < until and not refresh_request(args.db):
+                    evaluator.poll()
                     time.sleep(min(2.0, max(0.0, until - time.monotonic())))
         except KeyboardInterrupt:
             pass
         finally:
+            evaluator.close()
             store = Store(args.db)
             store.put(
                 "heartbeat",

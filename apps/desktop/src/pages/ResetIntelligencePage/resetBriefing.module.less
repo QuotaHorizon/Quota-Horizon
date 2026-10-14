@@ -75,7 +75,6 @@
 .post { min-width: 0; }
 .postHeading { display: grid; gap: 4px; }
 .postHeading time { color: var(--muted); font-size: 10px; }
-.meaning { margin: 8px 0 11px; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .parent, .reply { padding: 10px 12px; border-radius: 7px; }
 .parent { margin-bottom: 8px; background: rgba(127, 127, 127, .05); border-left: 2px solid var(--line); }
 .reply { background: rgba(var(--green-rgb), .05); border-left: 2px solid rgba(var(--green-rgb), .4); }
@@ -248,7 +247,6 @@
 .original, .translation { margin-top: 10px; }
 .translation + .original { border-top: 1px solid var(--line); padding-top: 10px; }
 .selectedConversation { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
-.tiboFootnote { color: var(--muted); margin: 14px 0 0; font-size: 10px; line-height: 1.65; }
 .communityContribution { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 15px 0 8px; padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .communityContribution > div { display: grid; gap: 5px; }
 .communityContribution strong { font-size: 17px; font-weight: 600; color: var(--radar-accent); }
@@ -290,4 +288,3 @@
 @media (max-width: 940px) { .pollGrid { grid-template-columns: 1fr; gap: 20px; } .pollGrid > div + div { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; padding-top: 20px; } }
 
 .tiboLead .reply p, .tiboLead .parent p, .selectedConversation p { max-width: 72ch; }
-.pledge { padding: 14px; margin-bottom: 18px; border: 1px solid var(--radar-accent); border-radius: 10px; background: rgba(var(--green-rgb),.04); }

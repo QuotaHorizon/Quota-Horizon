@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import type { Language } from "../../i18n";
 import type { QuantitativeView } from "./quantitativeTypes";
-import { forecastFor, percent, seriesPaths, sourceColors, sourceNames } from "./quantitativeModel";
+import { controllingPoint, forecastFor, percent, seriesPaths, sourceColors, sourceNames } from "./quantitativeModel";
 import { publicEvidenceTime } from "./presentation";
 import styles from "./quantitative.module.less";
 import { usePlotWidth } from "./usePlotWidth";
@@ -14,7 +14,7 @@ export function ProbabilityCurve({ view, language }: { view: QuantitativeView; l
     { name: zh ? "综合 · 重置或发卡" : "Combined · reset or credit", color: sourceColors.horizon, values: f?.curve.map(p => p.probability) ?? [], dashed: false },
     { name: zh ? "综合 · 自动重置" : "Combined · automatic reset", color: sourceColors.monitor, values: auto?.curve.map(p => p.probability) ?? [], dashed: true },
     { name: zh ? "社区综合" : "Community aggregate", color: sourceColors.community, values: f?.community?.probabilities ?? [], dashed: false },
-    { name: zh ? "历史基准" : "Historical baseline", color: sourceColors.survival_baseline, values: f?.curve.map(p => p.baseline) ?? [], dashed: true },
+    { name: zh ? "历史基准" : "Historical baseline", color: sourceColors.survival_baseline, values: f?.curve.map(p => controllingPoint(f,auto,p.hours)?.baseline ?? p.baseline) ?? [], dashed: true },
   ];
   const x = (h: number) => 40 + h / 72 * (right - 40), y = (p: number) => 167 - p * 141;
   return <div className={styles.chart} ref={ref}>
@@ -37,7 +37,7 @@ export function QuantitativeTrend({ view, language, now }: { view: QuantitativeV
   const { ref, width } = usePlotWidth(948, 480);
   const right = width - 28;
   const series = (view.evaluation?.curves ?? []).filter(c => c.track === "model" || (c.track === "native" && sourceNames[c.source]));
-  // Every source uses the same observed UTC grid. No legacy/provider backfill.
+  // Native curves preserve publication values at their actual receipt time.
   const times = series.flatMap(s => s.points.filter(p => p.p != null && Date.parse(p.at) <= now && Date.parse(p.at) >= now - 86400_000).map(p => Date.parse(p.at)));
   const start = times.length ? Math.min(...times, now - 3600_000) : now - 3600_000;
   const x = (t: number) => 40 + (t-start) / (now-start) * (right-40), y = (p: number) => 172 - p*144;
@@ -56,6 +56,6 @@ export function QuantitativeTrend({ view, language, now }: { view: QuantitativeV
       <text x="40" y="202">{tick(start)}</text><text x={(40+right)/2} y="202" textAnchor="middle">{tick((start+now)/2)}</text><text x={right} y="202" textAnchor="end">{tick(now)}</text>
     </svg></div>
     <div className={styles.legend}>{legends.map(s => <span key={`${s.source}-${s.target}`}><i style={{ background: color(s.source,s.target) }} />{name(s.source,s.target)}<small>{s.target === "automatic_reset" ? (zh ? "自动重置" : "automatic") : (zh ? "重置或发卡" : "reset or credit")}</small></span>)}</div>
-    <p className={styles.caption}>{times.length ? (zh ? "从评估器实际收到预测时开始，每小时按同一时钟记录；缺失与过期窗口保留空白。不同预测版本分段展示。" : "Recorded hourly from the evaluator’s first receipt on a shared clock. Missing and expired windows remain gaps; model versions are separate segments.") : (zh ? "等待评估器的首个整点观测；不会补造早期曲线。" : "Awaiting the evaluator’s first hourly observation.")}</p>
+    <p className={styles.caption}>{times.length ? (zh ? "横轴为本机收到预测的时间，每小时保留最新记录；来源曲线保留发布时的 24h / 48h 原值。缺失、过期及版本变化分段展示，评分仍使用同一目标时间窗。" : "The time axis uses actual receipt, retaining the latest record each hour. Source curves preserve published 24h / 48h values. Missing, expired and changed versions remain separate; scoring uses matched target windows.") : (zh ? "等待评估器的首个整点观测；不会补造早期曲线。" : "Awaiting the evaluator’s first hourly observation.")}</p>
   </article>;
 }

@@ -14,7 +14,7 @@ def source_audit(store, now, results=None):
             if row:
                 results.append(json.loads(row[0]))
     observations = store.observations(now)
-    rows, targets = [], []
+    rows, targets, attempts_by_source = [], [], {}
     for result in results:
         components = {c["id"]: c for c in result["components"]}
         training = result.get("training", {})
@@ -27,20 +27,33 @@ def source_audit(store, now, results=None):
             source = health["id"]
             obs = observations.get(source)
             component = components.get(source)
-            attempts = store.db.execute("SELECT COUNT(*) n,SUM(normalized IS NOT NULL) decoded,SUM(error IS NOT NULL) failed FROM observations WHERE source=? AND observed_at BETWEEN ? AND ?", (source, now - 7*86400, now)).fetchone()
+            if source not in attempts_by_source:
+                attempts_by_source[source] = store.db.execute("SELECT COUNT(*) n,SUM(normalized IS NOT NULL) decoded,SUM(error IS NOT NULL) failed FROM observations WHERE source=? AND observed_at BETWEEN ? AND ?", (source, now - 7*86400, now)).fetchone()
+            attempts = attempts_by_source[source]
             details = {}
             if component:
                 family = component["family"]
                 matching = [g for g in groups if g["family"] == family]
-                mass = sum(weights.get(family, 0) * g["weights"].get(source, 0) / max(1, len(matching)) for g in matching)
+                mass = sum(weights.get(family, 0) * g["weights"].get(source, 0) * g.get("group_weight", 1 / max(1, len(matching))) for g in matching)
+                if result.get("combination_method") == "baseline_plus_revisions":
+                    mass = component.get("weight", 0.)
                 metadata = component.get("metadata", {})
                 strength = metadata.get("shrinkage_strength")
                 details = {"family": family, "component_weight_before_projection": mass,
                            "weight_state": training.get("state"), "dependency": component["dependency"] if not health["private"] else "internal_community_group",
                            "votes": metadata.get("votes"), "effective_votes": metadata.get("effective_votes"),
+                           "latest_vote_at": metadata.get("latest_vote_at"),
+                           "freshness_weight": metadata.get("freshness_weight"),
+                           "half_life_hours": metadata.get("half_life_hours"),
                            "shrinkage_strength": strength,
-                           "ballot_weight_before_projection": mass * strength if strength is not None else None,
+                           "sample_reliability": metadata.get("sample_reliability"),
+                           "ballot_weight_before_projection": mass * strength if strength is not None else mass if "votes" in metadata else None,
                            "assumption": metadata.get("assumption", metadata.get("alignment")),
+                           "role": component.get("role", "background"),
+                           "background_anchor_weight": component.get("baseline_weight"),
+                           "signal_baseline_24h": (component.get("signal_baseline") or [None]*72)[23],
+                           "signal_baseline_48h": (component.get("signal_baseline") or [None]*72)[47],
+                           "comment": metadata.get("comment"),
                            "probability_24h": component["probabilities"][23], "probability_48h": component["probabilities"][47]}
             curves = [c for c in obs.curves if c.target == result["target"]] if obs else []
             rows.append({"source": "internal_signal_" + digest(source)[:8] if health["private"] else source,
@@ -63,12 +76,14 @@ def source_audit(store, now, results=None):
                         "training_windows": training.get("windows", 0), "coherence": result.get("coherence"),
                         "learned_weights_applied": training.get("apply_learned_weights", False),
                         "candidate_state": training.get("candidate_state"),
-                        "community_dependency_groups": len([g for g in groups if g["family"] == "community"]),
+                        "community_dependency_groups": len(training.get("increment_groups", {}).get("community", []))
+                            if result.get("combination_method") == "baseline_plus_revisions" else len([g for g in groups if g["family"] == "community"]),
                         "excluded_targeted_events": result.get("event_audit", {}).get("excluded_targeted_events", []),
                         "projection_points": sum("unconstrained_probability" in p for p in result["curve"])})
     return {"schema_version": "reset-intelligence-audit/1", "generated_at": iso(now), "targets": targets, "sources": rows,
             "interpretation": "issued_weights_and_source_admission_not_validated_skill",
-            "dependence_assumptions": {"history": "shared_event_history_one_family_budget",
-                                       "community": "exact_round_duplicates_removed_population_groups_share_budget",
+            "dependence_assumptions": {"baseline": "source_declared_historical_anchor_with_survival_fallback",
+                                       "radars": "one_historical_anchor_plus_source_declared_revisions",
+                                       "community": "recent_votes_residual_with_explicit_overlap_discount",
                                        "unknown_cross_population_overlap": "unmeasured"},
             "evaluation": "use_independent_observer_same_window_scores_and_ablations"}

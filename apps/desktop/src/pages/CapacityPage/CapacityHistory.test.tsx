@@ -148,7 +148,7 @@ describe("capacity history", () => {
 
   it("distinguishes Keychain failure from an empty but working store", () => {
     const failure: DesktopHistoryEnvelope = { ...history([]), status: "binding_required", reasonCode: "history_keychain_unavailable" };
-    expect(historyEmptyMessage(failure, "zh")).toContain("钥匙串暂不可用");
+    expect(historyEmptyMessage(failure, "zh")).toContain("系统凭据存储暂不可用");
     expect(historyEmptyMessage(failure, "zh")).toContain("历史记录已暂停");
     expect(historyEmptyMessage(history([]), "zh")).toContain("首个样本");
     expect(historyEmptyMessage(null, "zh")).toContain("正在读取");

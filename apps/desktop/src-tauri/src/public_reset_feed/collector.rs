@@ -283,7 +283,14 @@ pub(crate) async fn refresh_public_reset_timeline<R: Runtime + 'static>(
 ) -> Result<PublicResetTimeline, String> {
     let path = data_path(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let (timeline, collected) = refresh_at_path(&path, force)?;
+        let (public, module) = std::thread::scope(|scope| {
+            let module = scope.spawn(|| if force { quantitative::runtime::refresh(path.parent().ok_or_else(|| db_error("missing parent"))?) } else { Ok(()) });
+            let public = refresh_at_path(&path, force);
+            (public, module.join().unwrap_or_else(|_| Err(db_error("module refresh failed"))))
+        });
+        let (mut timeline, collected) = public?;
+        module?;
+        if force { timeline = load_timeline(&path, &now())?; }
         if collected {
             let _ = app.emit("public-reset-timeline-changed", ());
         }

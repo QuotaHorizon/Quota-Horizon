@@ -28,7 +28,7 @@ const MAX_DB_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SIGNAL_BYTES: usize = 32 * 1024;
 const MAX_JOURNAL_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
-const SOURCE_INTERVAL_SECONDS: i64 = 15 * 60;
+const SOURCE_INTERVAL_SECONDS: i64 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

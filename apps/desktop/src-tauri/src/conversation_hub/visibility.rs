@@ -1709,7 +1709,12 @@ fn sync_visibility_repair_directory(path: &Path) -> Result<(), String> {
             .and_then(|file| file.sync_all())
             .map_err(|error| format!("无法同步会话修复事务：{error}"))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        sync_windows_directory(path)
+            .map_err(|error| format!("无法同步会话修复事务：{error}"))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         Ok(())

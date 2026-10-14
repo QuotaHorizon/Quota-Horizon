@@ -1,0 +1,2 @@
+# Migration reports include byte counts; fixtures must not change on checkout.
+fixtures/** text eol=lf

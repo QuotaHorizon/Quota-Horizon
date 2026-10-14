@@ -1,0 +1,233 @@
+{
+  "at": 1791687731.816,
+  "sources": {
+    "codex_reset": {
+      "observed_at": 1791687727.002371,
+      "payload": {
+        "updated_at": "2026-10-11T03:01:50.327Z",
+        "probabilities": {
+          "raw_24h": 0.19515259450112923,
+          "raw_48h": 0.3522206538617363,
+          "rounded_24h": 45,
+          "rounded_48h": 70,
+          "model_24h": 20,
+          "model_48h": 35,
+          "tease_tier": "T1",
+          "tease_floor_24h": 45,
+          "tease_floor_48h": 70,
+          "commitment": 0.83,
+          "commitment_floor_percent": 83,
+          "signal_percent": 83,
+          "range_24h": {
+            "lower": 0.104,
+            "upper": 0.337
+          },
+          "range_48h": {
+            "lower": 0.226,
+            "upper": 0.502
+          }
+        },
+        "last_reset_at": "2026-10-07T03:35:09.000Z",
+        "model": {
+          "version": "rate-v3"
+        },
+        "context": {
+          "window_days": 7,
+          "since": "2026-10-04T03:01:50.327Z",
+          "evidence_ids": [
+            "2109090080497508356",
+            "2109045392684032299",
+            "2109045220411351517",
+            "2107913674593644711",
+            "2107676072871600470",
+            "2107577536779870210",
+            "2106845738814849339",
+            "2106845241357824205"
+          ],
+          "effect": "display_floor",
+          "multiplier": 1,
+          "negative_supported": false,
+          "state": "TEASE",
+          "primary_post": {
+            "id": "2109090080497508356",
+            "at": "2026-10-11T01:13:54.000Z",
+            "url": "https://x.com/thsottiaux/status/2109090080497508356",
+            "signal": "TEASE"
+          },
+          "floor_24h": 45,
+          "floor_48h": 70
+        },
+        "mode": "announced",
+        "official_signal": {
+          "tweet_id": "2109045392684032299",
+          "at": "2026-10-10T22:16:20.000Z",
+          "url": "https://x.com/thsottiaux/status/2109045392684032299",
+          "kind": "signal",
+          "score": {
+            "band": "promise",
+            "base": 83,
+            "modifiers": [],
+            "value": 83
+          },
+          "signal_type": "promise",
+          "signal_tier": "likely",
+          "alert_event_id": "signal:2109045392684032299:likely",
+          "delivery_destination": "alerts",
+          "window": null
+        },
+        "latest_alert": {
+          "id": "2109045392684032299",
+          "kind": "watch",
+          "state": "active",
+          "source_at": "2026-10-10T22:16:20.000Z",
+          "url": "https://x.com/thsottiaux/status/2109045392684032299",
+          "score": 83,
+          "window": null,
+          "corrected": false
+        },
+        "signal_score": {
+          "band": "promise",
+          "base": 83,
+          "modifiers": [],
+          "value": 83
+        }
+      }
+    },
+    "monitor": {
+      "observed_at": 1791687731.771859,
+      "payload": {
+        "updatedAt": "2026-10-11T00:55:48.820Z",
+        "status": "live",
+        "forecastStatus": "current",
+        "forecast": {
+          "score24h": 93,
+          "score48h": 96,
+          "baseScore24h": 27,
+          "baseScore48h": 47,
+          "semanticSignals": [
+            {
+              "direction": "neutral",
+              "evidenceId": "2108778939057664357",
+              "horizon": "both",
+              "impact24hPoints": 0,
+              "impact48hPoints": 0,
+              "strength": 0,
+              "sourceUrl": "https://x.com/thsottiaux/status/2108778939057664357"
+            },
+            {
+              "direction": "increase",
+              "evidenceId": "2109045392684032299",
+              "horizon": "both",
+              "impact24hPoints": 66,
+              "impact48hPoints": 48,
+              "strength": 10,
+              "sourceUrl": "https://x.com/thsottiaux/status/2109045392684032299"
+            }
+          ]
+        },
+        "history": [
+          {
+            "id": "reset:2107676072871600470",
+            "dateTime": "2026-10-07T03:35:09.000Z",
+            "type": "forced-reset",
+            "sourceUrl": "https://x.com/thsottiaux/status/2107676072871600470"
+          }
+        ]
+      }
+    },
+    "nextreset": {
+      "observed_at": 1791687727.022463,
+      "payload": {
+        "version": "NR-1.7",
+        "asOf": "2026-10-11T02:59:36.462Z",
+        "expiresAt": "2026-10-11T03:14:36.462Z",
+        "degraded": false,
+        "checks": {
+          "history": {
+            "ok": true,
+            "at": "2026-10-11T02:59:36.462Z",
+            "source": "https://codex-resets.com/api/v1/resets?limit=100"
+          }
+        },
+        "windows": [
+          {
+            "hours": 24,
+            "baseline": 0.16602341573197038,
+            "probability": 0.9583011707865985,
+            "probabilityReason": "announcement_conditioned_estimate",
+            "announcementPrior": 0.95,
+            "untimedPrior": 0,
+            "rangedPrior": 0,
+            "socialMultiplier": 1,
+            "newsMultiplier": 1,
+            "contextMultiplier": 1,
+            "directDelta": 0.792277755054628,
+            "newsDelta": 0,
+            "socialDelta": 0.792277755054628,
+            "contextDelta": 0
+          },
+          {
+            "hours": 48,
+            "baseline": 0.30221502767067204,
+            "probability": 0.9651107513835335,
+            "probabilityReason": "announcement_conditioned_estimate",
+            "announcementPrior": 0.95,
+            "untimedPrior": 0,
+            "rangedPrior": 0,
+            "socialMultiplier": 1,
+            "newsMultiplier": 1,
+            "contextMultiplier": 1,
+            "directDelta": 0.6628957237128614,
+            "newsDelta": 0,
+            "socialDelta": 0.6628957237128614,
+            "contextDelta": 0
+          },
+          {
+            "hours": 72,
+            "baseline": 0.414262181622422,
+            "probability": 0.9707131090811211,
+            "probabilityReason": "announcement_conditioned_estimate",
+            "announcementPrior": 0.95,
+            "untimedPrior": 0,
+            "rangedPrior": 0,
+            "socialMultiplier": 1,
+            "newsMultiplier": 1,
+            "contextMultiplier": 1,
+            "directDelta": 0.5564509274586991,
+            "newsDelta": 0,
+            "socialDelta": 0.5564509274586991,
+            "contextDelta": 0
+          }
+        ],
+        "history": {
+          "last": {
+            "date": "2026-10-07T03:35:09.000Z",
+            "type": "automatic",
+            "source": "https://x.com/thsottiaux/status/2107676072871600470",
+            "review": "catalogued",
+            "timeBasis": "publication",
+            "discoveredAt": "2026-10-08T03:15:45.648Z"
+          }
+        },
+        "state": "announced",
+        "social": {
+          "classification": "promise",
+          "publishedAt": "2026-10-10T22:16:20.000Z",
+          "timeKind": "publication",
+          "timingKind": "feed_deadline",
+          "expectedBy": "2026-10-11T07:00:00.000Z",
+          "windowStart": null,
+          "windowEnd": null,
+          "source": "https://x.com/thsottiaux/status/2109045392684032299",
+          "carriedFromLastGoodCheck": false,
+          "sourceOmittedFromStatus": false
+        },
+        "signalAudit": {
+          "needsReview": false,
+          "reason": null,
+          "source": null
+        }
+      }
+    }
+  }
+}

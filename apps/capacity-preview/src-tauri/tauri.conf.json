@@ -13,6 +13,10 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": false,
+    "icon": [
+      "../../desktop/src-tauri/icons/icon.png",
+      "../../desktop/src-tauri/icons/icon.ico"
+    ]
   }
 }

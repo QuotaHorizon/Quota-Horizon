@@ -1,12 +1,19 @@
+#[cfg(windows)]
+use crate::windows::{self, File, Metadata, fs};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fs::{self, File, Metadata, OpenOptions};
+#[cfg(unix)]
+use std::fs::OpenOptions;
+#[cfg(not(windows))]
+use std::fs::{self, File, Metadata};
 use std::io::Read;
 #[cfg(unix)]
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Component, Path, PathBuf};
+#[cfg(not(windows))]
+use std::path::Component;
+use std::path::{Path, PathBuf};
 
 use capacity_domain::UtcTimestamp;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -17,6 +24,7 @@ const RESTORE_POINT_FORMAT: &str = "quota-horizon-restore-point-v1";
 const RESTORE_POINT_ID_PREFIX: &str = "rp-v1-";
 const MANIFEST_FILE: &str = "manifest.json";
 const PAYLOAD_DIRECTORY: &str = "files";
+#[cfg(unix)]
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const DEFAULT_MAX_RESTORE_POINTS: usize = 5;
@@ -375,7 +383,7 @@ impl RestorePointStore {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn with_limits(
         root: impl Into<PathBuf>,
         max_restore_points: usize,
@@ -458,6 +466,7 @@ impl RestorePointStore {
     }
 
     pub fn verify(&self, id: &RestorePointId) -> Result<RestorePoint, RestorePointError> {
+        self.verify_root()?;
         self.verify_directory(&self.point_directory(id), id)
     }
 
@@ -822,10 +831,17 @@ impl RestorePointStore {
                 return Err(RestorePointError::DuplicateTarget(target.target));
             }
             previous_target = Some(target.target);
-            if !seen_paths.insert(target.path.clone()) {
+            #[cfg(windows)]
+            let (target_key, root_key) = (
+                windows::path_key(&target.path),
+                windows::path_key(&self.root),
+            );
+            #[cfg(not(windows))]
+            let (target_key, root_key) = (target.path.clone(), self.root.clone());
+            if !seen_paths.insert(target_key.clone()) {
                 return Err(RestorePointError::DuplicatePath);
             }
-            if target.path.starts_with(&self.root) || self.root.starts_with(&target.path) {
+            if target_key.starts_with(&root_key) || root_key.starts_with(&target_key) {
                 return Err(RestorePointError::TargetInsideRestoreRoot(target.target));
             }
         }
@@ -1047,6 +1063,12 @@ struct AppliedTarget {
     applied_state: TargetState,
 }
 
+#[cfg(windows)]
+fn validate_absolute_path(path: &Path) -> Result<(), ()> {
+    windows::validate_path(path)
+}
+
+#[cfg(not(windows))]
 fn validate_absolute_path(path: &Path) -> Result<(), ()> {
     if !path.is_absolute() || path.parent().is_none() {
         return Err(());
@@ -1247,7 +1269,15 @@ fn apply_target_state(
             if bytes.len() as u64 != *size || sha256(bytes) != *expected_sha256 {
                 return Err(RestorePointError::CorruptedPayload(target.target));
             }
+            #[cfg(not(windows))]
             atomic_write_target(&target.path, bytes, *unix_mode)?;
+            #[cfg(windows)]
+            atomic_write_target(
+                &target.path,
+                bytes,
+                *unix_mode,
+                matches!(expected_current, TargetState::Present { .. }),
+            )?;
         }
     }
     let applied = capture_target(target, max_file_bytes)?;
@@ -1319,7 +1349,12 @@ fn create_private_directory(path: &Path) -> Result<(), RestorePointError> {
     verify_directory(path, true)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn create_private_directory(path: &Path) -> Result<(), RestorePointError> {
+    windows::create_directory(path).map_err(io_error)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn create_private_directory(_path: &Path) -> Result<(), RestorePointError> {
     Err(RestorePointError::PlatformPermissionsUnavailable)
 }
@@ -1337,7 +1372,12 @@ fn write_private_file_new(path: &Path, bytes: &[u8]) -> Result<(), RestorePointE
     verify_private_file_metadata(&file.metadata().map_err(io_error)?)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn write_private_file_new(path: &Path, bytes: &[u8]) -> Result<(), RestorePointError> {
+    windows::write_new(path, bytes).map_err(io_error)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn write_private_file_new(_path: &Path, _bytes: &[u8]) -> Result<(), RestorePointError> {
     Err(RestorePointError::PlatformPermissionsUnavailable)
 }
@@ -1361,7 +1401,14 @@ fn verify_private_directory_metadata(metadata: &Metadata) -> Result<(), RestoreP
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn verify_private_directory_metadata(metadata: &Metadata) -> Result<(), RestorePointError> {
+    metadata
+        .verify_private()
+        .map_err(|_| RestorePointError::InsecureRestorePermissions)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn verify_private_directory_metadata(_metadata: &Metadata) -> Result<(), RestorePointError> {
     Err(RestorePointError::PlatformPermissionsUnavailable)
 }
@@ -1381,7 +1428,14 @@ fn verify_private_file_mode(metadata: &Metadata) -> Result<(), RestorePointError
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn verify_private_file_mode(metadata: &Metadata) -> Result<(), RestorePointError> {
+    metadata
+        .verify_private()
+        .map_err(|_| RestorePointError::InsecureRestorePermissions)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn verify_private_file_mode(_metadata: &Metadata) -> Result<(), RestorePointError> {
     Err(RestorePointError::PlatformPermissionsUnavailable)
 }
@@ -1391,7 +1445,17 @@ fn file_mode(metadata: &Metadata) -> Result<u32, RestorePointError> {
     Ok(metadata.permissions().mode() & 0o777)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn file_mode(metadata: &Metadata) -> Result<u32, RestorePointError> {
+    // The v1 wire field is retained; Windows restores always create private ACLs.
+    // Read-only state cannot be represented safely by this format.
+    if metadata.permissions().readonly() {
+        return Err(RestorePointError::InsecureRestorePermissions);
+    }
+    Ok(PRIVATE_FILE_MODE)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn file_mode(_metadata: &Metadata) -> Result<u32, RestorePointError> {
     Err(RestorePointError::PlatformPermissionsUnavailable)
 }
@@ -1402,7 +1466,12 @@ fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
+    left.same_identity(right)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
@@ -1451,7 +1520,27 @@ fn atomic_write_target(path: &Path, bytes: &[u8], mode: u32) -> Result<(), Resto
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn atomic_write_target(
+    path: &Path,
+    bytes: &[u8],
+    mode: u32,
+    replace: bool,
+) -> Result<(), RestorePointError> {
+    if mode != PRIVATE_FILE_MODE {
+        return Err(RestorePointError::InsecureRestorePermissions);
+    }
+    let parent = path.parent().ok_or(RestorePointError::InvalidRoot)?;
+    verify_directory(parent, false)?;
+    let temporary = parent.join(format!(".quota-horizon-restore-{}.tmp", Uuid::new_v4()));
+    write_private_file_new(&temporary, bytes)?;
+    let mut guard = OwnedFileGuard::new(temporary.clone(), ".quota-horizon-restore-");
+    windows::rename(&temporary, path, replace).map_err(io_error)?;
+    guard.disarm();
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
 fn atomic_write_target(_path: &Path, _bytes: &[u8], _mode: u32) -> Result<(), RestorePointError> {
     Err(RestorePointError::PlatformPermissionsUnavailable)
 }
@@ -1461,7 +1550,11 @@ fn replace_file(source: &Path, destination: &Path) -> Result<(), RestorePointErr
     {
         fs::rename(source, destination).map_err(io_error)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::rename(source, destination, true).map_err(io_error)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (source, destination);
         Err(RestorePointError::PlatformPermissionsUnavailable)
@@ -1472,6 +1565,12 @@ fn sync_parent(path: &Path) -> Result<(), RestorePointError> {
     sync_directory(path.parent().ok_or(RestorePointError::InvalidRoot)?)
 }
 
+#[cfg(windows)]
+fn sync_directory(path: &Path) -> Result<(), RestorePointError> {
+    windows::sync_directory(path).map_err(io_error)
+}
+
+#[cfg(not(windows))]
 fn sync_directory(path: &Path) -> Result<(), RestorePointError> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
@@ -1568,7 +1667,7 @@ impl Drop for OwnedFileGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::collections::BTreeSet;
     use std::fs;

@@ -21,17 +21,22 @@ def previous_forecast(store, current):
 
 
 def terms(forecast, hours):
+    if forecast.get("combination_method") == "baseline_plus_revisions":
+        p = forecast["curve"][hours-1]
+        return {name: {"probability": p[key], "weight": 1., "raw": None, "origin": None}
+                for name,key in (("survival_baseline","baseline"), ("radar_revision","radar_adjustment"),
+                                 ("community","community_adjustment"))}
     training = forecast.get("training", {})
     result = {}
     for group in training.get("within_groups", []):
-        if group["family"] != "history":
+        if group["family"] not in ("history", "radars", "baseline"):
             continue
         for name, weight in group["weights"].items():
             component = next(c for c in forecast["components"] if c["id"] == name)
             if component.get("private"):
                 continue
             result[name] = {"probability": component["probabilities"][hours - 1],
-                            "weight": weight * training["weights"]["history"],
+                            "weight": weight * training["weights"][group["family"]] * group.get("group_weight", 1.),
                             "raw": dict(component.get("source_points", [])).get(hours),
                             "origin": component.get("metadata", {}).get("origin")}
     if "community" in training.get("weights", {}):
@@ -78,4 +83,5 @@ def explain_change(current, previous):
              and f.get("relevance") in ("reset_related", "conditional_pledge")
              and current["issued_at"] - 7 * 86400 <= f["at"] <= current["issued_at"]}
     return {"since": iso(previous["issued_at"]), "until": iso(current["issued_at"]),
+            "basis": "increment_terms" if current.get("combination_method") == "baseline_plus_revisions" else "weighted_probabilities",
             "windows": windows, "new_statement_ids": [f["id"] for f in sorted(fresh.values(), key=lambda f: -f["at"])[:5]]}

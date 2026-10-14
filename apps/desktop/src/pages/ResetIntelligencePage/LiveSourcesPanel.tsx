@@ -60,7 +60,7 @@ export function LiveSourcesView({ state, archive = null, archiveContent, languag
   const entries = (timeline?.entries ?? []).filter((entry) => filter === "all"
     || (filter === "context" ? entry.disposition === "context" : entry.disposition !== "context"));
   const checkedTimes = (timeline?.sources ?? []).flatMap((source) => source.lastAttemptAt ? [Date.parse(source.lastAttemptAt)] : []).filter(Number.isFinite);
-  const nextCheck = checkedTimes.length ? Math.min(...checkedTimes) + 15 * 60_000 : null;
+  const nextCheck = checkedTimes.length ? Math.min(...checkedTimes) + 60_000 : null;
   return <div className={styles.section}>
     <div className={styles.sectionToolbar}>
       <div className={styles.filters} aria-label={zh ? "雷达内容" : "Radar sections"}>
@@ -88,7 +88,7 @@ export function LiveSourcesView({ state, archive = null, archiveContent, languag
       {timeline.sources.map((source) => <span key={source.sourceId} data-issue={!!source.issue || undefined}>
         {SOURCE_NAMES[source.sourceId] ?? (zh ? "公开来源" : "Public source")} · {publicSourceLabel(source, language, now)}</span>)}
     </div>}
-    <p className={styles.note} role="status">{zh ? "后台每 15 分钟更新" : "Updates every 15 minutes in the background"}
+    <p className={styles.note} role="status">{zh ? "后台约每分钟更新" : "Updates about once a minute in the background"}
       {nextCheck != null && (nextCheck > now
         ? (zh ? " · 下次约 " : " · Next around ") + publicEvidenceTime(new Date(nextCheck).toISOString(), language)
         : (zh ? " · 等待更新" : " · Update due"))}</p>
@@ -131,7 +131,7 @@ export function LiveSourcesPanel({ archive, archiveContent, language, onOpenSour
       if (document.visibilityState === "visible") void store.refresh(false);
     };
     check();
-    const timer = window.setInterval(check, 15 * 60_000);
+    const timer = window.setInterval(check, 60_000);
     const clock = window.setInterval(() => { if (document.visibilityState === "visible") setNow(Date.now()); }, 30_000);
     window.addEventListener("focus", check);
     document.addEventListener("visibilitychange", check);

@@ -7,14 +7,21 @@
 //! not execute recovery outside a live, revalidated lock capability.
 
 use std::fmt;
-use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{Read, Write};
+#[cfg(unix)]
+use std::fs::OpenOptions;
+#[cfg(not(windows))]
+use std::fs::{self, File, Metadata};
+use std::io::Read;
+#[cfg(unix)]
+use std::io::Write;
 #[cfg(unix)]
 use std::path::Component;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(windows)]
+use windows::{File, Metadata, fs};
 
 use capacity_domain::{UtcTimestamp, VaultAccount, VaultAccountRegistration};
 use capacity_store::CapacityStore;
@@ -30,6 +37,8 @@ mod reconciliation;
 mod recovery;
 mod restore_point;
 mod rotation;
+#[cfg(windows)]
+mod windows;
 
 pub use reconciliation::{
     VaultReconciliationArtifact, VaultReconciliationDisposition, VaultReconciliationError,
@@ -56,7 +65,9 @@ const MACOS_SHARED_LOCK_DIRECTORY: &str = "CodexMutationLock-v1";
 const OWNER_MARKER_FORMAT: &str = "capacity-mutation-owner-v1";
 const LOCK_PROTOCOL_VERSION: &str = "capacity-mutation-lock-v1";
 const LEGACY_VIEWER_COMMAND_PATTERN: &str = "(^|/)CodexQuotaViewer( |$)";
+#[cfg(unix)]
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
+#[cfg(unix)]
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const MAX_OWNER_MARKER_BYTES: u64 = 512;
 const MAX_OWNER_TEMP_ATTEMPTS: u64 = 16;
@@ -90,6 +101,33 @@ pub fn macos_shared_mutation_lock_root(
         return Err(MutationLockError::InvalidRoot);
     }
     Ok(root)
+}
+
+/// Resolves the coordination root from a trusted host-supplied user home.
+/// This does not create directories or consult process environment variables.
+pub fn platform_shared_mutation_lock_root(
+    home_directory: impl AsRef<Path>,
+) -> Result<PathBuf, MutationLockError> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_shared_mutation_lock_root(home_directory)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        #[cfg(windows)]
+        let root = home_directory
+            .as_ref()
+            .join("AppData/Local/CodexMutationLock-v1");
+        #[cfg(not(windows))]
+        let root = home_directory
+            .as_ref()
+            .join(".local/share/CodexMutationLock-v1");
+        #[cfg(windows)]
+        windows::validate_path(&root).map_err(|_| MutationLockError::InvalidRoot)?;
+        #[cfg(unix)]
+        validate_root_path(&root)?;
+        Ok(root)
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -420,6 +458,19 @@ impl MutationLock {
         &self.owner
     }
 
+    /// Durably removes the owner marker and releases the SQLite lease.
+    /// Unlike best-effort `Drop`, this reports filesystem and rollback errors.
+    pub fn release(mut self) -> Result<(), MutationLockError> {
+        self.verify_held()?;
+        fs::remove_file(self.root.join(OWNER_MARKER_FILE))
+            .map_err(|error| MutationLockError::Io(error.kind()))?;
+        sync_directory(&self.root)?;
+        let connection = self.connection.take().ok_or(MutationLockError::LeaseLost)?;
+        connection
+            .execute_batch("ROLLBACK")
+            .map_err(|_| MutationLockError::LockDatabaseUnavailable)
+    }
+
     /// Revalidates the live cross-process capability and the legacy Viewer
     /// exclusion immediately before or after one bounded mutation phase.
     /// Callers must keep this lease alive for the whole transaction.
@@ -692,7 +743,11 @@ fn write_owner_marker(root: &Path, owner: &MutationLockOwner) -> Result<(), Muta
     let temporary_path = allocate_owner_temporary_path(root, owner.process_id)?;
     let mut temporary_guard = TemporaryOwnerMarker::new(root, temporary_path.clone());
     write_private_file_new(&temporary_path, bytes.as_bytes())?;
+    #[cfg(not(windows))]
     fs::rename(&temporary_path, root.join(OWNER_MARKER_FILE))
+        .map_err(|error| MutationLockError::Io(error.kind()))?;
+    #[cfg(windows)]
+    windows::rename(&temporary_path, &root.join(OWNER_MARKER_FILE), true)
         .map_err(|error| MutationLockError::Io(error.kind()))?;
     sync_directory(root)?;
     temporary_guard.disarm();
@@ -798,7 +853,23 @@ fn allocate_owner_temporary_path(
 }
 
 fn prepare_lock_root(path: &Path) -> Result<(), MutationLockError> {
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::validate_path(path).map_err(|_| MutationLockError::InvalidRoot)?;
+        match fs::symlink_metadata(path) {
+            Ok(metadata) => verify_private_directory_metadata(&metadata),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match windows::create_directory(path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(MutationLockError::Io(error.kind())),
+                }
+                verify_private_directory(path).map(|_| ())
+            }
+            Err(error) => Err(MutationLockError::Io(error.kind())),
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         return Err(MutationLockError::PlatformPermissionsUnavailable);
@@ -895,7 +966,12 @@ fn write_private_file_new(path: &Path, bytes: &[u8]) -> Result<(), MutationLockE
     )
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn write_private_file_new(path: &Path, bytes: &[u8]) -> Result<(), MutationLockError> {
+    windows::write_new(path, bytes).map_err(|error| MutationLockError::Io(error.kind()))
+}
+
+#[cfg(not(any(unix, windows)))]
 fn write_private_file_new(_path: &Path, _bytes: &[u8]) -> Result<(), MutationLockError> {
     Err(MutationLockError::PlatformPermissionsUnavailable)
 }
@@ -943,7 +1019,14 @@ fn verify_directory_permissions(metadata: &Metadata) -> Result<(), MutationLockE
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn verify_directory_permissions(metadata: &Metadata) -> Result<(), MutationLockError> {
+    metadata
+        .verify_private()
+        .map_err(|_| MutationLockError::InsecurePermissions)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn verify_directory_permissions(_metadata: &Metadata) -> Result<(), MutationLockError> {
     Err(MutationLockError::PlatformPermissionsUnavailable)
 }
@@ -958,7 +1041,14 @@ fn verify_file_permissions(metadata: &Metadata) -> Result<(), MutationLockError>
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn verify_file_permissions(metadata: &Metadata) -> Result<(), MutationLockError> {
+    metadata
+        .verify_private()
+        .map_err(|_| MutationLockError::InsecurePermissions)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn verify_file_permissions(_metadata: &Metadata) -> Result<(), MutationLockError> {
     Err(MutationLockError::PlatformPermissionsUnavailable)
 }
@@ -970,11 +1060,22 @@ fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
+    left.same_identity(right)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 
+#[cfg(windows)]
+fn sync_directory(path: &Path) -> Result<(), MutationLockError> {
+    windows::sync_directory(path).map_err(|error| MutationLockError::Io(error.kind()))
+}
+
+#[cfg(not(windows))]
 fn sync_directory(path: &Path) -> Result<(), MutationLockError> {
     File::open(path)
         .and_then(|directory| directory.sync_all())

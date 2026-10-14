@@ -34,6 +34,7 @@ const ISSUES: Record<string, readonly [string, string]> = {
   authentication_required: ["需要在 Codex 中确认登录状态，暂时无法更新额度。", "Check your sign-in status in Codex. Quota cannot be updated yet."],
   codex_selection_required: ["请先选择要读取额度的 Codex 安装。", "Choose the Codex installation to read quota from."],
   codex_not_found: ["未找到可用的 Codex，请检查 Codex 是否已安装。", "No supported Codex installation was found."],
+  codex_home_unavailable: ["无法访问所选 Codex Home，请检查目录设置。", "The selected Codex Home is unavailable. Check the directory setting."],
   codex_verification_failed: ["无法验证 Codex 安装，请检查安装是否完整。", "The Codex installation could not be verified."],
   codex_candidate_invalid: ["此前选择的 Codex 已不可用，请重新选择。", "The selected Codex installation is unavailable. Select it again."],
   codex_candidate_changed: ["Codex 安装已更新，请重新确认读取来源。", "Codex has changed. Confirm the installation again."],

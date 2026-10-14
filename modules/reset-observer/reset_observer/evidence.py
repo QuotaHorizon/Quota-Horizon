@@ -20,7 +20,7 @@ FEEDS = {
     "completion_feed": "https://codex-reset.pro/api/reset-feed",
     "public_catalogue": "https://codex-resets.com/api/v1/resets?limit=100",
 }
-INTERPRETATION_VERSION = "event-scoped-claims-v3"
+INTERPRETATION_VERSION = "event-scoped-claims-v4"
 
 
 def population(text):
@@ -35,7 +35,7 @@ def population(text):
 def clause_stage(text):
     if re.search(r"(?:will|we.ll|going to).{0,80}(?:reset|credit)|reset.{0,25}(?:tomorrow|later today)", text, re.I):
         return "announced"
-    if re.search(r"resets? all propagated|all (?:limits )?reset|(?:have|has|we.ve) (?:now )?reset|limits (?:have been|are) reset|(?:have )?added a banked reset|reset was distributed|granted a banked reset", text, re.I):
+    if re.search(r"resets? all propagated|all (?:limits )?reset|(?:have|has|we.ve) (?:now )?reset|limits (?:have been|are) reset|(?:have )?added a banked reset|reset was distributed|granted a banked reset|reset has been (?:processed|completed|applied)", text, re.I):
         return "completed"
     if re.search(r"(?:are|we.re) (?:resetting|reseting|loading)|reset.{0,20}rolling out", text, re.I):
         return "started"
@@ -147,8 +147,10 @@ def fetch(provider):
 
 def retry_delay(store, provider, now, policy):
     rows = list(store.db.execute("SELECT error FROM observations WHERE provider=? AND observed_at<=? ORDER BY observed_at DESC,id DESC LIMIT 5", (provider, now)))
-    if not rows or not rows[0]["error"] or rows[0]["error"] in ("http_401", "http_403", "http_404", "http_429"):
-        return policy.collection_seconds
+    if not rows or not rows[0]["error"]:
+        return min(60, policy.collection_seconds)
+    if rows[0]["error"] in ("http_401", "http_403", "http_404", "http_429"):
+        return max(900, policy.collection_seconds)
     failures = 0
     for row in rows:
         if not row["error"]:
@@ -157,10 +159,11 @@ def retry_delay(store, provider, now, policy):
     return min(policy.collection_seconds, 60 * 2 ** (failures - 1))
 
 
-def collect(store, policy):
+def collect(store, policy, refresh=False):
     now = time.time()
     last = {o["provider"]: o["observed_at"] for o in store.observations(now)}
-    due = [p for p in FEEDS if now - last.get(p, 0) >= retry_delay(store, p, now, policy)]
+    latest = {o["provider"]: o for o in store.observations(now)}
+    due = [p for p in FEEDS if now - last.get(p, 0) >= (5 if refresh and not latest.get(p, {}).get("error") else retry_delay(store, p, now, policy))]
     result = []
     with ThreadPoolExecutor(max_workers=3) as pool:
         for future in as_completed([pool.submit(fetch, p) for p in due]):

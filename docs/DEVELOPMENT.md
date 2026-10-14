@@ -7,6 +7,7 @@
 - Node.js `^20.19.0 || >=22.12.0` 与 npm。
 - Rust stable，工具链配置见 `rust-toolchain.toml`。
 - macOS：Xcode Command Line Tools；Apple Silicon 打包使用 `aarch64-apple-darwin` target。
+- Windows：Visual Studio 2022 Build Tools 的“使用 C++ 的桌面开发”（MSVC 与 Windows SDK）、Rust stable MSVC 工具链，以及 Microsoft Edge WebView2 Runtime。
 
 前端依赖锁定在 `apps/desktop/package-lock.json`。
 根 `Cargo.lock` 对应共享 Rust workspace，`apps/desktop/src-tauri/Cargo.lock` 对应桌面 workspace。
@@ -40,6 +41,20 @@ cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
 两个 Cargo 命令分别运行共享服务和桌面测试。Cargo 可加 `--offline` 使用本地缓存。
 标记为 `ignored` 的测试有各自的账号、系统凭据或网络条件，运行说明位于测试源码中。
 
+### GitHub Actions
+
+[Desktop CI](../.github/workflows/desktop.yml) 在向 `dev`、`main` 推送或发起拉取请求时运行，
+也支持从 Actions 手动运行。每次在 macOS Apple Silicon 和 Windows x64 上检查前端和 Rust，
+再从同一源码修订、同一桌面版本生成 DMG 和 NSIS `.exe`。
+macOS 任务还测试并打包独立预测和评估模块，Python 与 NumPy 构建依赖写在
+[macos-runtime.yml](../.github/ci/macos-runtime.yml)。
+
+可从该次运行的产物下载两个安装器；名称包含平台与源码提交，保留 14 天。
+DMG 任务检查内置运行环境、签名、磁盘映像和安装副本；两端都检查原生可执行文件
+是否包含当前前端资源。公开安装器仍从
+[Releases](https://github.com/QuotaHorizon/Quota-Horizon/releases) 下载。
+两个平台任务通过后，再单独发布正式版本。
+
 ## 独立预测模块
 
 `modules/reset-intelligence/` 可单独运行，使用 Python 3.11+ 与 NumPy 2.x。
@@ -55,15 +70,16 @@ python -m reset_intelligence run --db ../../private-data/reset-intelligence/stat
 python -m reset_intelligence evaluate --db ../../private-data/reset-intelligence/state.sqlite --output ../../private-data/reset-intelligence/evaluation.json
 ```
 
-`run` 完成一次采集和预测；`watch` 持续运行，每分钟更新预测，每个来源至少间隔 15 分钟采集，
+`run` 完成一次采集和预测；`watch` 每分钟检查主要来源，其他来源使用各自采集间隔，
 按 `Ctrl+C` 退出。`collect` 只采集，`forecast` 使用已保存的数据。
+`run --refresh` 主动采集后重算，保留 5 秒重复请求保护和失败退避。
 `replay --as-of <ISO-8601>` 按当时已知的输入与配置回放，要求使用对应的代码版本；
 `evaluate` 分别报告历史事件回测和实际发布预测的前瞻评分。
 这些命令共用 `--db`；`--output` 原子写入 JSON，`--config` 可指定本地来源与模型参数配置。
 `audit --db <path> --output audit.json` 只读审查已发布预测的来源采用情况、采集时间、
 原始支持期限及社区权重。`run` / `watch` 增加 `--audit-output audit.json` 可持续输出这份审查。
-默认拟合结果保留为待审候选，已发布组合继续使用固定先验；配置中的
-`model.apply_learned_weights: true` 可显式启用满足训练条件后的拟合权重。
+当前组合使用配置先验，`model.apply_learned_weights` 保持 `false`；
+已发布预测和对照模型的前瞻成绩由评估器记录。
 
 输出结构见 [consumer.schema.json](../modules/reset-intelligence/consumer.schema.json)。概率以 `0–1` 表示，
 曲线覆盖未来 1–72 小时；目标分为包含发卡的广义额度恢复和直接重置。
@@ -90,8 +106,9 @@ python -m reset_observer run --db ../../private-data/reset-observer/state.sqlite
 
 使用相同参数运行 `watch` 可持续评估，`start` 则转入后台。
 `status --db <path>` 查看心跳，`stop --db <path>` 请求正常停止。
-每分钟检查一次，正常事件渠道每 15 分钟采集。临时请求或解析失败按 1、2、4、8、15 分钟
-退避重试；限流、访问受限和成功读取但内容过旧的渠道保持 15 分钟间隔。
+每轮完成后等待 60 秒，再检查和采集正常事件渠道。临时请求或解析失败按 1、2、4、8、15 分钟
+退避重试；限流和访问受限保留至少 15 分钟间隔。
+`refresh` 使用与 `start` 相同的参数，唤醒现有单实例进程，更新采集、预测与评估。
 预测器可单独持续运行，也可通过 `--config` 中的 `producer_command`（参数数组）
 及 `producer_cwd`，按采集周期或预测到期情况续更。评估参数放在 `policy` 中；
 变更评估规则需使用独立数据库。后台模式持续到主动停止或电脑重启。
@@ -168,6 +185,47 @@ macOS 构建使用已安装的 Conda Python 3.11–3.14 和 NumPy 2.x，所有�
 macOS 产物位于 `apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/QuotaHorizon.app`。
 安装步骤见[安装指南](INSTALLATION.md)。
 
+### Windows 安装包
+
+在 Windows x64 主机上运行：
+
+```sh
+npm --prefix apps/desktop ci --no-audit --no-fund
+npm --prefix apps/desktop run build:app:win
+```
+
+Tauri 自动合并 `tauri.windows.conf.json`，生成 NSIS `.exe` 安装包，而不是 macOS `.app`。
+预期输出目录为 `apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`。
+安装包默认按用户安装；目标机器缺少 WebView2 时，安装程序需要联网下载运行时。
+未配置 Windows 代码签名的包没有发布者签名，不能据此认为 SmartScreen 或企业策略兼容性已经验证。
+
+`build:app:win-arm64` 另外要求 MSVC ARM64 构建组件和 `aarch64-pc-windows-msvc` Rust target；
+x64 构建或测试通过不代表 ARM64 已验证。`npm run test:scripts` 在 Windows 上跳过仅适用于 POSIX 的 macOS 权限/符号链接测试。
+
+Windows 会发现官方桌面应用导出的 `%LOCALAPPDATA%/OpenAI/Codex/bin/<构建>/codex.exe`，即使它不在 `PATH` 中。
+首次使用需要确认读取来源；确认记录仅保存在本机宿主，重启时重新验证文件摘要与版本，读取组件更新后须再次确认。
+历史账号绑定使用当前用户的 Windows Credential Manager 和系统安全随机数，不回退为明文密钥文件。
+变更互斥与还原点使用 Windows 文件身份、私有 DACL、重解析点检查和真实文件/目录同步。
+恢复点目前限本地固定磁盘，拒绝网络路径、硬链接及不安全路径；不支持目录同步的文件系统会明确报错。
+会话及迁移回归使用临时合成数据，不替代真实账号切换、云端操作或物理断电实验。
+
+首次打包需要下载 NSIS 工具；若本机网络要求代理，需向当前构建进程显式提供 `HTTPS_PROXY` / `HTTP_PROXY`。
+Windows 系统代理不一定被打包工具自动采用。不要为了下载关闭 TLS 或哈希校验。
+
+独立原生托盘测试不读取账号或联网：
+
+```sh
+cargo run --locked -p capacity-desktop --features native-smoke --example tray_thread_smoke
+```
+
+`native-smoke` 只用于独立测试宿主；正式桌面依赖不启用它，以免链接重复的 Windows 版本资源。
+Windows 测试明确跳过依赖 Unix 文件凭据的历史夹具测试；另有原生凭据、互斥、权限漂移、恢复与回滚测试。
+凭据库真实读写测试使用随机独立名称，默认 `ignored`，显式运行后删除自己的测试凭据：
+
+```sh
+cargo test --locked -p capacity-vault native_unique_credential_roundtrip -- --ignored
+```
+
 ## 构建 DMG
 
 ```sh
@@ -176,7 +234,7 @@ npm run package:mac
 
 该命令完成 Apple Silicon 应用构建、DMG 封装和安装副本校验。
 安装窗口使用 [create-dmg](https://github.com/sindresorhus/create-dmg) 的现成模板，
-带拖拽箭头、应用图标和 Applications 文件夹入口。打包工具随项目开发依赖安装。
+带拖拽箭头、应用图标和 Applications 文件夹入口。打包工具作为可选依赖安装，避免 macOS 专用依赖阻塞 Windows 的 `npm ci`；缺少工具时 `package:mac` 会明确报错。
 
 DMG 安装包位于 `dist/releases/<version>/QuotaHorizon_<version>_macos-arm64.dmg`。
 
@@ -189,6 +247,7 @@ DMG 安装包位于 `dist/releases/<version>/QuotaHorizon_<version>_macos-arm64.
 | 文件 | 配置 |
 | --- | --- |
 | `apps/desktop/src-tauri/tauri.conf.json` | 应用版本、名称、macOS 13.0 最低版本及内嵌资源 |
+| `apps/desktop/src-tauri/tauri.windows.conf.json` | Windows NSIS 安装包目标与 ICO 图标 |
 | `apps/desktop/package.json` | 桌面版本、打包依赖和 Apple Silicon 构建快捷命令 |
 | `apps/desktop/src-tauri/Cargo.toml` | 桌面 Rust 包版本 |
 | `scripts/package-macos.mjs` | `aarch64-apple-darwin` 目标、DMG 模板、文件命名与校验 |

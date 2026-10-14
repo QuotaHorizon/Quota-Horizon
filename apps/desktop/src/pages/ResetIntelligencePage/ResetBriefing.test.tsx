@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ResetBriefing } from "./ResetBriefing";
-import { conditionalResetPledge, forecastPresentation, postReading, resetRelated, selectBriefingPost } from "./resetBriefingModel";
+import { forecastPresentation, postReading, resetRelated, selectBriefingPost } from "./resetBriefingModel";
 import { ResetNoticeChip } from "../../components/CapacityPopover/ResetNoticeChip";
 import { upcomingResetNotices } from "./upcomingResetModel";
 import type { PublicInsights, PublicPost, PublicResetTimeline } from "./types";
@@ -47,15 +47,11 @@ function announcedTimeline(target = "2026-09-23T10:00:00Z"): PublicResetTimeline
 const render = (value = timeline()) => renderToStaticMarkup(<ResetBriefing timeline={value} language="zh" now={now} />);
 
 describe("attributed reset briefing", () => {
-  it("keeps daily conditional reset pledges prominent and recognizes plural resets", () => {
+  it("keeps conditional activities and plural resets in reset-related posts", () => {
     const p: PublicPost = {...post,kind:"context",isReply:false,parent:null,text:"For the next 28 days, each day we either ship improvements or ship a full reset."};
-    expect(conditionalResetPledge(p)?.days).toBe(28);
     expect(resetRelated(p)).toBe(true);
-    expect(postReading(p,"zh").title).toBe("28 天：每日改进或完整重置");
-    expect(postReading(p,"en").title).toContain("daily improvement or full reset");
     expect(resetRelated({...p,text:"More resets coming next week."})).toBe(true);
     expect(resetRelated({...p,kind:"notice",text:"I challenge you to do the same."})).toBe(false);
-    expect(conditionalResetPledge({...p,text:"A full reset arrives tomorrow."})).toBeNull();
   });
   it("leads with the completed reset and its new report after an announcement is fulfilled", () => {
     const data = announcedTimeline();
@@ -173,13 +169,13 @@ describe("attributed reset briefing", () => {
     expect(html).toContain("父帖来源"); expect(html).toContain("Codex Reset 译文");
     expect(resetRelated(post)).toBe(true);
     expect(postReading(post, "zh")).toMatchObject({tone: "grant"});
-    expect(html).toContain("回复上文讨论的重置卡");
+    expect(html).toContain("重置卡相关回复");
   });
   it("does not make up missing context or expose arbitrary HTML", () => {
     const data = timeline();
     data.insights!.posts!.posts = [{ ...post, parent: { ...post.parent!, text: null }, translatedText: null, text: "<script>reset()</script>" }];
     const html = render(data);
-    expect(html).toContain("父帖暂未取得"); expect(html).toContain("回复上文暂缺");
+    expect(html).toContain("父帖暂未取得");
     expect(html).toContain("&lt;script&gt;"); expect(html).not.toContain("<script>");
     expect(html).not.toContain("应按重置卡");
   });
@@ -215,14 +211,14 @@ describe("attributed reset briefing", () => {
     expect(postReading(grant, "zh")).toMatchObject({title: "Tibo 宣布开始发放重置卡", tone: "grant"});
     expect(postReading(grant, "zh").meaning).toContain("重置卡可手动使用");
   });
-  it("does not let casual parent-linked replies displace a substantive announcement", () => {
-    const casual = { ...post, text: "pizza plutot", translatedText: "pizza plutot", publishedAt: "2026-09-23T02:34:00Z" };
-    expect(resetRelated(casual)).toBe(false);
+  it("keeps a keyword-free response together with its reset-related parent", () => {
+    const casual = { ...post, text: "Why not?", translatedText: "为什么不呢？", publishedAt: "2026-09-23T02:34:00Z" };
+    expect(resetRelated(casual)).toBe(true);
     expect(resetRelated(post)).toBe(true); // A timing reply remains useful with its banked-reset parent.
     const data = timeline();
     data.insights!.posts!.posts = [casual, { ...post, id: "124", isReply: false, parent: null, kind: "grant", text: "We are also loading a banked reset.", translatedText: null }];
     const html = render(data);
     expect(html).toContain("Tibo 宣布开始发放重置卡");
-    expect(html).not.toContain("pizza plutot");
+    expect(html).toContain("Why not?");
   });
 });

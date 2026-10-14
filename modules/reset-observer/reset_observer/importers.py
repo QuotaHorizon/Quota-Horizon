@@ -13,6 +13,8 @@ from .contracts import AUTOMATIC, RELIEF, Forecast, digest
 
 def fixed_weight_variants(payload):
     """Predeclared ablations of issued weights, not retrospectively refitted models."""
+    if payload.get("combination_method") == "baseline_plus_revisions":
+        return payload.get("counterfactuals", {})
     components = {c["id"]: c for c in payload["components"]}
     training = payload.get("training", {})
 
@@ -23,15 +25,17 @@ def fixed_weight_variants(payload):
             if not weights or sum(weights.values()) <= 0:
                 continue
             values = sum(np.asarray(components[k]["probabilities"]) * w for k, w in weights.items()) / sum(weights.values())
-            families.setdefault(group["family"], []).append(values)
+            families.setdefault(group["family"], []).append((values, group.get("group_weight", 1.)))
         weights = {k: w for k, w in training.get("weights", {}).items() if k in families}
         if community_weight is not None:
-            if set(families) != {"history", "community"}:
+            if "community" not in families or len(families) < 2:
                 return None
-            weights = {"history": 1 - community_weight, "community": community_weight}
+            other = sum(w for k, w in weights.items() if k != "community")
+            weights = {k: community_weight if k == "community" else w / other * (1 - community_weight) for k, w in weights.items()}
         if not weights or sum(weights.values()) <= 0:
             return None
-        return (sum(np.mean(families[k], axis=0) * w for k, w in weights.items()) / sum(weights.values())).tolist()
+        means = {k: sum(v * w for v, w in groups) / sum(w for _, w in groups) for k, groups in families.items()}
+        return (sum(means[k] * w for k, w in weights.items()) / sum(weights.values())).tolist()
 
     variants = {}
     community = {k for k, c in components.items() if c["family"] == "community"}
@@ -39,6 +43,10 @@ def fixed_weight_variants(payload):
         variants["without_community"] = combine(community)
         for weight in (.25, .50, .75):
             variants[f"community_weight_{round(weight * 100)}pct"] = combine(set(), weight)
+    for family in ("radars", "baseline"):
+        excluded = {k for k, c in components.items() if c["family"] == family}
+        if excluded:
+            variants["without_" + family] = combine(excluded)
     for name in components:
         if name != "survival_baseline":
             variants["without:" + name] = combine({name})
@@ -64,8 +72,11 @@ def paired_variants(payloads):
         if len(broad) != len(auto):
             raise ValueError("paired target horizons differ")
         crossed = broad < auto
-        mean = (broad + auto) / 2
-        broad[crossed], auto[crossed] = mean[crossed], mean[crossed]
+        if all(p.get("coherence") == "broad_inherits_automatic_floor" for p in current.values()):
+            broad = np.maximum(broad, auto)
+        else:
+            mean = (broad + auto) / 2
+            broad[crossed], auto[crossed] = mean[crossed], mean[crossed]
         for t, values in ((RELIEF, broad), (AUTOMATIC, auto)):
             output[t][name] = {"points": values.tolist(), "private": name.startswith("without:") and name[8:] in private,
                                "expires_at": min(p["valid_until"] for p in current.values())}
@@ -87,13 +98,16 @@ def import_model(store, payload, now, variants=None):
                         issues=issues, metadata=metadata, **common)]
     for c in payload["components"]:
         track = "shadow" if c["id"] == "survival_baseline" else "community" if c["family"] == "community" else "adapted"
-        records.append(Forecast(source=c["id"], track=track, points=[[i + 1, p] for i, p in enumerate(c["probabilities"])],
+        source_anchor = c["id"] == "survival_baseline" and payload.get("combination_method") == "baseline_plus_revisions"
+        values = [p["baseline"] for p in payload["curve"]] if source_anchor else c["probabilities"]
+        component_metadata = {"baseline_kind": "source_declared_anchor_with_survival_fallback"} if source_anchor else c.get("metadata", {})
+        records.append(Forecast(source=c["id"], track=track, points=[[i + 1, p] for i, p in enumerate(values)],
                                 private=c.get("private", False), issues=issues,
-                                metadata={**metadata, "family": c["family"], "dependency": c["dependency"], **c.get("metadata", {})}, **common))
+                                metadata={**metadata, "family": c["family"], "dependency": c["dependency"], **component_metadata}, **common))
     for name, variant in (variants or {}).items():
         records.append(Forecast(source=name, track="shadow", points=[[i + 1, p] for i, p in enumerate(variant["points"])],
                                 private=variant["private"], issues=issues,
-                                metadata={**metadata, "ablation": "fixed_issued_weights_renormalized", "post_pool_projection": True},
+                                metadata={**metadata, "ablation": "paired_increment_recomputation" if payload.get("combination_method") == "baseline_plus_revisions" else "fixed_issued_weights_renormalized", "post_pool_projection": True},
                                 **{**common, "expires_at": variant["expires_at"]}))
     for record in records:
         record.validate()
@@ -135,6 +149,14 @@ def intelligence_database(store, path, now):
                     except (KeyError, ValueError, TypeError):
                         counts["rejected"] += 1
                 for poll in n.get("polls", []):
+                    if poll["kind"] == "calendar_preference":
+                        from .preferences import capture
+                        try:
+                            capture(store, row["source"], row["observed_at"], now, poll)
+                            counts["indicators"] += 1
+                        except (KeyError, ValueError, TypeError):
+                            counts["rejected"] += 1
+                        continue
                     store.indicator(row["source"], now, poll)
                     counts["indicators"] += 1
             store.mark(kind, row["id"])

@@ -8,13 +8,13 @@ import sys
 import time
 
 from .contracts import stamp
-from .runtime import atomic_write, exclusive, read_config, run_once, running, start, status, stop_path, watch
+from .runtime import atomic_write, exclusive, read_config, request_refresh, run_once, running, start, status, stop_path, watch
 from .store import Store
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Independent real-time forecast evaluation")
-    parser.add_argument("command", choices=("run", "watch", "start", "stop", "status", "replay", "diagnose"))
+    parser.add_argument("command", choices=("run", "watch", "start", "stop", "status", "refresh", "replay", "diagnose"))
     parser.add_argument("--db", required=True, help="Observer-owned SQLite database")
     parser.add_argument("--producer-db", help="Optional read-only reset-intelligence database")
     parser.add_argument("--ingest", help="Generic Forecast JSONL input; first arrival is stamped here")
@@ -67,6 +67,8 @@ def main(argv=None):
             parser.error("no saved report at that time")
         if args.output:
             atomic_write(args.output, json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+    elif args.command == "refresh":
+        result = request_refresh(args)
     elif args.command == "start":
         # Validate configuration before dispatching a detached process.
         from .contracts import Policy

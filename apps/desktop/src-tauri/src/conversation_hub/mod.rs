@@ -16,7 +16,111 @@ use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
-use crate::storage::{replace_file, resolve_paths, write_text_atomic};
+use crate::storage::resolve_paths;
+#[cfg(not(windows))]
+use crate::storage::{replace_file, write_text_atomic};
+
+// Only adapt the Win32 I/O boundary; stored paths and containment checks keep
+// their original representation. Do not canonicalize through filesystem links.
+#[cfg(windows)]
+fn windows_io_path(path: &Path) -> std::io::Result<PathBuf> {
+    use std::{
+        ffi::OsString,
+        path::{Component, Prefix},
+    };
+
+    let absolute = std::path::absolute(path)?;
+    let mut components = absolute.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "missing Windows path prefix",
+        ));
+    };
+    let mut extended = match prefix.kind() {
+        Prefix::Disk(_) => {
+            let mut value = OsString::from(r"\\?\");
+            value.push(absolute.as_os_str());
+            return Ok(PathBuf::from(value));
+        }
+        Prefix::UNC(server, share) => {
+            let mut value = OsString::from(r"\\?\UNC\");
+            value.push(server);
+            value.push(r"\");
+            value.push(share);
+            PathBuf::from(value)
+        }
+        Prefix::VerbatimDisk(_) | Prefix::VerbatimUNC(_, _) => return Ok(absolute),
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "unsupported Windows path prefix",
+            ))
+        }
+    };
+    for component in components {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => extended.push(name),
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "non-normal Windows path component",
+                ))
+            }
+        }
+    }
+    Ok(extended)
+}
+
+#[cfg(windows)]
+fn sync_windows_directory(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::{
+        Foundation::GENERIC_WRITE,
+        Storage::FileSystem::{
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        },
+    };
+
+    let path = windows_io_path(path)?;
+    let open_directory = |path: &Path, access| -> std::io::Result<File> {
+        let file = fs::OpenOptions::new()
+            .access_mode(access)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "directory flush requires a non-reparse directory",
+            ));
+        }
+        Ok(file)
+    };
+    // OPEN_REPARSE_POINT protects only the leaf. Pin checked ancestors from
+    // root to parent without delete sharing until the target flush completes.
+    let ancestors = path.ancestors().skip(1).collect::<Vec<_>>();
+    let mut parents = Vec::with_capacity(ancestors.len());
+    for parent in ancestors.into_iter().rev() {
+        parents.push(open_directory(parent, FILE_READ_ATTRIBUTES)?);
+    }
+    let directory = open_directory(&path, GENERIC_WRITE)?;
+    directory.sync_all()
+}
+
+#[cfg(windows)]
+fn write_text_atomic(path: &Path, value: &str) -> Result<(), String> {
+    let path = windows_io_path(path).map_err(|error| error.to_string())?;
+    crate::storage::write_text_atomic(&path, value)
+}
+
+#[cfg(windows)]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    crate::storage::replace_file(&windows_io_path(source)?, &windows_io_path(destination)?)
+}
 
 const INDEX_NAME: &str = "session_index.jsonl";
 const ROLLOUT_FOLDERS: [&str; 2] = ["sessions", "archived_sessions"];

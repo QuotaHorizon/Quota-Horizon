@@ -31,7 +31,7 @@ class DiagnosticsTests(TemporaryStore):
             self.store.observation("completion_feed", T+i, None, False, None, None, "TimeoutError")
             self.assertEqual(retry_delay(self.store, "completion_feed", T+i, self.policy), delay)
         self.store.observation("completion_feed", T+10, T-7200, False, [], {})
-        self.assertEqual(retry_delay(self.store, "completion_feed", T+10, self.policy), 900)
+        self.assertEqual(retry_delay(self.store, "completion_feed", T+10, self.policy), 60)
         self.store.observation("completion_feed", T+11, None, False, None, None, "http_429")
         self.assertEqual(retry_delay(self.store, "completion_feed", T+11, self.policy), 900)
 
@@ -45,7 +45,11 @@ class DiagnosticsTests(TemporaryStore):
         source = next(p for p in detail["providers"] if p["provider"] == "public_catalogue")
         self.assertEqual(source["gaps"][0]["seconds"], 7200)
         self.store.observation("completion_feed", T+100, None, False, None, None, "TimeoutError")
-        self.assertEqual(coverage_details(self.store, T, T+7200, T+10800, self.policy)["qualified_providers"], 0)
+        recovered = coverage_details(self.store, T, T+7200, T+10800, self.policy)
+        self.assertEqual(recovered["qualified_providers"], 1)
+        source = next(p for p in recovered["providers"] if p["provider"] == "completion_feed")
+        self.assertEqual(source["failed_attempts"], {"request_or_decode_failure": 1})
+        self.assertTrue(source["qualifies"])
 
     def test_windows_deduplicate_forecast_rows_and_mark_historical_gap(self):
         initialize(self.store, T, self.policy)

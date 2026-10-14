@@ -17,19 +17,26 @@ class SourceQualityTests(unittest.TestCase):
     setUp = fixtures.LedgerTests.setUp
     tearDown = fixtures.LedgerTests.tearDown
 
+    def test_audit_counts_keep_failures_and_the_seven_day_boundary(self):
+        self.store.save("event_ledger", NOW-8*86400, None, None, "old_failure")
+        self.store.save("event_ledger", NOW-60, None, None, "recent_failure")
+        f = forecast(self.store, NOW, RELIEF)
+        row = next(r for r in source_audit(self.store, NOW, [f])["sources"] if r["source"] == "event_ledger")
+        self.assertEqual((row["seven_day_attempts"], row["decoded_attempts"], row["failed_attempts"]), (2,1,1))
+
     def test_same_poll_round_mirror_does_not_add_weight(self):
         poll = {"kind":"probability_votes", "target":RELIEF, "population":"same_voters", "id":"round",
-                "start":NOW-3600, "expires":NOW+86400, "total":10, "bins":[{"p":.9,"votes":10}]}
+                "start":NOW-3600, "expires":NOW+86400, "total":50, "bins":[{"p":.9,"votes":50}]}
         for source in ("a", "mirror"):
             self.store.save(source, NOW, {}, Observation(source, NOW, NOW, polls=[poll]))
         f = forecast(self.store, NOW, RELIEF)
         self.assertEqual(sum(c["family"] == "community" for c in f["components"]), 1)
         self.assertIn("duplicate_poll_round", [issue for h in f["source_health"] for issue in h["issues"]])
-        self.assertAlmostEqual(f["training"]["weights"]["community"], .5)
+        self.assertLess(f["community_weight"], .6)
 
     def test_empty_poll_has_specific_exclusion_and_audit_preserves_actual_weight(self):
         poll = {"kind":"probability_votes", "target":RELIEF, "population":"sample", "id":"round",
-                "start":NOW-3600, "expires":NOW+86400, "total":1, "bins":[{"p":.9,"votes":1}]}
+                "start":NOW-3600, "expires":NOW+86400, "total":50, "bins":[{"p":.9,"votes":50}]}
         self.store.save("votes", NOW, {}, Observation("votes", NOW, NOW, polls=[poll]))
         self.store.save("private_name", NOW, {}, Observation("private_name", NOW, NOW, polls=[dict(poll, total=0, private=True)]))
         f = forecast(self.store, NOW, RELIEF, private_source_ids={"private_name"})
@@ -37,12 +44,14 @@ class SourceQualityTests(unittest.TestCase):
         audit = source_audit(self.store, NOW, [f])
         self.assertEqual(self.store.db.total_changes, before)
         row = next(r for r in audit["sources"] if r["source"] == "votes")
-        self.assertAlmostEqual(row["issued_contribution"]["ballot_weight_before_projection"], .1)
+        self.assertAlmostEqual(row["issued_contribution"]["ballot_weight_before_projection"], f["community_weight"])
+        self.assertLess(f["community_weight"], .6)
         self.assertEqual(row["issued_contribution"]["weight_state"], "cold_start_prior")
+        self.assertEqual(audit["targets"][0]["community_dependency_groups"], 1)
         private = next(r for r in audit["sources"] if r["private"])
         self.assertEqual(private["reasons"], ["empty_poll"])
         self.assertEqual(private["admission"], "excluded")
-        self.assertAlmostEqual(sum(r["issued_contribution"].get("component_weight_before_projection", 0) for r in audit["sources"]), 1)
+        self.assertEqual(next(r for r in audit["sources"] if r["source"] == "survival_baseline")["issued_contribution"]["background_anchor_weight"], 1)
         self.assertNotIn("private_name", json.dumps(audit))
 
     def test_targeted_grant_stays_in_evidence_but_not_broad_baseline(self):
@@ -93,9 +102,9 @@ class QuoteQualityTests(unittest.TestCase):
     def test_fractional_ballot_deadline_is_used_for_tail_completion(self):
         base = Survival([e.at for e in history()], NOW)
         poll = {"kind":"interval_votes", "target":RELIEF, "population":"sample", "id":"round",
-                "start":NOW, "expires":NOW+1.5*3600, "total":10,
-                "bins":[{"start":NOW,"end":NOW+1.5*3600,"votes":8},
-                        {"start":NOW+1.5*3600,"end":None,"votes":2}]}
+                "start":NOW, "expires":NOW+1.5*3600, "total":100,
+                "bins":[{"start":NOW,"end":NOW+1.5*3600,"votes":80},
+                        {"start":NOW+1.5*3600,"end":None,"votes":20}]}
         out = ballot_curve(poll, NOW, [1,2], base, NOW-10000, ModelConfig())
         self.assertEqual(out["coverage_hours"], 1.5)
         curve = complete_tail(out["probabilities"], [1,2], base, (out["coverage_hours"],out["terminal_probability"]))

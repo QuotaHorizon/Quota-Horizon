@@ -167,10 +167,12 @@ pub fn run() {
                 main_window::restore_or_set_default(app)?;
             }
             commands::initialize_local_state(app.handle());
-            capacity_desktop_service::initialize_with_explicit_executable(
+            capacity_desktop_service::initialize_with_preferences(
                 app,
                 false,
                 capacity_bridge::preferred_codex_executable(),
+                capacity_bridge::confirmed_codex_executable(app.handle()),
+                codex_home::resolve().ok(),
             )?;
             capacity_bridge::setup(app.handle())?;
             public_reset_feed::setup(app.handle())?;

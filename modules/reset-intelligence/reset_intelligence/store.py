@@ -26,6 +26,8 @@ class Store:
             generated_at REAL, payload_hash TEXT, normalized TEXT, error TEXT,
             FOREIGN KEY(payload_hash) REFERENCES payloads(hash));
           CREATE INDEX IF NOT EXISTS observations_time ON observations(source, observed_at);
+          CREATE INDEX IF NOT EXISTS observations_audit ON observations(
+            source, observed_at, (normalized IS NOT NULL), (error IS NOT NULL));
           CREATE TABLE IF NOT EXISTS forecasts(
             id TEXT PRIMARY KEY, issued_at REAL NOT NULL, target TEXT NOT NULL,
             model_version TEXT NOT NULL, payload TEXT NOT NULL);
@@ -49,15 +51,17 @@ class Store:
 
     def observations(self, as_of: float) -> dict[str, Observation]:
         # Select the last successfully decoded observation as it was known then.
-        rows = self.db.execute("""SELECT * FROM (SELECT *, ROW_NUMBER() OVER
-            (PARTITION BY source ORDER BY observed_at DESC,id DESC) rank FROM observations
-            WHERE observed_at<=? AND normalized IS NOT NULL) WHERE rank=1""", (as_of,))
+        rows = self.db.execute("""SELECT o.* FROM
+            (SELECT DISTINCT source FROM observations) sources JOIN observations o ON o.id=(
+            SELECT id FROM observations WHERE source=sources.source AND observed_at<=? AND normalized IS NOT NULL
+            ORDER BY observed_at DESC,id DESC LIMIT 1)""", (as_of,))
         return {r["source"]: Observation.from_dict(json.loads(r["normalized"])) for r in rows}
 
     def attempts(self, as_of: float) -> list[dict]:
-        return [dict(r) for r in self.db.execute("""SELECT source,observed_at,error FROM
-          (SELECT *,ROW_NUMBER() OVER (PARTITION BY source ORDER BY observed_at DESC,id DESC) rank
-           FROM observations WHERE observed_at<=?) WHERE rank=1""", (as_of,))]
+        return [dict(r) for r in self.db.execute("""SELECT o.source,o.observed_at,o.error FROM
+          (SELECT DISTINCT source FROM observations) sources JOIN observations o ON o.id=(
+          SELECT id FROM observations WHERE source=sources.source AND observed_at<=?
+          ORDER BY observed_at DESC,id DESC LIMIT 1)""", (as_of,))]
 
     def record_config(self, config: dict, at: float) -> str:
         h = digest(config)

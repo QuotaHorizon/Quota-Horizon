@@ -1,14 +1,17 @@
 """Independent forecasting pipeline and allowlisted consumer contract."""
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import numpy as np
 
 from . import MODEL_VERSION, VERSION
-from .community import ballot_curve, ballot_rejection, count_curve, count_rejection
+from .community import ballot_curve, ballot_rejection, count_curve, count_rejection, recent_ballot
 from .contracts import TARGETS, digest, iso
-from .evaluation import canonical_events, matured
-from .quant import ModelConfig, Survival, fit_weights
+from .evaluation import canonical_events
+from .quant import ModelConfig, Survival
+from .increments import combine, counterfactuals
+from .response import announcement_context
+from .signals import apply_comment_estimates
 
 HOURS = list(range(1, 73))
 
@@ -56,6 +59,8 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
     if target not in TARGETS:
         raise ValueError("unknown target")
     config = config or ModelConfig()
+    if config.apply_learned_weights:
+        raise ValueError("increment model weights require a separately reviewed forward fit")
     config_hash = config_hash or digest(asdict(config))
     observations = {k: v for k, v in store.observations(now).items() if source_ids is None or k in source_ids}
     ledger = observations.get("event_ledger")
@@ -91,7 +96,7 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                              "classification_corrections": [asdict(e) for e in events if e.classification_basis != "source_label"]}
     baseline = Survival([e.at for e in events], now, config)
     base = [baseline.p(h) for h in HOURS]
-    components = [{"id": "survival_baseline", "family": "history", "dependency": "public_event_history",
+    components = [{"id": "survival_baseline", "family": "baseline", "dependency": "public_event_history",
                    "probabilities": base, "metadata": baseline.summary(), "private": False}]
     seen, seen_polls = set(), set()
     for obs in observations.values():
@@ -100,6 +105,8 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                 continue
             health = next(h for h in result["source_health"] if h["id"] == c.source)
             reason = list(c.issues)
+            if c.source == "codex_reset" and c.metadata.get("estimate_kind") != "published_complete":
+                reason.append("source_normalization_outdated")
             if c.last_reset_at is not None and c.last_reset_at < events[-1].at - 3600:
                 reason.append("missed_latest_event")
             if events[-1].at > c.origin:
@@ -110,22 +117,55 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                 continue
             # Exact syndicated curves share a contribution even across hostnames.
             fingerprint = digest({"target": c.target, "points": c.points, "origin": c.origin,
-                                  "dependency": c.dependency})
+                                  "dependency": c.dependency, "baseline_points": c.metadata.get("baseline_points")})
             if fingerprint in seen:
                 health["issues"].append("duplicate_forecast")
                 continue
             seen.add(fingerprint)
             values, alignment = aligned
-            components.append({"id": c.source, "family": "history", "dependency": c.dependency,
+            signal_baseline, role = None, "comparison"
+            if c.metadata.get("baseline_points"):
+                paired = replace(c, points=c.metadata["baseline_points"])
+                try:
+                    paired.validate()
+                    aligned_base = align_curve(paired, now, HOURS, baseline)
+                except (ValueError, TypeError, IndexError):
+                    health["issues"].append("invalid_source_baseline")
+                    aligned_base = None
+                if aligned_base:
+                    signal_baseline = aligned_base[0]
+                    # A reviewed neutral response can still be informative.
+                    active = c.metadata.get("revision_reviewed") or any(abs(p-b) > 1e-6 for p,b in zip(values, signal_baseline))
+                    role = "information" if active else "background"
+            components.append({"id": c.source, "family": "radars", "dependency": c.dependency,
+                               "role": role, "signal_baseline": signal_baseline,
                                "probabilities": values, "metadata": {**c.metadata, **alignment},
                                "source_points": c.points, "private": c.private})
+    apply_comment_estimates(components, result["facts"], now, events[-1].at, HOURS)
+    result["response"] = announcement_context(components, result["facts"], now, events[-1].at)
+    for obs in observations.values():
         for poll in obs.polls:
             if poll["target"] != target:
                 continue
             health = next(h for h in result["source_health"] if h["id"] == obs.source)
+            if poll["kind"] == "calendar_preference":
+                # Preferences are collected and independently evaluated on their
+                # actual calendar days before any fitted probability mapping.
+                if "preference_under_evaluation" not in health["issues"]:
+                    health["issues"].append("preference_under_evaluation")
+                continue
             if now - obs.observed_at > 1800 or obs.issues:
                 health["issues"].append("poll_observation_stale_or_excluded")
                 continue
+            sampling = {}
+            if poll["kind"] != "count_distribution":
+                poll, sampling = recent_ballot(store, obs.source, poll, now, half_life_hours=config.poll_half_life_hours)
+                if not poll["total"]:
+                    health["issues"].append("empty_poll" if sampling["total_votes"] == 0 else sampling["sampling_state"])
+                    continue
+                if poll["total"] < config.minimum_recent_votes:
+                    health["issues"].append("insufficient_recent_votes")
+                    continue
             if poll["kind"] == "count_distribution":
                 reason = count_rejection(poll, now, [e.at for e in events])
                 converted = count_curve(poll, now, HOURS, [e.at for e in events])
@@ -142,72 +182,38 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
             seen_polls.add(fingerprint)
             terminal = (converted["coverage_hours"], converted["terminal_probability"]) if "terminal_probability" in converted else None
             values = complete_tail(converted.pop("probabilities"), HOURS, baseline, terminal)
+            converted.update(sampling)
             converted["fresh_until"] = min(obs.observed_at + 1800, poll["expires"])
             components.append({"id": obs.source, "family": "community", "dependency": poll["population"],
                                "probabilities": values, "metadata": converted, "private": poll.get("private", False)})
 
-    # Hierarchical budget: duplicates/populations share a dependency group;
-    # history-based sites together get one family vote, regardless of site count.
-    training_rows = matured(store, now, target, 24, config_hash)
-    families = sorted(set(c["family"] for c in components))
-    features = {}
-    source_training = []
-    for family in families:
-        members = [c for c in components if c["family"] == family]
-        # Our baseline and third-party historical models depend on the same
-        # underlying events. Pool that entire family as one feature.
-        dependencies = {c["dependency"] for c in members} if family == "community" else {"shared_history"}
-        groups = []
-        for dep in sorted(dependencies):
-            group = [c for c in members if family == "history" or c["dependency"] == dep]
-            names = [c["id"] for c in group]
-            available = []
-            for row in training_rows:
-                lookup = {c["id"]: c["probabilities"][23] for c in row["forecast"]["components"]}
-                if set(names).issubset(lookup):
-                    available.append(([lookup[n] for n in names], row["label"]))
-            ys = np.array([r[1] for r in available])
-            prior = np.full(len(group), 1 / len(group))
-            learned = len(ys) >= config.minimum_training_windows and ys.sum() >= 5 and (1 - ys).sum() >= 5
-            candidate = fit_weights(np.array([r[0] for r in available]), ys, prior, config.stacking_regularization) if learned else None
-            weight = candidate if learned and config.apply_learned_weights else prior
-            groups.append(weight @ np.array([c["probabilities"] for c in group]))
-            source_training.append({"family": family, "dependency": dep, "weights": dict(zip(names, weight.tolist())),
-                                    "state": "learned" if learned and config.apply_learned_weights else "cold_start_prior", "windows": len(available),
-                                    "candidate_weights": dict(zip(names, candidate.tolist())) if candidate is not None else None})
-        features[family] = np.mean(groups, axis=0)
-    result["features"] = {str(h): {f: float(features[f][i]) for f in families} for i, h in enumerate(HOURS)}
-    training = [r for r in training_rows
-                if set(families).issubset(r["features"])]
-    prior = np.full(len(families), 1 / len(families))
-    y = np.array([r["label"] for r in training])
-    learned = len(y) >= config.minimum_training_windows and y.sum() >= 5 and (1 - y).sum() >= 5
-    if learned:
-        x = np.array([[r["features"][f] for f in families] for r in training])
-        candidate_weights = fit_weights(x, y, prior, config.stacking_regularization)
-    else:
-        candidate_weights = None
-    weights = candidate_weights if learned and config.apply_learned_weights else prior
-    matrix = np.array([features[f] for f in families])
-    combined = weights @ matrix
-    if np.any(np.diff(combined) < -1e-9):
-        raise ValueError("nonmonotone component conversion")
+    mixed = combine(components, config)
+    result["combination_method"] = "baseline_plus_revisions"
+    result["features"] = {str(h): {"baseline": mixed["baseline"][i], "radars": mixed["radar_probability"][i],
+                                    "community": mixed["community"][i]} for i,h in enumerate(HOURS)}
+    # No fitted parameters are used here. Forward scoring belongs to the
+    # independent observer, not an archive scan on every forecast publication.
+    result["training"] = {"state": "cold_start_prior", "windows": 0,
+                          "events": 0, "evaluation": "independent_observer", "minimum_windows": config.minimum_training_windows,
+                          "weights": {}, "increment_groups": mixed["groups"],
+                          "prior": "one_anchor_paired_revisions_community_residual",
+                          "community_overlap": config.community_overlap, "community_weight_rule": "quality_odds_by_dependency",
+                          "candidate_state": "increment_model_requires_forward_validation", "apply_learned_weights": False}
     result["components"] = components
-    result["training"] = {"state": "learned" if learned and config.apply_learned_weights else "cold_start_prior", "windows": len(training),
-                          "events": int(y.sum()), "minimum_windows": config.minimum_training_windows,
-                          "objective": "regularized_brier", "weights": dict(zip(families, weights.tolist())),
-                          "prior": "equal_mass_per_available_family", "horizon_trained_hours": 24,
-                          "candidate_weights": dict(zip(families, candidate_weights.tolist())) if candidate_weights is not None else None,
-                          "candidate_state": "ready_for_review" if learned else "insufficient_training_windows",
-                          "apply_learned_weights": config.apply_learned_weights}
-    result["training"]["within_groups"] = source_training
-    for i, h in enumerate(HOURS):
-        lo, hi = baseline.interval(h) if h in (6, 12, 24, 48, 72) else (None, None)
-        source_values = [c["probabilities"][i] for c in components]
-        result["curve"].append({"hours": h, "probability": float(combined[i]), "baseline": base[i],
-                                "baseline_parameter_interval_80": [lo, hi] if lo is not None else None,
-                                "component_range": [min(source_values), max(source_values)]})
+    result["community_weight"] = mixed["community_weight"]
+    result["counterfactuals"] = counterfactuals(components, config)
+    for c in components:
+        c["weight"] = mixed["weights"][c["id"]]
+        c["baseline_weight"] = mixed["baseline_weights"].get(c["id"], 0.)
+    for i,h in enumerate(HOURS):
+        values = [c["probabilities"][i] for c in components]
+        result["curve"].append({"hours": h, "probability": mixed["probabilities"][i], "baseline": mixed["baseline"][i],
+            "radar_adjustment": mixed["radar_adjustment"][i], "community_adjustment": mixed["community_adjustment"][i],
+            "comment_adjustment": mixed["comment_adjustment"][i],
+            "coherence_adjustment": mixed["shape_adjustment"][i], "baseline_parameter_interval_80": None,
+            "component_range": [min(values),max(values)]})
     result["valid_until"] = min([now + 900, ledger.generated_at + 3600,
+                                 (result.get("response") or {}).get("deadline") or now + 900,
                                  *(c["metadata"].get("expires_at", now + 900) for c in components),
                                  *(c["metadata"].get("fresh_until", now + 900) for c in components)])
     return result
@@ -219,15 +225,15 @@ def forecast_all(store, now: float, config: ModelConfig | None = None, config_ha
     broad, automatic = results
     if all(r["status"] == "current" for r in results):
         for a, b in zip(broad["curve"], automatic["curve"]):
-            # Euclidean projection onto P(automatic) <= P(any relief). The two
-            # original curves are monotone, so this preserves both time orders.
+            # A forecast of the containing event inherits the narrower event's
+            # probability floor. Do not average a narrow forecast down merely
+            # because a separately estimated broader curve is lower.
             if a["probability"] < b["probability"]:
-                mean = (a["probability"] + b["probability"]) / 2
-                for p in (a, b):
-                    p["unconstrained_probability"] = p["probability"]
-                    p["probability"] = mean
+                a["unconstrained_probability"] = a["probability"]
+                a["coherence_adjustment"] += b["probability"] - a["probability"]
+                a["probability"] = b["probability"]
         for r in results:
-            r["coherence"] = "projection_automatic_subset_of_broad_relief"
+            r["coherence"] = "broad_inherits_automatic_floor"
     return results
 
 
@@ -237,27 +243,63 @@ def consumer_export(results: list[dict]) -> dict:
     for result in results:
         item = {"target": result["target"], "status": result["status"],
                 "issued_at": iso(result["issued_at"]), "model_version": result["model_version"],
+                "last_event_at": result.get("last_event_at"),
+                "response": {k: result["response"].get(k) for k in ("at", "url", "reviewed", "changed", "kind", "deadline")}
+                            if result.get("response") else None,
+                "statements_checked_at": max((h["last_success"] for h in result["source_health"] if h["id"] in ("statements", "tibo_posts") and h.get("last_success")), default=None),
                 "curve": result["curve"], "reason": result.get("reason"),
                 "valid_until": iso(result["valid_until"]) if result.get("valid_until") else None,
                 "training_state": result.get("training", {}).get("state"),
                 "coherence": result.get("coherence"),
+                "combination_method": result.get("combination_method"),
                 "evaluation_windows": result.get("training", {}).get("windows", 0),
                 "event_count": result["event_count"], "sources": [], "community": None,
+                "family_weights": result.get("training", {}).get("weights", {}),
+                "community_inputs": [],
                 "changes": result.get("changes"),
                 "source_health": [{k: h.get(k) for k in ("id", "last_success", "generated_at", "error", "issues")}
                                   for h in result["source_health"] if not h["private"]],
-                "statements": [{**{k: f.get(k) for k in ("id", "at", "url", "original", "translation_zh", "stage", "event_type", "scope_note", "context", "relevance")},
-                                "collector": "Codex Reset" if f.get("source") == "tibo_posts" else "Reset Monitor"}
+                "statements": [{**{k: f.get(k) for k in ("id", "at", "url", "original", "translation_zh", "stage", "event_type", "scope_note", "context", "relevance", "is_reply", "parent")},
+                                "collector": "Codex Reset" if f.get("source") == "tibo_posts" else "Codex Reset FM"}
                                for f in result["facts"]]}
         for c in result["components"]:
-            if not c["private"] and c["family"] == "history":
+            if not c["private"] and c["family"] in ("baseline", "radars", "history"):
                 item["sources"].append({"id": c["id"], "probabilities": c["probabilities"],
+                                        "weight": c.get("weight"), "family": c["family"],
+                                        "role": c.get("role", "background"), "signal_baseline": c.get("signal_baseline"),
+                                        "response_state": c["metadata"].get("response_state"),
+                                        "comment": {k: c["metadata"]["comment"].get(k) for k in
+                                            ("probability", "url", "at", "included", "state", "deadline", "timing_sources", "adjustment_24h", "adjustment_48h")}
+                                            if c["metadata"].get("comment") else None,
+                                        "baseline_weight": c.get("baseline_weight"),
+                                        "baseline_points": c["metadata"].get("baseline_points"),
                                         "source_points": c.get("source_points"),
                                         "origin": c["metadata"].get("origin"),
+                                        "expires_at": c["metadata"].get("expires_at"),
                                         "source_coverage_hours": c["metadata"].get("source_coverage_hours"),
                                         "alignment": c["metadata"].get("alignment")})
-        if "community" in result.get("training", {}).get("weights", {}):
+        if result.get("community_weight", 0.) > 0:
             item["community"] = {"probabilities": [result["features"][str(h)]["community"] for h in HOURS],
-                                 "weight": result["training"]["weights"]["community"]}
+                                 "weight": result["community_weight"]}
+        for c in result["components"]:
+            if c["family"] == "community" and not c["private"]:
+                m = c["metadata"]
+                item["community_inputs"].append({"id": c["id"], "state": "included", "weight": c.get("weight", 0.),
+                    "votes": m.get("votes"), "effective_votes": m.get("effective_votes"),
+                    "total_votes": m.get("total_votes"), "recent_votes": m.get("recent_votes"),
+                    "observation_window_hours": m.get("observation_window_hours"),
+                    "latest_vote_at": m.get("latest_vote_at"), "freshness_weight": m.get("freshness_weight"),
+                    "coverage_hours": m.get("coverage_hours"), "probability_24h": c["probabilities"][23],
+                    "probability_48h": c["probabilities"][47]})
+        # Only an aggregate availability count crosses the public boundary;
+        # private source names, identifiers, rules and venues stay in the audit.
+        private = [c for c in result["components"] if c["family"] == "community" and c["private"]]
+        private_health = [h for h in result["source_health"] if h["private"] and result["target"] == "broad_quota_relief"]
+        item["community_coverage"] = {"included": len([c for c in result["components"] if c["family"] == "community"]),
+            "unavailable": max(0, len(private_health) + len([h for h in result["source_health"] if h["id"] in
+                              (("date_poll", "didcodex_poll") if result["target"] == "broad_quota_relief" else ("community_poll",))])
+                           - len([c for c in result["components"] if c["family"] == "community"])),
+            "supplementary_included": len(private), "supplementary_checked": len(private_health),
+            "supplementary_weight": sum(c.get("weight", 0.) for c in private)}
         forecasts.append(item)
     return {"schema_version": "reset-intelligence-consumer/1", "horizons_hours": HOURS, "forecasts": forecasts}

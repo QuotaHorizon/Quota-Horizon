@@ -13,6 +13,13 @@ const envelope = (candidates: CodexCandidate[], selectedExecutableId: string | n
 });
 
 describe("Codex installation selection after an update", () => {
+  it("labels Windows desktop runtimes before and after explicit confirmation", () => {
+    for (const sources of [["windows_desktop_runtime"], ["explicit"]]) {
+      const app = { ...candidate("windows"), sources, canonicalPath: "C:\\Users\\Example\\AppData\\Local\\OpenAI\\Codex\\bin\\0123456789abcdef\\codex.exe" };
+      expect(installationLabel(app, "zh")).toContain("桌面 App");
+      expect(installationLabel(app, "en")).toContain("bundled reader");
+    }
+  });
   it("recognizes current bundled paths after explicit selection loses discovery tags", () => {
     for (const canonicalPath of [
       "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",

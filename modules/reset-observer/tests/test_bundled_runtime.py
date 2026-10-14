@@ -121,7 +121,7 @@ class BundledUpgradeTests(unittest.TestCase):
             )
             config = {"producer_command": ["private-python", "private-argument"]}
 
-            def one_tick(*_):
+            def one_tick(*_, **__):
                 stop_path(args.db).touch()
                 return {"state": "test_complete"}
 
@@ -141,7 +141,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from reset_observer.runtime import atomic_write, watch
 args = SimpleNamespace(**json.loads(sys.argv[1]))
-def tick(args, config):
+def tick(args, config, **kwargs):
     atomic_write(args.output, json.dumps({'fixture': config['fixture']}))
     return {'state': 'fixture_ready'}
 with patch('reset_observer.runtime.run_once', side_effect=tick):

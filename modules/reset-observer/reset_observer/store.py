@@ -52,6 +52,13 @@ class Store:
         CREATE INDEX IF NOT EXISTS settlements_trial ON settlements(trial,at);
         CREATE TABLE IF NOT EXISTS reports(id INTEGER PRIMARY KEY,at REAL NOT NULL,payload BLOB NOT NULL);
         CREATE TABLE IF NOT EXISTS runtime_events(id INTEGER PRIMARY KEY,at REAL NOT NULL,payload TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS preference_samples(
+          id TEXT PRIMARY KEY,source TEXT NOT NULL,round_id TEXT NOT NULL,
+          observed_at REAL NOT NULL,received_at REAL NOT NULL,payload TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS preference_samples_time ON preference_samples(source,round_id,observed_at);
+        CREATE TABLE IF NOT EXISTS preference_trials(id TEXT PRIMARY KEY,frozen_at REAL NOT NULL,payload TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS preference_settlements(trial TEXT NOT NULL,at REAL NOT NULL,signature TEXT NOT NULL,payload TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS preference_settlements_trial ON preference_settlements(trial,at);
         """)
 
     def close(self):
@@ -103,9 +110,10 @@ class Store:
 
     def observations(self, now, successful=False):
         extra = " AND claims IS NOT NULL" if successful else ""
-        rows = self.db.execute(f"""SELECT * FROM (SELECT *, ROW_NUMBER() OVER
-          (PARTITION BY provider ORDER BY observed_at DESC,id DESC) rank FROM observations
-          WHERE observed_at<=? {extra}) WHERE rank=1""", (now,))
+        rows = self.db.execute(f"""SELECT o.* FROM
+          (SELECT DISTINCT provider FROM observations) providers JOIN observations o ON o.id=(
+          SELECT id FROM observations WHERE provider=providers.provider AND observed_at<=? {extra}
+          ORDER BY observed_at DESC,id DESC LIMIT 1)""", (now,))
         return [dict(r) for r in rows]
 
     def add_forecast(self, f: Forecast):
@@ -150,14 +158,16 @@ class Store:
         return [{"id": r["id"], **json.loads(r["payload"])} for r in self.db.execute(
             "SELECT id,payload FROM trials WHERE frozen_at<=? ORDER BY origin,source", (now,))]
 
-    def settle(self, id, now, result):
-        signature = digest({k: result[k] for k in ("label", "status", "events", "reason")})
+    def settle(self, id, now, result, commit=True):
+        signature = digest({k: result.get(k) for k in ("label", "status", "events", "reason",
+            "score_eligible", "event_score_eligible", "coverage_complete", "settlement_version")})
         last = self.db.execute("SELECT signature FROM settlements WHERE trial=? ORDER BY at DESC,id DESC LIMIT 1", (id,)).fetchone()
         if last and last[0] == signature:
             return False
-        with self.db:
-            self.db.execute("INSERT INTO settlements(trial,at,signature,label,status,payload) VALUES (?,?,?,?,?,?)",
-                            (id, now, signature, result["label"], result["status"], packed(result)))
+        self.db.execute("INSERT INTO settlements(trial,at,signature,label,status,payload) VALUES (?,?,?,?,?,?)",
+                        (id, now, signature, result["label"], result["status"], packed(result)))
+        if commit:
+            self.db.commit()
         return True
 
     def settled(self, now):

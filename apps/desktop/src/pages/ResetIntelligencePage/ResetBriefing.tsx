@@ -169,11 +169,11 @@ function LegacyBriefing({ timeline, language, now, failed = false, onOpenSource,
       {otherPosts.length > limit && <button className={styles.moreButton} onClick={() => setLimit((count) => count + 4)}>{zh ? "更多发言" : "More statements"}<ChevronDown size={13} aria-hidden="true" /></button>}
     </article>}
     <footer className={styles.health} aria-label={zh ? "公开来源状态" : "Public source health"}>
-      <div><span>{zh ? "自动采集 · 每 15 分钟" : "Auto-updates every 15 minutes"}</span>{checkedAt && <span>{zh ? "最近检查 " : "Last checked "}{publicEvidenceTime(checkedAt, language)}</span>}</div>
+      <div><span>{zh ? "自动采集 · 约每分钟" : "Auto-updates about once a minute"}</span>{checkedAt && <span>{zh ? "最近检查 " : "Last checked "}{publicEvidenceTime(checkedAt, language)}</span>}</div>
       <div>{timeline?.sources.map((source) => {
         const successAt = Date.parse(source.lastSuccessAt ?? "");
         const needsAttention = failed || !!source.issue || source.rejectedRecords > 0
-          || !Number.isFinite(successAt) || successAt > now || now - successAt >= 15 * 60_000;
+          || !Number.isFinite(successAt) || successAt > now || now - successAt >= 60_000;
         return <span key={source.sourceId} className={styles.healthSource} data-issue={needsAttention || undefined}
         title={`${SOURCE_NAMES[source.sourceId]} · ${publicEvidenceTime(source.lastSuccessAt, language)}`}>
         <i aria-hidden="true" />{SOURCE_NAMES[source.sourceId]} · {failed ? (zh ? "显示缓存" : "Cached") : publicSourceLabel(source, language, now)}

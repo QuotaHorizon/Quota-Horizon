@@ -46,6 +46,7 @@ def main(argv=None) -> int:
     parser.add_argument("--config", help="Local JSON source and model configuration")
     parser.add_argument("--output", help="Atomic consumer JSON output, or evaluation report for evaluate")
     parser.add_argument("--audit-output", help="Separate source admission and issued-weight JSON")
+    parser.add_argument("--refresh", action="store_true", help="Request fresh public inputs with a five-second duplicate-read guard")
     parser.add_argument("--as-of", help="Timezone-qualified historical time (replay/evaluate only)")
     parser.add_argument("--target", choices=TARGETS, help="Default: both targets")
     args = parser.parse_args(argv)
@@ -61,8 +62,7 @@ def main(argv=None) -> int:
         try:
             while True:
                 main(run_args)
-                # Collection itself enforces a fifteen-minute per-source limit.
-                # Minute ticks refresh time conditioning and expire old inputs.
+                # Each adapter enforces its own cadence and failure backoff.
                 time.sleep(60)
         except KeyboardInterrupt:
             return 0
@@ -82,7 +82,7 @@ def main(argv=None) -> int:
                 write_json(args.output, payload)
             print(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False))
             return 0
-        outcomes = collect(store, specs) if args.command in ("collect", "run") else []
+        outcomes = collect(store, specs, minimum_interval=5 if args.refresh else None) if args.command in ("collect", "run") else []
         now = stamp(args.as_of) if args.as_of else round(time.time(), 3)
         if now > time.time() + 1:
             parser.error("cannot replay future observations")
@@ -124,10 +124,10 @@ def main(argv=None) -> int:
             for result in results:
                 store.forecast(result)
         payload = consumer_export(results)
-        if args.audit_output:
-            write_json(args.audit_output, source_audit(store, now, results))
         if args.output:
             write_json(args.output, payload)
+        if args.audit_output:
+            write_json(args.audit_output, source_audit(store, now, results))
         summary = {"issued_at": iso(now), "mode": args.command, "sources": outcomes,
                    "forecasts": [{"target": r["target"], "status": r["status"], "reason": r.get("reason"),
                                   "event_count": r["event_count"], "components": [c["id"] for c in r["components"]],

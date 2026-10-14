@@ -2,7 +2,7 @@ import type { Language } from "../../i18n";
 import { activeResetCommitment, resetCommitmentExcerpt, resetDeliveryExcerpt, upcomingResetNotices, type UpcomingResetNotice } from "./upcomingResetModel";
 import { publicPostWithdrawn } from "./publicCorrections";
 import type { PublicInsights, PublicPost, PublicResetTimeline } from "./types";
-import { forecastFor, forecastStale, probabilityAt } from "./quantitativeModel";
+import { forecastFor, forecastStale, latestCompletion, precedesCompletion, probabilityAt } from "./quantitativeModel";
 
 const halfHour = 30 * 60_000;
 export function forecastPresentation(insights: PublicInsights | undefined, now: number, failed = false, timeline?: PublicResetTimeline | null) {
@@ -14,6 +14,8 @@ export function forecastPresentation(insights: PublicInsights | undefined, now: 
     || !Number.isFinite(checkedAge) || checkedAge < -60_000 || checkedAge >= halfHour);
   const quant = timeline?.quantitative;
   const independent = forecastFor(quant);
+  const completion = timeline ? latestCompletion(timeline, now) : undefined;
+  const awaitingResetForecast = precedesCompletion(independent, completion);
   const stale = quant?.connected ? forecastStale(quant, independent, now) : sourceStale;
   const deadline = value?.signalDeadline ? Date.parse(value.signalDeadline) : NaN;
   const signalAge = value?.signalPublishedAt ? now - Date.parse(value.signalPublishedAt) : NaN;
@@ -26,13 +28,13 @@ export function forecastPresentation(insights: PublicInsights | undefined, now: 
     && signalAge < 72 * 3_600_000 && Number.isFinite(deadline) && deadline > now;
   const notice = timeline ? upcomingResetNotices(timeline, now)[0] ?? null : null;
   const noticeWithdrawn = notice?.state === "withdrawn" || !!(notice && signalWithdrawn && value?.signalUrl === notice.url);
-  const announcement = activeResetCommitment(notice, now, failed)
+  const announcement = !quant?.connected && activeResetCommitment(notice, now, failed)
     && !noticeWithdrawn ? notice : null;
   const byHours = (hours: number) => announcement?.timing && announcement.timing.end <= now + hours * 3_600_000
-    ? 100 : quant?.connected ? ((p: number | null) => p == null ? null : p * 100)(probabilityAt(independent, hours)) : timeline?.radar?.updatedAt
+    ? 100 : quant?.connected ? ((p: number | null) => p == null ? null : p * 100)(awaitingResetForecast ? null : probabilityAt(independent, hours)) : timeline?.radar?.updatedAt
       ? timeline.radar.estimate ? hours === 24 ? timeline.radar.estimate.probability24h : timeline.radar.estimate.probability48h : null
       : value ? hours === 24 ? value.probability24h : value.probability48h : null;
-  return { value, stale, signalActive, signalWithdrawn, notice, noticeWithdrawn, announcement,
+  return { value, stale, signalActive, signalWithdrawn, notice, noticeWithdrawn, announcement, completion, awaitingResetForecast,
     probability24h: byHours(24), probability48h: byHours(48) };
 }
 
@@ -48,18 +50,8 @@ export function resetRelated(post: PublicPost) {
   return ["grant", "reset_report", "limits"].includes(post.kind)
     || /\b(?:resets?|resetting|banked|quota|usage limits?)\b/iu.test(post.text)
     || (/\bPro\s*500\b/iu.test(post.text) && /\b(?:fixed|reports?|investigat\w*|compensat\w*)\b/iu.test(post.text))
-    // Parent context alone does not make a casual reply a useful reset update.
-    // Keep contextual timing/commitment replies; all other posts remain in All.
-    || (/\b(?:resets?|resetting|banked|quota)\b/iu.test(post.parent?.text ?? "")
-      && /\b(?:coming|arriv\w*|load\w*|grant\w*|issu\w*|tomorrow|tonight|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|midnight)\b/iu.test(post.text));
-}
-
-export function conditionalResetPledge(post: PublicPost) {
-  const days = post.text.match(/\bnext\s+(\d{1,3})\s+days\b/iu);
-  if (!days || !/\b(?:each|every) day\b/iu.test(post.text)
-    || !/\beither\b[\s\S]{0,350}\bor\b[\s\S]{0,60}\b(?:full |global )?reset\b/iu.test(post.text)) return null;
-  const duration = Number(days[1]), start = Date.parse(post.publishedAt);
-  return duration > 0 && duration <= 90 && Number.isFinite(start) ? { days: duration, start, end: start + duration * 86400_000 } : null;
+    || post.relevance === "reset_related"
+    || /\b(?:resets?|resetting|banked|quota)\b/iu.test(post.parent?.text ?? "");
 }
 
 /** A bounded editorial explanation, not a probabilistic classifier. The actual
@@ -67,12 +59,8 @@ export function conditionalResetPledge(post: PublicPost) {
 export function postReading(post: PublicPost, language: Language, timeline?: PublicResetTimeline | null) {
   const zh = language === "zh";
   const corrected = publicPostWithdrawn(timeline?.entries, post.url);
-  if (corrected) return { tone: "notice", title: zh ? "相关追踪记录已更正" : "Related tracker record corrected",
+  if (corrected) return { corrected: true, tone: "notice", title: zh ? "相关追踪记录已更正" : "Related tracker record corrected",
     meaning: zh ? "此条预告已失效，可在情报变化中查看更正内容。" : "This notice is no longer active. See source updates for the correction." };
-  const pledge = conditionalResetPledge(post);
-  if (pledge) return { tone: "reset", title: zh ? `${pledge.days} 天：每日改进或完整重置` : `${pledge.days} days: daily improvement or full reset`,
-    meaning: zh ? "Tibo 对接下来每天作出的条件承诺：发布一项对多数 Codex / Work 用户有用的明确改进，或进行完整重置。当天是否有符合条件的发布，是持续观察的重点。"
-      : "Tibo’s daily commitment: ship a clear improvement relevant to most Codex / Work users, or a full reset. Watch whether each day brings a qualifying release." };
   if (/\bPro\s*500\b/iu.test(post.text) && /\ball fixed\b/iu.test(post.text)) return {
     tone: "reset", title: zh ? "Pro 500 问题已报告修复" : "Pro 500 issue reported fixed",
     meaning: zh ? "Tibo 的修复进展，完整表述如下。" : "Tibo’s repair update, in full below.",

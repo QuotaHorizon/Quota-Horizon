@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import math
 
+from . import SETTLEMENT_VERSION
 from .contracts import AUTOMATIC, HORIZONS
 from .evidence import coverage, reconcile
 
@@ -79,7 +80,9 @@ def freeze_grid(store, now, policy):
 def label_window(trial, events, now, policy, covered):
     end = trial["origin"] + trial["hours"] * 3600
     result = {"label": None, "status": "pending", "events": [], "reason": "window_not_mature",
-              "deadline": end, "matures_at": end + policy.reporting_grace_seconds}
+              "deadline": end, "matures_at": end + policy.reporting_grace_seconds,
+              "settlement_version": SETTLEMENT_VERSION, "coverage_complete": bool(covered),
+              "score_eligible": False, "event_score_eligible": False}
     if now < result["matures_at"]:
         return result
     certain, uncertain = [], []
@@ -93,29 +96,45 @@ def label_window(trial, events, now, policy, covered):
         else:
             uncertain.append(event["id"])
     result["events"] = sorted(certain or uncertain)
-    if not certain and uncertain:
+    if certain:
+        # An observed occurrence establishes the label despite a monitoring gap.
+        # Keep partial-coverage positives out of calibration/ranking samples;
+        # otherwise missing negative windows would select an optimistic sample.
+        result.update(label=1, status="settled", reason="completion_observed")
+    elif uncertain:
         result.update(status="unresolved", reason="boundary_or_evidence_conflict")
     elif not covered:
-        result.update(label=1 if certain else None, status="unresolved", reason="incomplete_outcome_coverage")
+        result.update(status="unresolved", reason="incomplete_outcome_coverage")
     else:
         result.update(label=int(bool(certain)), status="settled", reason="completion_observed" if certain else "monitored_without_completion")
     if trial["p"] is None:
         result["score_eligible"] = False
     else:
-        result["score_eligible"] = result["status"] == "settled"
+        result["score_eligible"] = result["status"] == "settled" and bool(covered)
+        result["event_score_eligible"] = result["label"] == 1
     return result
 
 
 def settle_all(store, now, policy, evidence):
     truth_hash = store.truth(now, evidence)
+    trials = store.trials(now)
+    previous = store.settled(now)
+    context = {"truth_hash": truth_hash, "settlement_version": SETTLEMENT_VERSION}
+    unchanged_evidence = store.get("settlement_context") == context
     changes = 0
     cached_coverage = {}
-    for trial in store.trials(now):
-        key = trial["origin"], trial["hours"]
-        end = trial["origin"] + trial["hours"] * 3600
-        if key not in cached_coverage:
-            cached_coverage[key] = now >= end + policy.reporting_grace_seconds and coverage(store, trial["origin"], end, now, policy)
-        result = label_window(trial, evidence["events"], now, policy, cached_coverage[key])
-        result["truth_hash"] = truth_hash
-        changes += store.settle(trial["id"], now, result)
+    with store.db:
+        for trial in trials:
+            old = previous.get(trial["id"])
+            if unchanged_evidence and old and old.get("settlement_version") == SETTLEMENT_VERSION:
+                if old["status"] != "pending" or now < old["matures_at"]:
+                    continue
+            key = trial["origin"], trial["hours"]
+            end = trial["origin"] + trial["hours"] * 3600
+            if key not in cached_coverage:
+                cached_coverage[key] = now >= end + policy.reporting_grace_seconds and coverage(store, trial["origin"], end, now, policy)
+            result = label_window(trial, evidence["events"], now, policy, cached_coverage[key])
+            result["truth_hash"] = truth_hash
+            changes += store.settle(trial["id"], now, result, commit=False)
+    store.put("settlement_context", context)
     return changes
