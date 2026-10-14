@@ -6,3 +6,7 @@ Copyright 2026 piperhex, licensed under the Apache License, Version 2.0.
 
 The exact upstream commit, imported paths, exclusions, and local modifications
 are recorded in UPSTREAM.md.
+
+macOS and Windows x64 builds bundle Python, NumPy and their required runtime libraries.
+Their redistribution notices are included under reset-runtime/licenses in the app's
+resources and in NumPy's bundled distribution metadata.

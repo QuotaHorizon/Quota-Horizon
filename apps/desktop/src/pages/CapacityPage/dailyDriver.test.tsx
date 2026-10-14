@@ -22,6 +22,30 @@ function envelope(): DesktopStatusEnvelope {
 }
 
 describe("daily-driver priority and reset-card clarity", () => {
+  it.each(["zh", "en"] as const)("shows the live Pro Lite plan with a weekly-only quota in %s", (language) => {
+    const value = envelope();
+    value.status!.account!.planType = "prolite";
+    value.status!.quotaWindows = [{ limitId: "codex:primary", label: "weekly", windowMinutes: 10080,
+      usedPercent: 28, remainingPercent: 72, resetsAt: "2026-10-06T12:00:00Z" }];
+    vi.mocked(getCapacityStatusSnapshot).mockReturnValue(value);
+    const html = renderToStaticMarkup(<CapacityPage language={language} notify={() => undefined} />);
+    expect(html).toContain("Pro Lite");
+    expect(html).not.toContain("Free");
+    expect(html).toContain(language === "zh" ? "此套餐无独立 5h 限额" : "No separate 5h limit on this plan");
+  });
+  it("does not turn a real weekly-only Pro Lite limit into a five-hour quota", () => {
+    const value = envelope();
+    value.status!.account!.planType = "prolite";
+    value.status!.quotaWindows = [{ limitId: "codex:primary", label: "weekly", windowMinutes: 10080,
+      usedPercent: 23, remainingPercent: 77, resetsAt: "2026-10-20T04:59:08Z" }];
+    value.status!.resetCredits = { summaryStatus: "available", availableCount: 3, detailsStatus: "complete" };
+    vi.mocked(getCapacityStatusSnapshot).mockReturnValue(value);
+    const html = renderToStaticMarkup(<CapacityPage language="zh" notify={() => undefined} />);
+    expect(html).toContain("77%");
+    expect(html).toContain("3 张");
+    expect(html).not.toContain('aria-label="5h 77%"');
+    expect(html).toContain("此套餐无独立 5h 限额");
+  });
   it("keeps quota, reset cards and history on the daily page, without lab entry points", () => {
     vi.mocked(getCapacityStatusSnapshot).mockReturnValue(envelope());
     const html = renderToStaticMarkup(<CapacityPage language="zh" notify={() => undefined} />);

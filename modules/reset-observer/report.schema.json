@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reset observer report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "module_version", "implementation_hash", "generated_at", "state", "started_at", "estimand", "policy", "summary", "latest", "indicators", "outcome_providers", "outcomes", "scorecards", "comparisons", "curves"],
+  "properties": {
+    "schema_version": {"const": "reset-observer/1"},
+    "module_version": {"type": "string"},
+    "implementation_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "state": {"enum": ["collecting_forward_evidence", "scoring"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "estimand": {"type": "string"},
+    "policy": {"type": "object", "required": ["version", "hash", "grid_seconds", "reporting_grace_seconds", "headline_sampling", "zero_label"]},
+    "summary": {"type": "object", "required": ["forecast_snapshots", "frozen_trials", "scored_nonoverlapping_trials", "settlements", "outcomes", "settlement_revisions", "next_maturity"], "properties": {
+      "scoring_by_horizon": {"type": "array", "maxItems": 4, "items": {"type": "object", "additionalProperties": false,
+        "required": ["hours", "settled_windows", "scored_windows", "scored_trials", "eligible_rolling_trials", "missing_forecast_trials"],
+        "properties": {"hours": {"enum": [6, 12, 24, 48]}, "settled_windows": {"type": "integer", "minimum": 0},
+          "scored_windows": {"type": "integer", "minimum": 0}, "scored_trials": {"type": "integer", "minimum": 0},
+          "eligible_rolling_trials": {"type": "integer", "minimum": 0}, "missing_forecast_trials": {"type": "integer", "minimum": 0}}}}
+    }},
+    "latest": {"type": "array", "items": {"type": "object", "required": ["source", "version", "target", "track", "origin", "received_at", "valid_until", "state", "probabilities_at_publication", "support_hours"]}},
+    "indicators": {"type": "array", "items": {"type": "object"}},
+    "calendar_sentiment": {"type": "object", "required": ["version", "minimum_recent_votes", "production_weight", "automatic_promotion", "latest", "trials", "sample_observations", "scored_days"],
+      "properties": {"minimum_recent_votes": {"type": "integer", "minimum": 50}, "production_weight": {"const": 0},
+        "automatic_promotion": {"const": false}, "latest": {"type": "array"}, "trials": {"type": "array"},
+        "sample_observations": {"type": "integer", "minimum": 0}, "scored_days": {"type": "integer", "minimum": 0}}},
+    "outcome_providers": {"type": "array", "items": {"type": "object"}},
+    "outcomes": {"type": "array", "items": {"type": "object", "required": ["id", "status", "reason", "kind", "from", "to", "references", "time_basis"]}},
+    "scorecards": {"type": "array", "items": {"type": "object", "required": ["source", "version", "target", "track", "hours", "scheduled_windows", "forecast_coverage", "settlement_states", "scores", "alerts"]}},
+    "comparisons": {"type": "array", "items": {"type": "object", "required": ["left", "right", "target", "hours", "n", "loss_difference", "error_correlation", "brier_skill"]}},
+    "curves": {"type": "array", "items": {"type": "object", "required": ["source", "version", "target", "track", "hours", "points"]}},
+    "curve_basis": {"const": "received_publication_values"},
+    "runtime": {"type": "object", "required": ["producer", "import", "pid"]},
+    "diagnostics": {"type": "object", "required": ["unique_windows", "states", "unresolved_reasons", "windows", "runtime_events"]},
+    "dependence": {"type": "array", "items": {"type": "object", "required": ["left", "right", "target", "matched_origins", "level_correlation", "change_correlation"]}},
+    "weight_review": {"type": "object", "required": ["state", "automatic_promotion", "candidates", "selection"]}
+  }
+}

@@ -1,8 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ResetBriefing } from "./ResetBriefing";
-import { forecastPresentation, postReading, resetRelated } from "./resetBriefingModel";
+import { forecastPresentation, postReading, resetRelated, selectBriefingPost } from "./resetBriefingModel";
 import { ResetNoticeChip } from "../../components/CapacityPopover/ResetNoticeChip";
+import { upcomingResetNotices } from "./upcomingResetModel";
 import type { PublicInsights, PublicPost, PublicResetTimeline } from "./types";
 
 const now = Date.parse("2026-09-23T03:00:00Z");
@@ -16,16 +17,142 @@ function insights(): PublicInsights {
     sourceUrl: "https://codex-reset.com/api/forecast", updatedAt: "2026-09-23T02:58:00Z", checkedAt: "2026-09-23T02:59:00Z",
     probability24h: 20, probability48h: 35, confidence: "low", mode: "model", lastResetAt: null,
     signalScore: 93, signalUrl: post.url, signalPublishedAt: post.publishedAt,
-    signalDeadline: "2026-09-23T06:59:59Z", signalCorrected: false,
+    signalDeadline: "2026-09-23T06:59:59Z", signalCorrected: false, signalState: "active",
   } }, posts: { fetchedAt: "2026-09-23T02:59:00Z", checkedAt: "2026-09-23T02:59:00Z", posts: [post] } };
 }
 function timeline(): PublicResetTimeline {
   return { sources: [], entries: [], revisionCount: 0, evidenceFamilyCount: 0, insights: insights() };
 }
+function announcedTimeline(target = "2026-09-23T10:00:00Z"): PublicResetTimeline {
+  const data = timeline();
+  const url = "https://x.com/thsottiaux/status/456";
+  const sourceUrl = "https://quotaresets.com/api/v1/events.json";
+  const text = "Global reset landing tomorrow 10am PST for all paid ChatGPT accounts.";
+  data.entries = [{ disposition: "needs_review", signal: {
+    signalId: "announcement", revision: 1, evidenceFamilyId: "x:456", eventId: "reset:456",
+    kind: "global_full_reset", semantics: "explicit_timed_reset", scope: "unknown",
+    recordedAt: "2026-09-23T02:59:00Z", occurredAt: null, title: "Reset announcement", summary: text,
+    announcementTiming: { expectedAt: target, timeZone: "America/Los_Angeles", sourceUrl, cohort: "all paid ChatGPT accounts" },
+    source: { canonicalUrl: url, author: "@thsottiaux", review: "indirect", sourceClass: "official_social",
+      publishedAt: post.publishedAt, collectedAt: "2026-09-23T02:59:00Z", contentSha256: "a".repeat(64),
+      parserVersion: "synthetic", discoveredVia: [sourceUrl] },
+  } }];
+  data.sources = [{ sourceId: "quotaresets", sourceUrl, lastSuccessAt: "2026-09-23T02:59:00Z",
+    lastAttemptAt: "2026-09-23T02:59:00Z", issue: null, acceptedRecords: 1, rejectedRecords: 0, skippedRecords: 0 }];
+  data.insights!.posts!.posts = [{ ...post, id: "456", url, text,
+    translatedText: "明天太平洋时间上午 10 点，所有付费 ChatGPT 账号将迎来全局重置。",
+    kind: "notice", isReply: false, parent: null }];
+  return data;
+}
 const render = (value = timeline()) => renderToStaticMarkup(<ResetBriefing timeline={value} language="zh" now={now} />);
 
 describe("attributed reset briefing", () => {
-  it("shows external 24/48h estimates separately from a rule-based signal score", () => {
+  it("keeps conditional activities and plural resets in reset-related posts", () => {
+    const p: PublicPost = {...post,kind:"context",isReply:false,parent:null,text:"For the next 28 days, each day we either ship improvements or ship a full reset."};
+    expect(resetRelated(p)).toBe(true);
+    expect(resetRelated({...p,text:"More resets coming next week."})).toBe(true);
+    expect(resetRelated({...p,kind:"notice",text:"I challenge you to do the same."})).toBe(false);
+  });
+  it("leads with the completed reset and its new report after an announcement is fulfilled", () => {
+    const data = announcedTimeline();
+    data.entries[0].signal.semantics = "confirmed_reset";
+    data.entries[0].signal.occurredAt = "2026-09-23T02:57:00Z";
+    const report: PublicPost = { ...data.insights!.posts!.posts[0], id: "789",
+      url: "https://x.com/thsottiaux/status/789", kind: "reset_report",
+      text: "Reset all propagated. Enjoy.", translatedText: "重置已全部完成。", publishedAt: "2026-09-23T02:57:00Z" };
+    data.insights!.posts!.posts.push(report); // Selection also handles an unsorted feed.
+    Object.assign(data.insights!.forecast.value!, { signalUrl: report.url, signalState: "confirmed", signalDeadline: null });
+    const html = render(data);
+    expect(html).toContain("已报告重置");
+    expect(html).toContain("报告完成");
+    expect(html).toContain("重置已全部完成。");
+    expect(html).not.toContain("预告已更正");
+    expect(html.indexOf("重置已全部完成。")).toBeLessThan(html.indexOf("关键动态"));
+    expect(html.indexOf("关键动态")).toBeLessThan(html.indexOf("Tibo 明确预告额度重置"));
+    expect(html).toContain('aria-expanded="false"');
+    const state = forecastPresentation(data.insights, now, false, data);
+    expect(state.signalActive).toBe(false);
+    expect(state.notice?.reportedAt).toBe(Date.parse(report.publishedAt));
+    const chip = renderToStaticMarkup(<ResetNoticeChip timeline={data} insights={data.insights} now={now} language="zh" onOpen={() => undefined} />);
+    expect(chip).toContain("重置新动态");
+    expect(chip).not.toContain("预告有更正");
+    expect(chip).not.toContain("100%");
+    data.insights!.forecast.value!.signalState = undefined;
+    data.insights!.forecast.value!.signalCorrected = true; // A persisted 0.1.6 cache.
+    expect(render(data)).not.toContain("已更正");
+  });
+  it("does not withdraw a current announcement because a different lead was corrected", () => {
+    const data = announcedTimeline();
+    const value = data.insights!.forecast.value!;
+    value.signalState = "corrected"; value.signalCorrected = true;
+    expect(forecastPresentation(data.insights, now, false, data)).toMatchObject({ noticeWithdrawn: false, probability24h: 100 });
+    expect(render(data)).not.toContain("预告已更正");
+    value.signalUrl = data.entries[0].signal.source.canonicalUrl;
+    expect(render(data)).toContain("预告已更正");
+    expect(renderToStaticMarkup(<ResetNoticeChip timeline={data} insights={data.insights} now={now} language="zh" onOpen={() => undefined} />)).toContain("预告有更正");
+  });
+  it("keeps an upcoming commitment visible until it progresses", () => {
+    const data = announcedTimeline();
+    const announcement = data.insights!.posts!.posts[0];
+    data.insights!.posts!.posts.unshift({ ...post, id: "new", kind: "reset_report", publishedAt: "2026-09-23T02:50:00Z" });
+    expect(selectBriefingPost(data.insights!.posts!.posts, upcomingResetNotices(data, now)[0])).toBe(announcement);
+  });
+  it("shows an announcement-led 100% outlook without overwriting the source estimates", () => {
+    const data = announcedTimeline();
+    const unchanged = JSON.stringify(data);
+    expect(forecastPresentation(data.insights, now, false, data)).toMatchObject({ probability24h: 100, probability48h: 100 });
+    const html = render(data);
+    expect(html).toContain("100%");
+    expect(html).toContain("20%"); expect(html).toContain("35%");
+    expect(html).toContain("all paid ChatGPT accounts");
+    expect(html).not.toContain("重置类型与时间待明确");
+    expect(JSON.stringify(data)).toBe(unchanged);
+  });
+  it("applies a dated commitment only to the horizons containing its target", () => {
+    for (const [hours, p24, p48] of [[7, 100, 100], [24, 100, 100], [30, 20, 100], [48, 20, 100], [49, 20, 35]]) {
+      const data = announcedTimeline(new Date(now + hours * 3_600_000).toISOString());
+      expect(forecastPresentation(data.insights, now, false, data)).toMatchObject({ probability24h: p24, probability48h: p48 });
+    }
+  });
+  it("uses one interpretation for the main view and menu", () => {
+    const data = announcedTimeline();
+    const notice = upcomingResetNotices(data, now)[0];
+    const html = renderToStaticMarkup(<ResetNoticeChip notice={notice} timeline={data} insights={data.insights} now={now} language="zh" onOpen={() => undefined} />);
+    expect(html).toContain("100%"); expect(html).toContain("20%");
+    expect(html).not.toContain("Codex Reset · 当前判断 100%");
+    expect(render(data)).toContain("100%");
+  });
+  it("withdraws the rule on expiry, failed reads, stale evidence, correction, or conflicting timing", () => {
+    const verify = (data: PublicResetTimeline, failed = false) => {
+      expect(forecastPresentation(data.insights, now, failed, data)).toMatchObject({ probability24h: 20, probability48h: 35 });
+    };
+    verify(announcedTimeline(new Date(now).toISOString()));
+    verify(announcedTimeline(), true);
+    const stale = announcedTimeline(); stale.sources[0].issue = "request_failed"; verify(stale);
+    const corrected = announcedTimeline();
+    corrected.entries[0].signal.semantics = "retracted"; corrected.entries[0].disposition = "retracted"; verify(corrected);
+    const conflict = announcedTimeline(); const mirror = structuredClone(conflict.entries[0]);
+    mirror.signal.signalId = "other"; mirror.signal.announcementTiming!.expectedAt = "2026-09-23T11:00:00Z";
+    conflict.entries.push(mirror); verify(conflict);
+  });
+  it("keeps source failure separate from a fresh dated announcement", () => {
+    const data = announcedTimeline(); data.insights!.forecast.issue = "request_failed";
+    expect(forecastPresentation(data.insights, now, false, data)).toMatchObject({ probability24h: 100, probability48h: 100, stale: true });
+    data.insights!.forecast.value = null;
+    expect(forecastPresentation(data.insights, now, false, data)).toMatchObject({ probability24h: 100, probability48h: 100 });
+  });
+  it("never turns negation, a conditional claim, or a card grant into a full-reset commitment", () => {
+    for (const text of ["No global reset landing tomorrow.", "A global reset might be coming tomorrow.",
+      "If loads remain high, we will reset tomorrow.", "Will a global reset be landing tomorrow?"]) {
+      const data = announcedTimeline(); data.entries[0].signal.summary = text;
+      data.insights!.posts!.posts[0].text = text;
+      expect(forecastPresentation(data.insights, now, false, data).probability24h).toBe(20);
+      expect(postReading(data.insights!.posts!.posts[0], "zh").title).not.toContain("明确预告");
+    }
+    const grant = announcedTimeline(); grant.entries[0].signal.kind = "global_banked_reset_grant";
+    expect(forecastPresentation(grant.insights, now, false, grant).probability24h).toBe(20);
+  });
+  it("shows third-party 24/48h estimates separately from a rule-based signal score", () => {
     const html = render();
     for (const copy of ["未来 24 小时", "未来 48 小时", "20%", "35%", "信号评分 93/100", "网站自评置信度：低", "网站更新", "本机读取", "Codex Reset"]) expect(html).toContain(copy);
     expect(html).not.toContain("93%");
@@ -39,16 +166,16 @@ describe("attributed reset briefing", () => {
     expect(html).toContain("You owe us a banked reset. Please.");
     expect(html).toContain("好吧。但它周二也会到。");
     expect(html).toContain("OK fine. But it’s also still coming in Tuesday.");
-    expect(html).toContain("父帖来源"); expect(html).toContain("译文来自 Codex Reset");
+    expect(html).toContain("父帖来源"); expect(html).toContain("Codex Reset 译文");
     expect(resetRelated(post)).toBe(true);
     expect(postReading(post, "zh")).toMatchObject({tone: "grant"});
-    expect(html).toContain("回复上文讨论的重置卡");
+    expect(html).toContain("重置卡相关回复");
   });
   it("does not make up missing context or expose arbitrary HTML", () => {
     const data = timeline();
     data.insights!.posts!.posts = [{ ...post, parent: { ...post.parent!, text: null }, translatedText: null, text: "<script>reset()</script>" }];
     const html = render(data);
-    expect(html).toContain("父帖暂未取得"); expect(html).toContain("回复上文暂缺");
+    expect(html).toContain("父帖暂未取得");
     expect(html).toContain("&lt;script&gt;"); expect(html).not.toContain("<script>");
     expect(html).not.toContain("应按重置卡");
   });
@@ -84,14 +211,14 @@ describe("attributed reset briefing", () => {
     expect(postReading(grant, "zh")).toMatchObject({title: "Tibo 宣布开始发放重置卡", tone: "grant"});
     expect(postReading(grant, "zh").meaning).toContain("重置卡可手动使用");
   });
-  it("does not let casual parent-linked replies displace a substantive announcement", () => {
-    const casual = { ...post, text: "pizza plutot", translatedText: "pizza plutot", publishedAt: "2026-09-23T02:34:00Z" };
-    expect(resetRelated(casual)).toBe(false);
+  it("keeps a keyword-free response together with its reset-related parent", () => {
+    const casual = { ...post, text: "Why not?", translatedText: "为什么不呢？", publishedAt: "2026-09-23T02:34:00Z" };
+    expect(resetRelated(casual)).toBe(true);
     expect(resetRelated(post)).toBe(true); // A timing reply remains useful with its banked-reset parent.
     const data = timeline();
     data.insights!.posts!.posts = [casual, { ...post, id: "124", isReply: false, parent: null, kind: "grant", text: "We are also loading a banked reset.", translatedText: null }];
     const html = render(data);
     expect(html).toContain("Tibo 宣布开始发放重置卡");
-    expect(html).not.toContain("pizza plutot");
+    expect(html).toContain("Why not?");
   });
 });

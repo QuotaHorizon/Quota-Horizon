@@ -2,27 +2,30 @@
 
 [简体中文](README.md) · **English**
 
-Check Codex quota from the menu bar and manage accounts, schedules, history and sessions in one window.
+Check Codex quota from the menu bar or system tray and manage accounts, schedules, history and sessions in one window.
 QuotaHorizon also collects reset forecasts and related public statements to keep quota and reset information close at hand.
 
 ## Download and install
 
-[**Download for macOS**](https://github.com/QuotaHorizon/Quota-Horizon/releases) · [Installation help](docs/INSTALLATION.en.md)
+[**Download for macOS / Windows**](https://github.com/QuotaHorizon/Quota-Horizon/releases) · [Installation help](docs/INSTALLATION.en.md)
 
-For Apple Silicon (M-series) Macs running macOS 13 or later.
+| Platform | Installation |
+| --- | --- |
+| macOS 13+ · Apple Silicon (M-series) | Download the `.dmg`, open it and drag QuotaHorizon into Applications |
+| Windows x64 | Download the `.exe` and follow the installer |
 
-1. Download the macOS Apple Silicon `.dmg` installer from Releases.
-2. Open the DMG and drag `QuotaHorizon.app` into Applications.
-3. Open QuotaHorizon from Applications and follow the prompt to connect your signed-in local Codex installation.
+Open QuotaHorizon after installation and follow the prompt to connect your signed-in local Codex installation.
+Both installers include the forecasting and evaluation modules; collection starts when you open the app.
 
 ## Features
 
-- **Menu-bar monitoring**: background refresh, remaining quota and reset times; monitoring continues after the window closes.
+- **Menu-bar and tray monitoring**: background refresh, remaining quota and reset times; monitoring continues after the window closes.
 - **Account overview**: compare quota, plans and refresh status, and switch the active login when needed.
 - **Quota history**: trends and an activity heatmap, with dashed lines for quota increases.
 - **Work schedules**: set working and unavailable hours to allocate remaining quota across days.
 - **Session management**: search, read, resume, archive, restore and repair sessions.
-- **Reset radar**: source websites' 24/48-hour forecasts, Tibo posts, reply context and an event calendar.
+- **Reset radar**: compare 24/48-hour combined forecasts, source trends, community ballots, Tibo posts and reply context.
+- **Forecast evaluation**: track forecasts against actual resets and credit grants, with scores, calibration and source comparisons.
 - **Providers and CPA**: manage API connections and connect a configured CPA quota pool.
 
 ## Interface
@@ -37,7 +40,7 @@ These previews use actual product components with synthetic data.
 
 ![Account overview](docs/images/accounts-preview.en.png)
 
-**Reset radar**: source probabilities, related posts and reply context.
+**Reset radar**: combined outlook, source trends, community inputs and full statements.
 
 ![Reset radar](docs/images/reset-radar-preview.en.png)
 

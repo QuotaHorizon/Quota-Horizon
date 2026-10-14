@@ -377,9 +377,58 @@ fn sync_directory(path: &Path) -> Result<(), String> {
     fs::File::open(path)
         .and_then(|file| file.sync_all())
         .map_err(|_| "无法持久化连接迁移目录。".to_string())?;
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        };
+        let directory = fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|_| "无法打开连接迁移目录进行持久化。".to_string())?;
+        let metadata = directory
+            .metadata()
+            .map_err(|_| "无法验证连接迁移目录。".to_string())?;
+        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("连接迁移目录不安全。".into());
+        }
+        directory
+            .sync_all()
+            .map_err(|_| "无法持久化连接迁移目录。".to_string())?;
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = path;
     Ok(())
+}
+
+fn install_stage_exclusive(stage: &Path, target: &Path) -> std::io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        fs::hard_link(stage, target)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+        let source: Vec<u16> = stage.as_os_str().encode_wide().chain(Some(0)).collect();
+        let destination: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+        // No REPLACE_EXISTING: publish atomically without creating a second link
+        // that the protected Windows restore-point backend deliberately rejects.
+        if unsafe {
+            MoveFileExW(
+                source.as_ptr(),
+                destination.as_ptr(),
+                MOVEFILE_WRITE_THROUGH,
+            )
+        } == 0
+        {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
 }
 
 fn remove_matching_stages(paths: &Paths, journal: &Journal) -> Result<(), String> {
@@ -523,9 +572,8 @@ where
         write_journal(paths, &journal)?;
         check(ImportCheck::SourceAndLease)?;
         for (stage, target) in staged.iter().zip(&targets) {
-            // Same-volume hard-link installation is exclusive: it cannot replace
-            // a profile created after the preview, including another process.
-            fs::hard_link(stage.path(), target.path())
+            // Publication cannot replace a profile created after the preview.
+            install_stage_exclusive(stage.path(), target.path())
                 .map_err(|_| "连接目标已变化或无法写入，导入已停止。".to_string())?;
         }
         sync_directory(&paths.providers)?;
@@ -1038,7 +1086,7 @@ mod tests {
         .unwrap();
         journal.after = Some(store.observe(&stages).unwrap());
         write_journal(&paths, &journal).unwrap();
-        fs::hard_link(stages[0].path(), targets[0].path()).unwrap();
+        install_stage_exclusive(stages[0].path(), targets[0].path()).unwrap();
         drop(backend); // Recovery requires only public file observations.
         let mut recovered = read_journal(&paths).unwrap().unwrap();
         rollback(&paths, &mut recovered).unwrap();

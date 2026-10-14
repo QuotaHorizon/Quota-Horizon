@@ -1414,6 +1414,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(unix),
+        ignore = "Requires the explicit Unix file key-store fixture; Windows uses Credential Manager"
+    )]
     fn two_accounts_keep_separate_history_after_database_and_key_store_reopen() {
         use crate::account_binding::{DesktopAccountBindingStore, DesktopAccountIdentity};
         let root = tempfile::tempdir().unwrap();

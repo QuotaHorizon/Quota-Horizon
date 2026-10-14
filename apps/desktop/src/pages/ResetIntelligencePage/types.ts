@@ -22,7 +22,9 @@ export interface PublicResetArchiveEntry {
     scope: "broad_codex" | "personal" | "unknown";
     recordedAt: string;
     occurredAt: string | null;
-    announcementTiming?: { expectedOn: string; timeZone: string; sourceUrl: string } | null;
+    announcementTiming?: {
+      expectedOn?: string | null; expectedAt?: string | null; timeZone: string; sourceUrl: string; cohort?: string | null;
+    } | null;
     source: {
       canonicalUrl: string;
       author: string;
@@ -68,11 +70,13 @@ export interface PublicTimelineEntry {
 }
 
 export interface PublicResetTimeline {
+  quantitative?: import("./quantitativeTypes").QuantitativeView;
   sources: PublicSourceStatus[];
   entries: PublicTimelineEntry[];
   revisionCount: number;
   evidenceFamilyCount: number;
   insights?: PublicInsights;
+  radar?: RadarView;
   changes?: { items: PublicRevisionChange[]; totalCount: number; readVersion?: number };
 }
 
@@ -89,6 +93,7 @@ export interface ExternalResetForecast {
   probability24h: number; probability48h: number; confidence: string; mode: string;
   lastResetAt: string | null; signalScore: number | null; signalUrl: string | null;
   signalPublishedAt: string | null; signalDeadline: string | null; signalCorrected: boolean;
+  signalState?: string | null;
 }
 
 export interface PublicParentPost {
@@ -96,6 +101,10 @@ export interface PublicParentPost {
 }
 
 export interface PublicPost {
+  stage?: string | null;
+  relevance?: string | null;
+  collectorName?: string;
+  contextZh?: { text: string; url: string };
   id: string; url: string; text: string; translatedText: string | null; publishedAt: string;
   kind: "grant" | "reset_report" | "notice" | "limits" | "context";
   isReply: boolean | null; parent: PublicParentPost | null;
@@ -104,4 +113,60 @@ export interface PublicPost {
 export interface PublicInsights {
   forecast: { value: ExternalResetForecast | null; attemptedAt: string | null; issue: PublicSourceIssue | null };
   posts: { fetchedAt: string; checkedAt: string; posts: PublicPost[] } | null;
+}
+
+export interface RadarPoint { at: string; probability24h: number; probability48h: number; modelVersion?: string | null; observedAt?: string | null }
+export interface RadarForecast {
+  id: string; name: string; url: string; method: "cadence" | "statements" | "mixed";
+  probability24h: number | null; probability48h: number | null;
+  baseline24h: number | null; baseline48h: number | null;
+  updatedAt: string | null; collectedAt: string; lastResetAt: string | null;
+  expiresAt?: string | null;
+  evidenceUrls: string[]; usesCommunity: boolean; issue: PublicSourceIssue | null;
+  exclusion: "unavailable" | "fetch_failed" | "reset_mismatch" | "stale" | "community_overlap" | "source_retired" | "method_unverified" | "missing_timestamp" | null;
+  weight: number; history: RadarPoint[];
+}
+export interface RadarOpinion {
+  id: string; channel: string; author: string; url: string; text: string; publishedAt: string;
+  stance: "optimistic" | "uncertain" | "pessimistic" | "wish" | "observation";
+  reason: string; evidenceUrls: string[]; horizonHours: number | null;
+}
+export interface RadarChannel {
+  id: string; name: string; url: string; query: string; attemptedAt: string; successAt: string | null;
+  issue: PublicSourceIssue | null; scanned: number; truncated: boolean;
+  partial?: boolean;
+}
+export interface RadarPollRound {
+  kind: "probability" | "timing"; id: string; startsAt: string; endsAt: string; samples: number;
+  meanProbability: number | null; distribution: { probability: number | null; count: number; deadlineAt: string | null }[];
+  accepting: boolean; coverageGap: boolean; outcome: number | null;
+}
+export interface RadarPoll {
+  sourceId: string; name: string; url: string; updatedAt: string | null; collectedAt: string; issue: PublicSourceIssue | null;
+  round: RadarPollRound; recent: RadarPollRound[];
+  history: { at: string; roundId: string; meanProbability: number | null; samples: number }[];
+}
+export interface RadarCommunityPoint {
+  at: string; optimisticShare: number | null; directionalAuthors: number;
+  adjustment24h: number | null; adjustment48h: number | null; modelVersion: string;
+}
+export interface RadarView {
+  updatedAt: string | null;
+  forecasts: RadarForecast[];
+  community: {
+    channels: RadarChannel[]; opinions: RadarOpinion[];
+    optimistic: number; uncertain: number; pessimistic: number; wishes: number; observations: number;
+    authors: number; communities: number; independentAuthors: number; duplicates: number;
+    optimisticShare: number | null; previousShare: number | null;
+    windowHours?: number;
+    effects?: { hours: number; eligibleAuthors: number; effectiveAuthors: number; sharedEvidenceAuthors: number; logOddsAdjustment: number; pollSamples?: number; pollEffective?: number }[];
+    polls?: RadarPoll[];
+    history?: RadarCommunityPoint[];
+  };
+  estimate: {
+    probability24h: number; probability48h: number; pooled24h: number; pooled48h: number;
+    communityAdjustment24h: number; communityAdjustment48h: number;
+    sourceCount: number; spread24h: number; spread48h: number; evidenceGroups: number; modelVersion: string;
+  } | null;
+  history: RadarPoint[];
 }

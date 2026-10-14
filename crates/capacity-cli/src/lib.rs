@@ -627,7 +627,7 @@ mod tests {
         let expected =
             include_str!("../../../fixtures/app-server/plus-normal/expected-status.json");
 
-        assert_eq!(actual, expected.trim_end());
+        assert_eq!(actual, expected.replace("\r\n", "\n").trim_end());
     }
 
     #[test]

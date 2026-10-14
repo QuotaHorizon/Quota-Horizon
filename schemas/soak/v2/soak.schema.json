@@ -335,6 +335,7 @@
             "explicit",
             "macos_chatgpt_bundle",
             "macos_bundle_registry",
+            "windows_desktop_runtime",
             "path"
           ]
         },

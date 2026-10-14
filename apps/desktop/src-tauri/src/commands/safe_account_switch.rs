@@ -392,11 +392,11 @@ pub(crate) fn acquire_shared_mutation_lease() -> Result<
 > {
     use capacity_mutation::{
         MutationLock, MutationLockError, MutationLockOwner, MutationOwnerId,
-        SystemLegacyViewerProbe, macos_shared_mutation_lock_root,
+        SystemLegacyViewerProbe, platform_shared_mutation_lock_root,
     };
 
     let home = dirs::home_dir().ok_or_else(|| "无法定位当前用户目录".to_string())?;
-    let root = macos_shared_mutation_lock_root(home)
+    let root = platform_shared_mutation_lock_root(home)
         .map_err(|_| "无法初始化共享本地变更互斥".to_string())?;
     let owner_id = MutationOwnerId::parse(format!(
         "mutation-owner:v1:{}",

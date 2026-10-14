@@ -9,6 +9,107 @@ mod tests {
         ))
     }
 
+    #[test]
+    fn atomic_writes_and_replacements_support_long_fixture_paths() {
+        let root = test_root("long-path");
+        let directory = root.join("nested-fixture-".repeat(8)).join("more-fixture-".repeat(8));
+        let target = directory.join("manifest.json");
+        assert!(target.as_os_str().len() > 260);
+        write_text_atomic(&target, "original").unwrap();
+        write_text_atomic(&target, "updated").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "updated");
+        let replacement = directory.join("replacement.tmp");
+        fs::write(&replacement, "replacement").unwrap();
+        fs::OpenOptions::new().write(true).open(&replacement).unwrap().sync_all().unwrap();
+        replace_file(&replacement, &target).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "replacement");
+        assert!(!replacement.exists());
+        assert!(replace_file(&replacement, &target).is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "replacement");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_io_paths_preserve_disk_and_unc_identity() {
+        assert_eq!(windows_io_path(Path::new(r"C:\fixture/mixed\manifest.json")).unwrap(),
+            Path::new(r"\\?\C:\fixture\mixed\manifest.json"));
+        assert_eq!(windows_io_path(Path::new(r"\\server\share\fixture/manifest.json")).unwrap(),
+            Path::new(r"\\?\UNC\server\share\fixture\manifest.json"));
+        let extended = Path::new(r"\\?\C:\fixture\manifest.json");
+        assert_eq!(windows_io_path(extended).unwrap(), extended);
+        assert!(windows_io_path(Path::new(r"\\.\PhysicalDrive0")).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_directory_flush_supports_chinese_long_paths_and_rejects_files() {
+        use std::os::windows::ffi::OsStrExt;
+
+        let root = test_root("directory-flush");
+        let directory = root.join("中文目录".repeat(24)).join("持久化目录".repeat(24));
+        assert!(directory.as_os_str().encode_wide().count() > 260);
+        fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("清单.json");
+        write_text_atomic(&file, "fixture").unwrap();
+        sync_purge_directory(&directory).unwrap();
+        sync_archive_directory(&directory).unwrap();
+        sync_rebind_directory(&directory).unwrap();
+        sync_visibility_repair_directory(&directory).unwrap();
+        assert!(sync_windows_directory(&file).is_err());
+        assert!(sync_windows_directory(&directory.join("missing")).is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "fixture");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_directory_flush_propagates_sharing_denial() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Foundation::GENERIC_READ;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ,
+        };
+
+        let root = test_root("directory-flush-denied");
+        fs::create_dir_all(&root).unwrap();
+        let held = fs::OpenOptions::new()
+            .access_mode(GENERIC_READ)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&root)
+            .unwrap();
+        assert_eq!(sync_windows_directory(&root).unwrap_err().raw_os_error(), Some(32));
+        assert!(sync_purge_directory(&root).is_err());
+        assert!(sync_archive_directory(&root).is_err());
+        assert!(sync_rebind_directory(&root).is_err());
+        assert!(sync_visibility_repair_directory(&root).is_err());
+        drop(held);
+        sync_windows_directory(&root).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_directory_flush_rejects_junction_and_junction_ancestor() {
+        let root = test_root("directory-flush-junction");
+        let target = root.join("target");
+        let junction = root.join("junction");
+        fs::create_dir_all(target.join("child")).unwrap();
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(sync_windows_directory(&junction).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(sync_windows_directory(&junction.join("child")).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+        fs::remove_dir(&junction).unwrap();
+        sync_windows_directory(&target.join("child")).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn read_model_rollout(root: &Path, name: &str, started: &str, updated: &str) -> PathBuf {
         let path = root.join("sessions/2026/09/07").join(name);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -269,6 +370,7 @@ mod tests {
         )
         .unwrap();
 
+        let original_bytes = fs::read(&rollout).unwrap();
         let saved = prepare_thread_resume(&root, "thread-resume", None).unwrap();
         assert_eq!(saved.mode, "savedDirectory");
         assert_eq!(saved.arguments, ["resume", "thread-resume"]);
@@ -284,9 +386,11 @@ mod tests {
         assert_eq!(elsewhere.arguments[0..3], ["resume", "thread-resume", "-C"]);
         assert_eq!(elsewhere.arguments[3], temporary.canonicalize().unwrap().to_string_lossy());
         assert!(elsewhere.display_command.contains("temporary project"));
-        assert!(fs::read_to_string(&rollout)
-            .unwrap()
-            .contains(original.to_string_lossy().as_ref()));
+        assert_eq!(fs::read(&rollout).unwrap(), original_bytes);
+        assert_eq!(
+            snapshot_cwd(&first_rollout_value(&rollout).unwrap().unwrap()).as_deref(),
+            Some(original.to_string_lossy().as_ref())
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -806,7 +910,7 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-            assert_eq!(row_text(&row, "rollout_path"), Some(rollout.to_string_lossy().as_ref()));
+            assert_eq!(row_text(&row, "rollout_path").map(Path::new), Some(rollout));
             assert_eq!(row_text(&row, "cwd"), Some(cwd.to_string_lossy().as_ref()));
             assert_eq!(row_text(&row, "model_provider"), Some("openai"));
             assert_eq!(row_cell(&row, "archived"), Some(&SqliteCell::Integer(0)));
@@ -894,6 +998,8 @@ mod tests {
         assert_eq!(fs::read(&rollout).unwrap(), original_rollout);
         assert_eq!(fs::read_dir(&transaction_root).unwrap().count(), 0);
 
+        drop(canonical);
+        drop(legacy);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -967,7 +1073,7 @@ mod tests {
         let prepared =
             prepare_visibility_repair(&root, VisibilityRepairMode::Quick, None).unwrap();
         assert_eq!(prepared.sources.len(), 1);
-        assert_eq!(prepared.sources[0].rollout_path, first_rollout.to_string_lossy());
+        assert_eq!(Path::new(&prepared.sources[0].rollout_path), first_rollout);
         assert_eq!(prepared.rollout_guards.len(), 1);
         assert!(prepared.rollout_guards[0]
             .source_relative
@@ -1069,6 +1175,9 @@ mod tests {
         assert!(!root.join(INDEX_NAME).exists());
         assert!(first_rollout_value(&rollout).unwrap().is_some());
 
+        drop(canonical);
+        drop(legacy);
+        drop(catalog);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1134,6 +1243,8 @@ mod tests {
             "{\"id\":\"concurrent\",\"thread_name\":\"Preserve me\"}\n"
         );
 
+        drop(canonical);
+        drop(legacy);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1170,6 +1281,7 @@ mod tests {
         .is_none());
         assert_eq!(fs::read_dir(&transaction_root).unwrap().count(), 0);
 
+        drop(legacy);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1818,7 +1930,7 @@ mod tests {
                 .unwrap();
         assert_eq!(archived.archived, 1);
         assert!(archived.archived_at.is_some());
-        assert_eq!(archived.rollout_path, target.to_string_lossy());
+        assert_eq!(Path::new(&archived.rollout_path), target);
         assert_eq!(archived.preview, "Visible fixture");
         assert_eq!(
             rollout_status(&gather_snapshots(&root).unwrap()[0].relative_path),
@@ -1860,7 +1972,7 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(archived.archived, 1);
-        assert_eq!(archived.rollout_path, logical_target.to_string_lossy());
+        assert_eq!(Path::new(&archived.rollout_path), logical_target);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1894,7 +2006,7 @@ mod tests {
             .unwrap()
             .unwrap();
             assert_eq!(archived.archived, 1);
-            assert_eq!(archived.rollout_path, target.to_string_lossy());
+            assert_eq!(Path::new(&archived.rollout_path), target);
         }
         assert!(fs::read_dir(&transaction_root).unwrap().next().is_none());
 

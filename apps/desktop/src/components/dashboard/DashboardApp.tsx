@@ -1264,7 +1264,8 @@ export function DashboardApp() {
           {!CUSTOM_TITLEBAR_ENABLED && menuTools}
         </header>
 
-        <main className={page === "capacity" || page === "resetIntelligence" ? "capacity-main"
+        <main className={page === "resetIntelligence" ? "capacity-main reset-radar-main"
+          : page === "capacity" ? "capacity-main"
           : page === "accounts" ? "accounts-main"
           : page === "providers" ? "providers-main"
           : page === "claudeCode" ? "claude-code-main"

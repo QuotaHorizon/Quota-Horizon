@@ -2,27 +2,30 @@
 
 **简体中文** · [English](README.en.md)
 
-在菜单栏查看 Codex 额度，在一个窗口里管理账号、日程、历史和会话。
+在菜单栏或系统托盘查看 Codex 额度，在一个窗口里管理账号、日程、历史和会话。
 QuotaHorizon 还会自动汇集重置预测和相关公开发言，方便随时了解额度与重置动态。
 
 ## 下载与安装
 
-[**下载 macOS 版**](https://github.com/QuotaHorizon/Quota-Horizon/releases) · [安装帮助](docs/INSTALLATION.md)
+[**下载 macOS / Windows 版**](https://github.com/QuotaHorizon/Quota-Horizon/releases) · [安装帮助](docs/INSTALLATION.md)
 
-适用于 macOS 13 及以上、Apple Silicon（M 系列）Mac。
+| 平台 | 安装方式 |
+| --- | --- |
+| macOS 13+ · Apple Silicon（M 系列） | 下载 `.dmg`，打开后将 QuotaHorizon 拖入 Applications |
+| Windows x64 | 下载 `.exe`，运行安装向导 |
 
-1. 从 Releases 下载 macOS Apple Silicon 的 `.dmg` 安装包。
-2. 打开 DMG，将 `QuotaHorizon.app` 拖入 Applications。
-3. 从“应用程序”打开 QuotaHorizon，按提示连接本机已登录的 Codex。
+安装后打开 QuotaHorizon，按提示连接本机已登录的 Codex。
+两端安装包均自带重置预测与评估模块，打开应用即可开始采集。
 
 ## 功能
 
-- **菜单栏监控**：后台刷新额度，显示剩余比例和重置时间；关窗后继续运行。
+- **菜单栏与托盘监控**：后台刷新额度，显示剩余比例和重置时间；关窗后继续运行。
 - **多账号总览**：并列查看各账号额度、套餐和刷新状态，按需切换登录。
 - **额度历史**：趋势图与活动热图，使用虚线区分额度回升。
 - **工作日程**：设置工作和停用时段，将剩余额度分配到每天。
 - **会话管理**：搜索、阅读、继续会话，以及归档、恢复和修复。
-- **重置雷达**：查看来源网站的 24/48 小时预测、Tibo 发言、回复上下文和事件日历。
+- **重置雷达**：并列查看 24/48 小时综合预测、多源走势、社区投票、Tibo 发言与回复上下文。
+- **预测评估**：持续记录预测和实际重置、发卡事件，查看评分、校准与来源对照。
 - **Provider 与 CPA**：管理 API 连接，并接入自行配置的 CPA 额度池。
 
 ## 界面
@@ -37,7 +40,7 @@ QuotaHorizon 还会自动汇集重置预测和相关公开发言，方便随时�
 
 ![多账号总览](docs/images/accounts-preview.png)
 
-**重置雷达**：来源概率、相关发言与回复上下文。
+**重置雷达**：综合判断、多源走势、社区信息与完整发言。
 
 ![重置雷达](docs/images/reset-radar-preview.png)
 

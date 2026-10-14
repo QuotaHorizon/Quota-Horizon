@@ -8,6 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyRuntime, moduleDigest } from "./bundle-reset-runtime.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const target = "aarch64-apple-darwin";
@@ -86,6 +87,8 @@ function run(command, args, cwd = root) {
 }
 
 function inspectBundle(app, config) {
+  const runtime = verifyRuntime(join(app, "Contents/Resources/reset-runtime"));
+  assert.equal(runtime.modules, moduleDigest(), "Bundled reset modules differ from source");
   const info = JSON.parse(execFileSync("/usr/bin/plutil", [
     "-convert", "json", "-o", "-", join(app, "Contents", "Info.plist"),
   ], { encoding: "utf8" }));
@@ -146,6 +149,15 @@ function main() {
     assert.equal(readlinkSync(join(mount, "Applications")), "/Applications");
     assert.deepEqual(readdirSync(mount).filter((name) => !name.startsWith(".")).sort(),
       ["Applications", "QuotaHorizon.app"]);
+
+    if (process.env.QUOTAHORIZON_DMG_SCREENSHOT) {
+      const screenshot = resolve(root, process.env.QUOTAHORIZON_DMG_SCREENSHOT);
+      mkdirSync(dirname(screenshot), { recursive: true });
+      run("/usr/bin/osascript", ["-e", `tell application "Finder" to open POSIX file ${JSON.stringify(mount)}`,
+        "-e", 'tell application "Finder" to activate', "-e", "delay 2"]);
+      run("/usr/sbin/screencapture", ["-x", screenshot]);
+      run("/usr/bin/osascript", ["-e", 'tell application "Finder" to close front window']);
+    }
 
     const installed = join(work, "installed", "QuotaHorizon.app");
     run("/usr/bin/ditto", [join(mount, "QuotaHorizon.app"), installed]);

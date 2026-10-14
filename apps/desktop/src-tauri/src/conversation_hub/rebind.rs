@@ -425,7 +425,12 @@ fn sync_rebind_directory(path: &Path) -> Result<(), String> {
             .and_then(|file| file.sync_all())
             .map_err(|error| format!("无法同步会话目录修改事务：{error}"))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        sync_windows_directory(path)
+            .map_err(|error| format!("无法同步会话目录修改事务：{error}"))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         Ok(())
@@ -536,7 +541,7 @@ fn create_rebind_transaction(
             let replacement = replacement_dir.join(&replacement_name);
             fs::copy(&source, &backup)
                 .map_err(|error| format!("无法备份会话 rollout：{error}"))?;
-            File::open(&backup)
+            fs::OpenOptions::new().write(true).open(&backup)
                 .and_then(|file| file.sync_all())
                 .map_err(|error| format!("无法同步会话 rollout 备份：{error}"))?;
             if stable_archive_file_revision(&source)? != item.original_revision
@@ -867,7 +872,7 @@ fn replace_rebind_file(payload: &Path, target: &Path) -> Result<(), String> {
     let temporary = target.with_extension(format!("rebind-{}.tmp", Uuid::new_v4().hyphenated()));
     fs::copy(payload, &temporary)
         .map_err(|error| format!("无法准备会话 metadata 原子替换：{error}"))?;
-    File::open(&temporary)
+    fs::OpenOptions::new().write(true).open(&temporary)
         .and_then(|file| file.sync_all())
         .map_err(|error| format!("无法同步会话 metadata 临时文件：{error}"))?;
     if let Err(error) = replace_file(&temporary, target) {

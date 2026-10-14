@@ -17,7 +17,7 @@ use tauri::AppHandle;
 use tauri::{Emitter, Manager};
 
 pub(crate) mod account_overview;
-mod quota_sync;
+pub(crate) mod quota_sync;
 pub(crate) use quota_sync::{setup, shutdown};
 
 use crate::storage::{managed_auth_path, read_json, read_state, resolve_paths, Paths};
@@ -33,6 +33,26 @@ pub(crate) fn preferred_codex_executable() -> Option<std::path::PathBuf> {
     {
         None
     }
+}
+
+fn reader_selection_path<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|root| root.join("capacity-reader.json"))
+        .map_err(|_| "Unable to locate saved reader selection".to_owned())
+}
+
+pub(crate) fn confirmed_codex_executable<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<capacity_desktop_service::ConfirmedCodexExecutable> {
+    let path = reader_selection_path(app).ok()?;
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 16 * 1024 {
+        return None;
+    }
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
 fn capacity_account_digest_for_paths(paths: &Paths) -> Result<Option<String>, String> {
@@ -58,20 +78,31 @@ fn capacity_account_metadata_for_paths(paths: &Paths) -> Result<Option<(String, 
     crate::auth::account_fields(&auth).map(|(_, plan, _, digest)| Some((digest, plan)))
 }
 
-async fn synchronize_account_binding(app_handle: &AppHandle) {
-    let identity = resolve_paths(app_handle)
-        .and_then(|paths| capacity_account_digest_for_paths(&paths))
-        .ok()
-        .flatten()
-        .and_then(|digest| DesktopAccountIdentity::from_account_digest(digest).ok());
+async fn synchronize_account_binding(
+    app_handle: &AppHandle,
+) -> Result<Option<String>, DesktopIssue> {
+    // One path snapshot supplies both child authentication and account ownership.
+    let paths = resolve_paths(app_handle).ok();
+    capacity_desktop_service::configure_codex_home(
+        app_handle,
+        paths.as_ref().map(|paths| paths.codex_home.clone()),
+    )
+    .await?;
+    let digest = paths
+        .as_ref()
+        .and_then(|paths| capacity_account_digest_for_paths(paths).ok().flatten());
+    let identity = digest
+        .as_ref()
+        .and_then(|digest| DesktopAccountIdentity::from_account_digest(digest.clone()).ok());
     let Some(identity) = identity else {
         capacity_desktop_service::invalidate_account_binding(app_handle);
-        return;
+        return Ok(None);
     };
     // Stable-history failure must not hide an otherwise valid live quota read.
     // The service fails closed to an ephemeral binding on any Keychain or
     // derivation error.
     let _ = capacity_desktop_service::bind_account_identity(app_handle.clone(), identity).await;
+    Ok(digest)
 }
 
 #[tauri::command]
@@ -102,7 +133,8 @@ pub(crate) async fn capacity_authorize_history_keychain(
     capacity_desktop_service::authorize_history_keychain()
         .await
         .map_err(|_| {
-            "History Keychain access was not authorized; live quota is unaffected".to_owned()
+            "History credential storage access was not authorized; live quota is unaffected"
+                .to_owned()
         })?;
     capacity_refresh_status(app_handle)
         .await
@@ -115,10 +147,7 @@ pub(crate) async fn capacity_get_status(
 ) -> Result<DesktopStatusEnvelope, DesktopIssue> {
     let state = app_handle.state::<quota_sync::QuotaSyncState>();
     let _gate = state.gate.lock().await;
-    synchronize_account_binding(&app_handle).await;
-    let identity = resolve_paths(&app_handle)
-        .ok()
-        .and_then(|paths| capacity_account_digest_for_paths(&paths).ok().flatten());
+    let identity = synchronize_account_binding(&app_handle).await?;
     let result = capacity_desktop_service::status(app_handle.clone()).await;
     result.map(|envelope| quota_sync::reconcile(&app_handle, envelope, identity.as_deref()))
 }
@@ -130,10 +159,7 @@ pub(crate) async fn capacity_refresh_status(
     let state = app_handle.state::<quota_sync::QuotaSyncState>();
     let revision = state.refresh_revision.load(Ordering::SeqCst);
     let _gate = state.gate.lock().await;
-    synchronize_account_binding(&app_handle).await;
-    let identity = resolve_paths(&app_handle)
-        .ok()
-        .and_then(|paths| capacity_account_digest_for_paths(&paths).ok().flatten());
+    let identity = synchronize_account_binding(&app_handle).await?;
     let result = if state.refresh_revision.load(Ordering::SeqCst) != revision {
         capacity_desktop_service::status(app_handle.clone()).await
     } else {
@@ -155,14 +181,22 @@ pub(crate) async fn capacity_select_codex_executable(
 ) -> Result<DesktopStatusEnvelope, DesktopIssue> {
     let state = app_handle.state::<quota_sync::QuotaSyncState>();
     let _gate = state.gate.lock().await;
-    synchronize_account_binding(&app_handle).await;
-    let identity = resolve_paths(&app_handle)
-        .ok()
-        .and_then(|paths| capacity_account_digest_for_paths(&paths).ok().flatten());
+    let identity = synchronize_account_binding(&app_handle).await?;
     // The service already verifies and refreshes. A second refresh used to
     // discard its rejection and replace it with a generic selection prompt.
     let result =
         capacity_desktop_service::select_executable(app_handle.clone(), executable_id).await;
+    if let Some(confirmed) = capacity_desktop_service::confirmed_codex_executable(&app_handle) {
+        // Executable paths/identity stay host-only, not in renderer settings.
+        let saved = reader_selection_path(&app_handle).and_then(|path| {
+            let value = serde_json::to_value(confirmed)
+                .map_err(|_| "Unable to encode reader selection".to_owned())?;
+            crate::storage::write_json_atomic(&path, &value)
+        });
+        if saved.is_err() {
+            eprintln!("Unable to retain the verified Codex installation selection");
+        }
+    }
     state.refresh_revision.fetch_add(1, Ordering::SeqCst);
     result.map(|envelope| {
         let envelope = quota_sync::reconcile(&app_handle, envelope, identity.as_deref());
@@ -177,8 +211,10 @@ pub(crate) async fn capacity_get_history(
     maximum_points: Option<u32>,
     app_handle: AppHandle,
 ) -> Result<DesktopHistoryEnvelope, DesktopIssue> {
-    synchronize_account_binding(&app_handle).await;
-    capacity_desktop_service::history(app_handle, limit_id, maximum_points).await
+    let state = app_handle.state::<quota_sync::QuotaSyncState>();
+    let _gate = state.gate.lock().await;
+    synchronize_account_binding(&app_handle).await?;
+    capacity_desktop_service::history(app_handle.clone(), limit_id, maximum_points).await
 }
 
 #[tauri::command]

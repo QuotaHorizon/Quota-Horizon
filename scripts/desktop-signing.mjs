@@ -8,7 +8,10 @@ export function desktopSigningPlan({ platform, args, config, environment }) {
     throw new Error("A macOS signing identity is configured, but --no-sign would bypass it. Remove --no-sign or explicitly select an ad-hoc local build.");
   }
   const nextArgs = [...args];
-  if (!certificate && !environment.TAURI_SIGNING_PRIVATE_KEY?.trim() && !nextArgs.includes("--no-sign")) nextArgs.push("--no-sign");
+  if (!certificate && !environment.TAURI_SIGNING_PRIVATE_KEY?.trim() && !nextArgs.includes("--no-sign")) {
+    const cargoArguments = nextArgs.indexOf("--");
+    nextArgs.splice(cargoArguments < 0 ? nextArgs.length : cargoArguments, 0, "--no-sign");
+  }
   return {
     args: nextArgs,
     sealAdHoc: platform === "darwin" && nextArgs.includes("--no-sign"),

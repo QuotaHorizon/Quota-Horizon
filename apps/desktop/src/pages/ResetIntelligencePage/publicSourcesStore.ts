@@ -32,6 +32,9 @@ export function createPublicSourcesStore(api: PublicSourcesApi) {
     listeners.forEach((listener) => listener());
   };
   const acceptTimeline = (timeline: PublicResetTimeline) => {
+    if (Date.parse(state.timeline?.quantitative?.checkedAt ?? "") > Date.parse(timeline.quantitative?.checkedAt ?? "")) {
+      timeline = { ...timeline, quantitative: state.timeline!.quantitative };
+    }
     const checkedAt = (value: PublicResetTimeline) => Math.max(0, ...value.sources.map((source) => Date.parse(source.lastAttemptAt ?? "") || 0));
     if (!state.timeline || (timeline.revisionCount >= state.timeline.revisionCount && checkedAt(timeline) >= checkedAt(state.timeline)
       && (timeline.changes?.readVersion ?? 0) >= (state.timeline.changes?.readVersion ?? 0))) {

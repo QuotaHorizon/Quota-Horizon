@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   applyThemeMode,
-  isThemeModeStorageEvent,
+  subscribeToThemeMode,
   loadThemeMode,
   persistThemeMode,
   type ThemeMode,
@@ -20,16 +20,10 @@ export function useThemeMode() {
     setModeState(nextMode);
   }, []);
 
-  useEffect(() => {
-    const syncMode = (event: StorageEvent) => {
-      if (!isThemeModeStorageEvent(event)) return;
-      const nextMode = loadThemeMode();
-      applyThemeMode(nextMode);
-      setModeState(nextMode);
-    };
-    window.addEventListener("storage", syncMode);
-    return () => window.removeEventListener("storage", syncMode);
-  }, []);
+  useEffect(() => subscribeToThemeMode((nextMode) => {
+    applyThemeMode(nextMode);
+    setModeState(nextMode);
+  }), []);
 
   const toggleMode = useCallback(() => {
     setMode(mode === "dark" ? "light" : "dark");

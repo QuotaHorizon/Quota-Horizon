@@ -348,6 +348,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -367,6 +368,7 @@ version = "0.1.0"
 dependencies = [
  "capacity-domain",
  "capacity-store",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -507,6 +509,7 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",

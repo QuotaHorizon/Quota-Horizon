@@ -1,0 +1,197 @@
+name: Desktop CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to test and package
+        type: choice
+        options: [macos-arm64, windows-x64]
+        default: macos-arm64
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}-${{ inputs.platform || 'macos-arm64' }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pushes and PRs run macOS only. Windows is an explicit manual selection.
+        include: ${{ fromJSON(
+          github.event_name == 'workflow_dispatch' && inputs.platform == 'windows-x64'
+          && '[{"platform":"windows-x64","runner":"windows-2022","target":"x86_64-pc-windows-msvc","build":"build:app:win","installer":"apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe"}]'
+          || '[{"platform":"macos-arm64","runner":"macos-15","target":"aarch64-apple-darwin","build":"build:app:mac","installer":"dist/releases/*/QuotaHorizon_*_macos-arm64.dmg"}]') }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Prepare Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup target add "${{ matrix.target }}"
+          rustc --version
+
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          key: ${{ matrix.platform }}
+          workspaces: |
+            . -> target
+            apps/desktop/src-tauri -> target
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Install frontend and packaging dependencies
+        run: npm --prefix apps/desktop ci --no-audit --no-fund
+
+      - name: Check source, types and frontend
+        run: |
+          npm run check:source
+          npm run typecheck
+          npm run test:scripts
+          npm test
+
+      - name: Use a native Windows temporary directory
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Git Bash can inherit an 8.3 TEMP alias (RUNNER~1). Protected file
+          # operations intentionally reject aliases; keep test fixtures native.
+          $temporary = Join-Path $env:GITHUB_WORKSPACE 'dist/native-test-temp'
+          New-Item -ItemType Directory -Path $temporary -Force | Out-Null
+          "TEMP=$temporary" >> $env:GITHUB_ENV
+          "TMP=$temporary" >> $env:GITHUB_ENV
+          "TMPDIR=$temporary" >> $env:GITHUB_ENV
+
+      - name: Check Rust formatting and native tests
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+          cargo test --locked --workspace
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - name: Prepare the macOS forecasting runtime
+        if: runner.os == 'macOS'
+        uses: conda-incubator/setup-miniconda@04b72d7799e2bae3771b041de9b46c710d29caab # v4
+        with:
+          miniforge-version: latest
+          architecture: arm64
+          activate-environment: horizon-build
+          environment-file: .github/ci/macos-runtime.conda.lock
+          auto-update-conda: false
+          auto-activate-base: false
+          remove-profiles: false
+
+      - name: Test independent forecasting and evaluation modules
+        if: runner.os == 'macOS'
+        shell: bash -el {0}
+        run: |
+          python -c 'import sys, numpy; print(sys.executable); print(numpy.__version__)'
+          echo "QUOTAHORIZON_PYTHON=$CONDA_PREFIX/bin/python" >> "$GITHUB_ENV"
+          (cd modules/reset-intelligence && python -m unittest discover -s tests)
+          (cd modules/reset-observer && python -m unittest discover -s tests)
+
+      - name: Build the macOS application and verify embedded assets
+        if: runner.os != 'Windows'
+        run: npm --prefix apps/desktop run "${{ matrix.build }}" -- -- --locked
+
+      - name: Prepare and test the Windows forecasting runtime
+        # Windows tests use exactly the isolated runtime distributed to users.
+        if: runner.os == 'Windows'
+        run: |
+          node scripts/prepare-windows-runtime.mjs
+          node scripts/bundle-windows-runtime.mjs
+          dist/reset-runtime/python.exe -I -B -X utf8 -c 'import sys, numpy; print(sys.executable); print(numpy.__version__)'
+          dist/reset-runtime/python.exe -I -B -X utf8 -m unittest discover -s modules/reset-intelligence/tests
+          dist/reset-runtime/python.exe -I -B -X utf8 -m unittest discover -s modules/reset-observer/tests
+
+      - name: Build the Windows application and verify embedded assets
+        if: runner.os == 'Windows'
+        run: npm --prefix apps/desktop run "${{ matrix.build }}" -- -- --locked
+
+      - name: Verify the Windows installer and its installed runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-Item apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          $destination = Join-Path $env:RUNNER_TEMP 'QuotaHorizon install test'
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$destination" -WindowStyle Hidden -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          $expected = (Get-Content apps/desktop/src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $executable = Get-Item "$destination/quota-horizon-desktop.exe"
+          if ($executable.VersionInfo.ProductVersion -ne $expected) { throw 'Installed version differs' }
+          node scripts/bundle-windows-runtime.mjs --verify "$destination/reset-runtime"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed forecasting runtime failed' }
+          & "$destination/reset-runtime/python.exe" -I -B -X utf8 -m unittest discover -s modules/reset-observer/tests -p test_bundled_runtime.py
+          if ($LASTEXITCODE -ne 0) { throw 'Installed worker lifecycle failed' }
+          $uninstaller = Start-Process -FilePath "$destination/uninstall.exe" -ArgumentList '/S' -WindowStyle Hidden -PassThru -Wait
+          if ($uninstaller.ExitCode -ne 0) { throw 'Test installation cleanup failed' }
+
+      - name: Package and verify the macOS installer
+        if: runner.os == 'macOS'
+        env:
+          QUOTAHORIZON_DMG_SCREENSHOT: dist/installer-preview/macos.png
+        run: npm run package:mac -- --skip-build
+
+      - name: Retain the macOS installer window preview
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: QuotaHorizon-macos-installer-preview-${{ github.sha }}
+          path: dist/installer-preview/macos.png
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Retain the installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: QuotaHorizon-${{ matrix.platform }}-${{ github.sha }}
+          path: ${{ matrix.installer }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Record the artifact version and source
+        env:
+          BUILD_PLATFORM: ${{ matrix.platform }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            `### ${process.env.BUILD_PLATFORM}\n\nVersion: ${version}\n\nSource: \`${process.env.GITHUB_SHA}\`\n\nInstaller attached to this workflow run.\n`);
+          NODE
+
+      - name: Remove the temporary macOS application bundle
+        if: always() && runner.os == 'macOS'
+        run: |
+          rm -rf apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/QuotaHorizon.app
+          rm -rf dist/reset-runtime

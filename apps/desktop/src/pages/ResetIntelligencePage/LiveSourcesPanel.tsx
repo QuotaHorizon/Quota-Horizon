@@ -2,10 +2,10 @@ import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react
 import { RefreshCw } from "lucide-react";
 import type { Language } from "../../i18n";
 import { EvidenceLink } from "./ArchiveView";
-import { evidenceDispositionLabel, publicEvidenceTime } from "./presentation";
+import { evidenceDispositionLabel, publicEvidenceTime, publicSourceLabel, SOURCE_NAMES } from "./presentation";
 import type { PublicSourcesState } from "./publicSourcesStore";
 import { publicSourcesRuntime as store } from "./publicSourcesRuntime";
-import type { PublicReadReceipt, PublicResetArchive, PublicSourceId, PublicSourceStatus, PublicTimelineEntry } from "./types";
+import type { PublicReadReceipt, PublicResetArchive, PublicTimelineEntry } from "./types";
 import { ResetCalendar } from "./ResetCalendar";
 import { UpcomingReset } from "./UpcomingReset";
 import { ResetBriefing } from "./ResetBriefing";
@@ -13,27 +13,7 @@ import { ResetChanges } from "./ResetChanges";
 import { unreadResetProgress } from "./resetChangesModel";
 import styles from "./index.module.less";
 
-const SOURCE_NAMES: Record<PublicSourceId, string> = {
-  quotaresets: "QuotaResets", codex_reset: "Codex Reset", codex_reset_posts: "Codex Reset · Tibo", openai_status: "OpenAI Status",
-};
-
-export function publicSourceLabel(source: PublicSourceStatus, language: Language, now: number) {
-  const zh = language === "zh";
-  if (source.issue) {
-    const reasons: Record<string, [string, string]> = {
-      request_failed: ["连接失败", "Connection failed"], http_error: ["来源暂不可用", "Source unavailable"],
-      schema_changed: ["来源格式已变化", "Source format changed"], invalid_response: ["资料未通过校验", "Invalid source data"],
-      response_too_large: ["资料超出读取上限", "Source exceeds read limit"],
-      upstream_stale: ["来源缓存尚未更新", "Upstream cache is stale"],
-    };
-    return (reasons[source.issue] ?? ["暂不可用", "Unavailable"])[zh ? 0 : 1];
-  }
-  if (!source.lastSuccessAt) return zh ? "尚未读取" : "Not fetched yet";
-  const age = now - Date.parse(source.lastSuccessAt);
-  if (!Number.isFinite(age) || age < 0) return zh ? "需核对时间" : "Check timestamp";
-  if (age >= 15 * 60_000) return zh ? "等待更新" : "Update due";
-  return source.rejectedRecords > 0 ? (zh ? "部分资料可用" : "Partially available") : (zh ? "更新成功" : "Updated");
-}
+export { publicSourceLabel } from "./presentation";
 
 function LeadCard({ entry, language, onOpenSource }: {
   entry: PublicTimelineEntry; language: Language; onOpenSource?: (url: string) => void;
@@ -80,7 +60,7 @@ export function LiveSourcesView({ state, archive = null, archiveContent, languag
   const entries = (timeline?.entries ?? []).filter((entry) => filter === "all"
     || (filter === "context" ? entry.disposition === "context" : entry.disposition !== "context"));
   const checkedTimes = (timeline?.sources ?? []).flatMap((source) => source.lastAttemptAt ? [Date.parse(source.lastAttemptAt)] : []).filter(Number.isFinite);
-  const nextCheck = checkedTimes.length ? Math.min(...checkedTimes) + 15 * 60_000 : null;
+  const nextCheck = checkedTimes.length ? Math.min(...checkedTimes) + 60_000 : null;
   return <div className={styles.section}>
     <div className={styles.sectionToolbar}>
       <div className={styles.filters} aria-label={zh ? "雷达内容" : "Radar sections"}>
@@ -108,7 +88,7 @@ export function LiveSourcesView({ state, archive = null, archiveContent, languag
       {timeline.sources.map((source) => <span key={source.sourceId} data-issue={!!source.issue || undefined}>
         {SOURCE_NAMES[source.sourceId] ?? (zh ? "公开来源" : "Public source")} · {publicSourceLabel(source, language, now)}</span>)}
     </div>}
-    <p className={styles.note} role="status">{zh ? "后台每 15 分钟更新" : "Updates every 15 minutes in the background"}
+    <p className={styles.note} role="status">{zh ? "后台约每分钟更新" : "Updates about once a minute in the background"}
       {nextCheck != null && (nextCheck > now
         ? (zh ? " · 下次约 " : " · Next around ") + publicEvidenceTime(new Date(nextCheck).toISOString(), language)
         : (zh ? " · 等待更新" : " · Update due"))}</p>
@@ -151,11 +131,13 @@ export function LiveSourcesPanel({ archive, archiveContent, language, onOpenSour
       if (document.visibilityState === "visible") void store.refresh(false);
     };
     check();
-    const timer = window.setInterval(check, 15 * 60_000);
+    const timer = window.setInterval(check, 60_000);
+    const clock = window.setInterval(() => { if (document.visibilityState === "visible") setNow(Date.now()); }, 30_000);
     window.addEventListener("focus", check);
     document.addEventListener("visibilitychange", check);
     return () => {
       window.clearInterval(timer);
+      window.clearInterval(clock);
       window.removeEventListener("focus", check);
       document.removeEventListener("visibilitychange", check);
     };

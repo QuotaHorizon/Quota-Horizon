@@ -1,0 +1,75 @@
+{
+  "open": true,
+  "poll_id": "2026-10-02T21:18:48.000Z",
+  "opened_at": "2026-10-02T21:18:48.000Z",
+  "anchor": "reset",
+  "expires_at": "2026-10-09T21:18:48.000Z",
+  "windows": [
+    {
+      "id": "within_24h",
+      "deadline_at": "2026-10-03T21:18:48.000Z",
+      "after_at": null
+    },
+    {
+      "id": "in_1_3_days",
+      "deadline_at": "2026-10-05T21:18:48.000Z",
+      "after_at": "2026-10-03T21:18:48.000Z"
+    },
+    {
+      "id": "in_4_7_days",
+      "deadline_at": "2026-10-09T21:18:48.000Z",
+      "after_at": "2026-10-05T21:18:48.000Z"
+    },
+    {
+      "id": "not_soon",
+      "deadline_at": null,
+      "after_at": "2026-10-09T21:18:48.000Z"
+    }
+  ],
+  "open_buckets": [
+    "within_24h",
+    "in_1_3_days",
+    "in_4_7_days",
+    "not_soon"
+  ],
+  "tally": {
+    "total_votes": 8,
+    "min_votes": 5,
+    "unlocked": true,
+    "buckets": [
+      {
+        "id": "within_24h",
+        "votes": 0,
+        "share": 0
+      },
+      {
+        "id": "in_1_3_days",
+        "votes": 1,
+        "share": 13
+      },
+      {
+        "id": "in_4_7_days",
+        "votes": 6,
+        "share": 75
+      },
+      {
+        "id": "not_soon",
+        "votes": 1,
+        "share": 13
+      }
+    ]
+  },
+  "accuracy": {
+    "resolved_polls": 20,
+    "crowd_correct": 9,
+    "crowd_accuracy": 45
+  },
+  "model": {
+    "rounded_24h": 16,
+    "rounded_48h": 29,
+    "displayed_24h": 16,
+    "displayed_48h": 29,
+    "confidence": "low"
+  },
+  "voted": null
+}

@@ -45,15 +45,7 @@ impl AppServerConnection {
     pub async fn connect(executable: &Path, config: RuntimeConfig) -> Result<Self, RuntimeError> {
         config.validate()?;
 
-        let mut command = Command::new(executable);
-        command
-            .args(CODEX_APP_SERVER_ARGUMENTS)
-            .current_dir(std::env::temp_dir())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
+        let mut command = codex_command(executable, &config);
         let mut child = command.spawn().map_err(|_| RuntimeError::Spawn)?;
         let pipes = (child.stdin.take(), child.stdout.take(), child.stderr.take());
         let (Some(stdin), Some(stdout), Some(stderr)) = pipes else {
@@ -107,6 +99,23 @@ impl AppServerConnection {
         }
         shutdown_result
     }
+}
+
+fn codex_command(executable: &Path, config: &RuntimeConfig) -> Command {
+    let mut command = Command::new(executable);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    if let Some(home) = &config.codex_home {
+        command.env("CODEX_HOME", home);
+    }
+    command
+        .args(CODEX_APP_SERVER_ARGUMENTS)
+        .current_dir(std::env::temp_dir())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    command
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -204,6 +213,30 @@ async fn shutdown_child(child: &mut Child, config: &RuntimeConfig) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_home_is_passed_only_to_the_child_and_relative_homes_are_rejected() {
+        let home = std::env::temp_dir().join("synthetic Codex Home");
+        let config = RuntimeConfig {
+            codex_home: Some(home.clone()),
+            ..RuntimeConfig::default()
+        };
+        assert!(config.validate().is_ok());
+        let before = std::env::var_os("CODEX_HOME");
+        let command = codex_command(Path::new("codex.exe"), &config);
+        assert!(
+            command
+                .as_std()
+                .get_envs()
+                .any(|(key, value)| key == "CODEX_HOME" && value == Some(home.as_os_str()))
+        );
+        assert_eq!(std::env::var_os("CODEX_HOME"), before);
+        let invalid = RuntimeConfig {
+            codex_home: Some("relative-home".into()),
+            ..RuntimeConfig::default()
+        };
+        assert_eq!(invalid.validate(), Err(RuntimeError::InvalidConfiguration));
+    }
     use serde_json::Value;
     use tokio::io::{AsyncWriteExt, duplex};
 

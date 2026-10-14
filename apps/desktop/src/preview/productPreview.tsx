@@ -1,13 +1,18 @@
 // Standalone documentation fixture. Not imported by the native app entry point.
-import React from "react";
+import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ConfigProvider } from "antd";
+import { DashboardNavigation } from "../components/dashboard/DashboardNavigation";
+import radarStyles from "../pages/ResetIntelligencePage/index.module.less";
 import { CapacityPopover } from "../components/CapacityPopover";
 import { AccountsPage } from "../pages/AccountsPage";
 import { LiveSourcesView } from "../pages/ResetIntelligencePage/LiveSourcesPanel";
-import type { PublicResetTimeline } from "../pages/ResetIntelligencePage/types";
+import { ResetNoticeChip } from "../components/CapacityPopover/ResetNoticeChip";
+import { quantitativeFixture } from "./quantitativeFixture";
+import type { PublicResetTimeline, RadarView } from "../pages/ResetIntelligencePage/types";
 import type { Account } from "../types";
 import { LANGUAGE_STORAGE_KEY, translate } from "../i18n";
+import { applyThemeColor, DEFAULT_THEME_COLOR } from "../utils/theme";
 import "antd/dist/reset.css";
 import "../styles.css";
 import "./productPreview.css";
@@ -17,7 +22,8 @@ const scene = query.get("scene") ?? "accounts";
 const language = query.get("lang") === "en" ? "en" : "zh";
 const zh = language === "zh";
 document.documentElement.lang = zh ? "zh-CN" : "en";
-document.documentElement.dataset.theme = "light";
+document.documentElement.dataset.theme = query.get("theme") === "dark" ? "dark" : "light";
+applyThemeColor(DEFAULT_THEME_COLOR);
 // This origin is the standalone browser preview, never the native app store.
 localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
 const now = Date.now();
@@ -44,7 +50,13 @@ const accounts: Account[] = [
   },
 }));
 const timeline: PublicResetTimeline = {
-  sources: [], entries: [], revisionCount: 0, evidenceFamilyCount: 0,
+  quantitative: query.get("quant") ? quantitativeFixture(now, query.get("quant") === "scored") : undefined,
+  sources: [
+    { sourceId: "codex_reset", sourceUrl: "https://codex-reset.com/api/forecast", lastAttemptAt: observed, lastSuccessAt: observed,
+      issue: null, acceptedRecords: 1, rejectedRecords: 0, skippedRecords: 0 },
+    { sourceId: "codex_reset_posts", sourceUrl: "https://codex-reset.com/api/tweets", lastAttemptAt: observed, lastSuccessAt: observed,
+      issue: null, acceptedRecords: 4, rejectedRecords: 0, skippedRecords: 0 },
+  ], entries: [], revisionCount: 0, evidenceFamilyCount: 0,
   insights: {
     forecast: { attemptedAt: observed, issue: null, value: {
       sourceUrl: "https://codex-reset.com/api/forecast", updatedAt: observed, checkedAt: observed,
@@ -64,17 +76,78 @@ const timeline: PublicResetTimeline = {
   },
 };
 
+const scenario = query.get("scenario");
+if (scene === "radar" && scenario && scenario !== "unavailable") {
+  const sourceUrl = "https://quotaresets.com/api/v1/events.json";
+  const postUrl = "https://x.com/thsottiaux/status/2105843926221660585";
+  const target = new Date(now + (scenario === "reported" ? -4 : scenario === "elapsed" ? -1 : scenario === "distant" ? 30 : 4) * 3_600_000).toISOString();
+  const published = new Date(now - 5 * 3_600_000).toISOString();
+  const text = "Global reset landing tomorrow 10am PST for all paid ChatGPT accounts.";
+  timeline.sources.push({ sourceId: "quotaresets", sourceUrl, lastAttemptAt: observed, lastSuccessAt: observed,
+    issue: scenario === "stale" ? "request_failed" : null, acceptedRecords: 1, rejectedRecords: 0, skippedRecords: 0 });
+  timeline.entries = [{ disposition: scenario === "withdrawn" ? "retracted" : "needs_review", signal: {
+    signalId: "synthetic-announcement", evidenceFamilyId: "synthetic-family", revision: 1, eventId: "synthetic-reset",
+    kind: "global_full_reset", semantics: scenario === "withdrawn" ? "retracted" : scenario === "reported" ? "confirmed_reset" : "explicit_timed_reset", scope: "unknown",
+    recordedAt: observed, occurredAt: scenario === "reported" ? new Date(now - 2 * 3_600_000).toISOString() : null, title: "Synthetic reset announcement", summary: text,
+    announcementTiming: { expectedAt: target, timeZone: "America/Los_Angeles", sourceUrl, cohort: "all paid ChatGPT accounts" },
+    source: { canonicalUrl: postUrl, author: "@thsottiaux", review: "indirect", sourceClass: "official_social",
+      publishedAt: published, collectedAt: observed, contentSha256: "a".repeat(64), parserVersion: "preview", discoveredVia: [sourceUrl] },
+  } }];
+  timeline.insights!.forecast.value!.probability24h = 17;
+  timeline.insights!.forecast.value!.probability48h = 31;
+  timeline.insights!.posts!.posts = [{ id: "2105843926221660585", url: postUrl, text,
+    translatedText: "明天太平洋时间上午 10 点，所有付费 ChatGPT 账号将迎来全局重置。",
+    publishedAt: published, kind: "notice", isReply: false, parent: null },
+    { id: "synthetic-grant", url: "https://x.com/thsottiaux/status/123", kind: "grant", isReply: false, parent: null,
+      text: "Synthetic preview: we are loading a banked reset for Plus users.", translatedText: "合成正文：正在向 Plus 用户发放一张重置卡。",
+      publishedAt: new Date(now - 28 * 3_600_000).toISOString() },
+    { id: "synthetic-reply", url: "https://x.com/thsottiaux/status/124", kind: "context", isReply: true,
+      text: "Synthetic preview: the reset is still coming tomorrow.", translatedText: "合成正文：重置仍会在明天到来。",
+      publishedAt: new Date(now - 30 * 3_600_000).toISOString(),
+      parent: { id: "synthetic-question", author: "example", url: "https://x.com/example/status/125",
+        text: "Synthetic question: is there a global reset planned this week?", checkedAt: observed } },
+  ];
+  if (scenario === "reported") timeline.insights!.posts!.posts.unshift({
+    id: "synthetic-report", url: "https://x.com/thsottiaux/status/126", kind: "reset_report", isReply: false, parent: null,
+    text: "Synthetic preview: some Pro accounts did not receive the reset as expected. We are investigating and will follow up.",
+    translatedText: "合成正文：部分 Pro 账号未按预期重置。正在调查中，后续会更新进展。",
+    publishedAt: new Date(now - 3_600_000).toISOString(),
+  });
+}
+if (scenario === "unavailable") {
+  timeline.insights!.forecast.value = null;
+  timeline.insights!.forecast.issue = "request_failed";
+  timeline.sources[0].issue = "request_failed";
+}
+
+function DesktopRadarPreview() {
+  const [collapsed, setCollapsed] = useState(false);
+  return <div className={`app-shell sidebar-navigation-shell${collapsed ? " sidebar-collapsed" : ""}`}>
+    <aside className="app-sidebar"><div className="brand sidebar-brand"><span>QuotaHorizon</span></div>
+      <DashboardNavigation page="resetIntelligence" variant="sidebar" collapsed={collapsed} onPageChange={noop} t={(key,values)=>translate(language,key,values)} />
+      <button className="sidebar-collapse-button" onClick={()=>setCollapsed(!collapsed)} aria-label={zh ? "切换侧栏宽度" : "Toggle sidebar width"}>{collapsed ? "»" : "«"}</button>
+    </aside>
+    <header className="app-menu"><small>{query.get("capture") === "radar" ? (zh ? "本机公开数据 · 桌面布局预览" : "Local public data · desktop layout preview") : (zh ? "桌面布局预览 · 合成数据" : "Desktop layout preview · synthetic data")}</small></header>
+    <main className="capacity-main reset-radar-main"><header className="topbar"><div><span className="eyebrow">QuotaHorizon</span><h1>{zh ? "重置情报" : "Reset intelligence"}</h1></div></header>
+      <div className={radarStyles.page}><LiveSourcesView language={language} now={now} state={{timeline,busy:false,failed:false}} onRefresh={noop} onOpenSource={noop} /></div>
+    </main>
+  </div>;
+}
+
 function Preview() {
   if ("__TAURI_INTERNALS__" in window) return <p>This fixture is available only in a browser.</p>;
+  if (scene === "radar" && query.get("shell") === "desktop") return <DesktopRadarPreview />;
   const title = scene === "menu" ? (zh ? "菜单栏弹窗" : "Menu-bar popover")
     : scene === "radar" ? (zh ? "重置雷达" : "Reset radar") : (zh ? "多账号额度" : "Multiple-account quota");
   return <ConfigProvider theme={{ token: { colorPrimary: "#35ada7", borderRadius: 10 } }}>
     <main className={`product-preview product-preview--${scene}`}>
       <header className="preview-heading"><div><small>QuotaHorizon</small><h1>{title}</h1></div>
-        <p>{zh ? "合成预览 · 账号、额度、概率、正文与时间均为样例" : "Synthetic preview · sample accounts, quota, probabilities, text and times"}</p></header>
+        <p>{query.get("capture") === "radar" ? (zh ? "本机公开来源预览 · 采集数据与已存预测记录" : "Local public-source preview · collected data and forecast records") : (zh ? "合成预览 · 账号、额度、概率、正文与时间均为样例" : "Synthetic preview · sample accounts, quota, probabilities, text and times")}</p></header>
       {scene === "menu" ? <div className="preview-popover"><CapacityPopover /></div>
-        : scene === "radar" ? <LiveSourcesView language={language} now={now}
+        : scene === "radar" ? <><LiveSourcesView language={language} now={now}
           state={{ timeline, busy: false, failed: false }} onRefresh={noop} onOpenSource={noop} />
+          {scenario && <div style={{ maxWidth: 350, marginTop: 20 }}><ResetNoticeChip timeline={timeline}
+            insights={timeline.insights} now={now} language={language} onOpen={noop} /></div>}</>
         : <AccountsPage active accounts={accounts} providers={[]} loading={false} busyAccountId={null}
           refreshingAccountIds={[]} refreshingAll={false} refreshProgress={null} localProxy={null} proxyBusy={false}
           resetCredits={{}} onAdd={noop} onSwitch={noop} onDeactivate={noop} onRollbackLastChange={noop}
@@ -95,5 +168,17 @@ function Preview() {
 }
 
 const root = createRoot(document.getElementById("root")!);
-root.render(<Preview />);
+// Optional local public-source capture for development review. This fixture is
+// browser-only and never imports the user's account store or native journal.
+if (scene === "radar" && query.get("capture") === "radar") {
+  fetch("/radar-review.json").then(response => {
+    if (!response.ok) throw new Error("Local review capture unavailable");
+    return response.json();
+  }).then((capture: RadarView | PublicResetTimeline) => {
+    if ("forecasts" in capture) timeline.radar = capture;
+    else Object.assign(timeline, capture);
+    root.render(<Preview />);
+  })
+    .catch(() => root.render(<p>Local review capture unavailable.</p>));
+} else root.render(<Preview />);
 if (import.meta.hot) import.meta.hot.dispose(() => root.unmount());

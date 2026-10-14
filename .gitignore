@@ -11,6 +11,10 @@ playwright-report/
 test-results/
 .local/
 
+# AGENTS.md is tracked on dev; untracked release copies and local overrides stay private.
+/AGENTS.md
+/AGENTS.override.md
+
 # Local configuration, logs, and caches
 .env
 .env.*

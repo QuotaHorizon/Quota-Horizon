@@ -417,7 +417,7 @@ fn prepare_thread_archive(
             .map(|state_database| {
                 let original = state_visibility_snapshot(Some(state_database), &id)?;
                 if original.as_ref().is_some_and(|visibility| {
-                    visibility.archived != 0 || visibility.rollout_path != expected
+                    visibility.archived != 0 || Path::new(&visibility.rollout_path) != Path::new(&expected)
                 }) {
                     return Err(format!(
                         "会话 {id} 的官方 active 状态与文件不一致，请先修复后再归档。"
@@ -568,7 +568,10 @@ fn sync_archive_directory(path: &Path) -> Result<(), String> {
             .and_then(|directory| directory.sync_all())
             .map_err(|error| format!("无法同步会话归档事务目录：{error}"))?;
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    sync_windows_directory(path)
+        .map_err(|error| format!("无法同步会话归档事务目录：{error}"))?;
+    #[cfg(not(any(unix, windows)))]
     let _ = path;
     Ok(())
 }
@@ -710,10 +713,10 @@ fn validate_archive_transaction_manifest(
                         .to_string_lossy()
                         .to_string();
                     if original.archived != 0
-                        || original.rollout_path != expected_source
+                        || Path::new(&original.rollout_path) != Path::new(&expected_source)
                         || archived.archived != 1
                         || archived.archived_at.is_none()
-                        || archived.rollout_path != expected_target
+                        || Path::new(&archived.rollout_path) != Path::new(&expected_target)
                         || archived.preview != original.preview
                     {
                         return Err("会话归档事务可见性快照无效。".to_string());

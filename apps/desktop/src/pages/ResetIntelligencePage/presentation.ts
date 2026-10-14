@@ -1,7 +1,7 @@
 import type { DesktopStatusEnvelope } from "../../../../capacity-preview/src/status";
 import type { Language } from "../../i18n";
 import { planHasNoShortQuotaWindow } from "../../utils/accountUsageWindows";
-import type { PublicEvidenceDisposition, PublicResetArchiveEntry } from "./types";
+import type { PublicEvidenceDisposition, PublicResetArchiveEntry, PublicSourceId, PublicSourceStatus } from "./types";
 
 export function evidenceDispositionLabel(disposition: PublicEvidenceDisposition | string, language: Language) {
   const labels: Record<string, readonly [string, string]> = {
@@ -35,7 +35,9 @@ export function publicEvidenceUrl(value: string): string | null {
     if (url.protocol !== "https:" || url.username || url.password || url.port
       || /[\s\u0000-\u001f]/u.test(value)) return null;
     const allowed = ["help.openai.com", "openai.com", "status.openai.com", "x.com",
-      "quotaresets.com", "codex-reset.com"];
+      "quotaresets.com", "codex-reset.com", "codexreset.org", "codexreset.app", "quotacue.com",
+      "github.com", "news.ycombinator.com", "nextreset.ai", "codex.gussuriworks.com", "codex.lunarwerx.com",
+      "codexreset.dreaife.tokyo", "codex-reset.pro", "codex-resets.com", "twitter.com"];
     return allowed.includes(url.hostname) ? url.href : null;
   } catch { return null; }
 }
@@ -55,4 +57,26 @@ export function localResetFacts(envelope: DesktopStatusEnvelope | null) {
     fresh: status != null && envelope?.lifecycle === "ready"
       && (status.quotaFreshness ?? status.dataStatus.freshness) === "live",
   };
+}
+
+export const SOURCE_NAMES: Record<PublicSourceId, string> = {
+  quotaresets: "QuotaResets", codex_reset: "Codex Reset", codex_reset_posts: "Codex Reset · Tibo", openai_status: "OpenAI Status",
+};
+
+export function publicSourceLabel(source: PublicSourceStatus, language: Language, now: number) {
+  const zh = language === "zh";
+  if (source.issue) {
+    const reasons: Record<string, [string, string]> = {
+      request_failed: ["连接失败", "Connection failed"], http_error: ["来源暂不可用", "Source unavailable"],
+      schema_changed: ["来源格式已变化", "Source format changed"], invalid_response: ["资料未通过校验", "Invalid source data"],
+      response_too_large: ["资料超出读取上限", "Source exceeds read limit"],
+      upstream_stale: ["来源缓存尚未更新", "Upstream cache is stale"],
+    };
+    return (reasons[source.issue] ?? ["暂不可用", "Unavailable"])[zh ? 0 : 1];
+  }
+  if (!source.lastSuccessAt) return zh ? "尚未读取" : "Not fetched yet";
+  const age = now - Date.parse(source.lastSuccessAt);
+  if (!Number.isFinite(age) || age < 0) return zh ? "需核对时间" : "Check timestamp";
+  if (age >= 15 * 60_000) return zh ? "等待更新" : "Update due";
+  return source.rejectedRecords > 0 ? (zh ? "部分资料可用" : "Partially available") : (zh ? "更新成功" : "Updated");
 }

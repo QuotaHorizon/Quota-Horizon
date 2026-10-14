@@ -18,6 +18,11 @@ pub(super) fn run_bounded(
     let current_directory = env::current_dir().unwrap_or_else(|_| env::temp_dir());
     let sanitized_path = sanitized_path(env::var_os("PATH"), &current_directory);
     let mut command = Command::new(executable);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
     command
         .args(arguments)
         .env_clear()
