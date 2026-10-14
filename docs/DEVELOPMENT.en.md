@@ -43,17 +43,19 @@ Tests marked `ignored` have individual account, system credential or network req
 
 ### GitHub Actions
 
-[Desktop CI](../.github/workflows/desktop.yml) runs on pushes and pull requests to `dev` and `main`,
-and supports manual runs from Actions. Each run tests the frontend and Rust code on macOS Apple Silicon
-and Windows x64, then builds a DMG and an NSIS `.exe` from the same source revision and desktop version.
-The macOS job also tests and bundles the independent forecasting and evaluation modules.
-Its Python and NumPy build dependencies are declared in [macos-runtime.yml](../.github/ci/macos-runtime.yml).
+[Desktop CI](../.github/workflows/desktop.yml) tests and packages macOS Apple Silicon on pushes
+and pull requests to `dev` and `main`. Manual runs let you choose `macos-arm64` or `windows-x64`;
+each run builds only the selected platform, producing a DMG or NSIS `.exe` respectively.
+Both platforms test the frontend and Rust code. The macOS job also tests and bundles the independent
+forecasting and evaluation modules. [macos-runtime.conda.lock](../.github/ci/macos-runtime.conda.lock)
+pins their full Python/NumPy dependency set by package URL and SHA-256, including redistribution notices.
+The runtime is checked for isolation, Apple Silicon architecture and macOS 13 compatibility during packaging.
 
 Download the installers from the run's artifacts; their names include the platform and source commit.
 Artifacts are retained for 14 days. The DMG job checks the bundled runtime, signature, image and install copy;
 both jobs verify that the native executable contains the current frontend assets.
 Public installers remain on [Releases](https://github.com/QuotaHorizon/Quota-Horizon/releases).
-Publishing a release is a separate step after both platform jobs pass.
+Run both platforms against the same source revision and desktop version before publishing a release.
 
 ## Standalone forecasting module
 

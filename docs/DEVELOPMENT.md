@@ -43,17 +43,19 @@ cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
 
 ### GitHub Actions
 
-[Desktop CI](../.github/workflows/desktop.yml) 在向 `dev`、`main` 推送或发起拉取请求时运行，
-也支持从 Actions 手动运行。每次在 macOS Apple Silicon 和 Windows x64 上检查前端和 Rust，
-再从同一源码修订、同一桌面版本生成 DMG 和 NSIS `.exe`。
-macOS 任务还测试并打包独立预测和评估模块，Python 与 NumPy 构建依赖写在
-[macos-runtime.yml](../.github/ci/macos-runtime.yml)。
+[Desktop CI](../.github/workflows/desktop.yml) 在向 `dev`、`main` 推送或发起拉取请求时
+测试并打包 macOS Apple Silicon。手动运行可选择 `macos-arm64` 或 `windows-x64`；
+每次只构建选中的平台，分别生成 DMG 或 NSIS `.exe`。
+两端均执行前端与 Rust 检查。macOS 任务还测试并打包独立预测和评估模块；
+[macos-runtime.conda.lock](../.github/ci/macos-runtime.conda.lock) 使用包 URL 和 SHA-256
+锁定完整 Python / NumPy 依赖，包括再分发许可文件。打包时检查运行环境隔离、
+Apple Silicon 架构及 macOS 13 兼容性。
 
-可从该次运行的产物下载两个安装器；名称包含平台与源码提交，保留 14 天。
+可从该次运行的产物下载安装器；名称包含平台与源码提交，保留 14 天。
 DMG 任务检查内置运行环境、签名、磁盘映像和安装副本；两端都检查原生可执行文件
 是否包含当前前端资源。公开安装器仍从
 [Releases](https://github.com/QuotaHorizon/Quota-Horizon/releases) 下载。
-两个平台任务通过后，再单独发布正式版本。
+发布前，使用同一源码和桌面版本分别完成两端任务。
 
 ## 独立预测模块
 

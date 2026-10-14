@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [dev, main]
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to test and package
+        type: choice
+        options: [macos-arm64, windows-x64]
+        default: macos-arm64
+        required: true
 
 permissions:
   contents: read
@@ -22,17 +29,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: macos-arm64
-            runner: macos-15
-            target: aarch64-apple-darwin
-            build: build:app:mac
-            installer: dist/releases/*/QuotaHorizon_*_macos-arm64.dmg
-          - platform: windows-x64
-            runner: windows-2022
-            target: x86_64-pc-windows-msvc
-            build: build:app:win
-            installer: apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+        # Pushes and PRs run macOS only. Windows is an explicit manual selection.
+        include: ${{ fromJSON(
+          github.event_name == 'workflow_dispatch' && inputs.platform == 'windows-x64'
+          && '[{"platform":"windows-x64","runner":"windows-2022","target":"x86_64-pc-windows-msvc","build":"build:app:win","installer":"apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe"}]'
+          || '[{"platform":"macos-arm64","runner":"macos-15","target":"aarch64-apple-darwin","build":"build:app:mac","installer":"dist/releases/*/QuotaHorizon_*_macos-arm64.dmg"}]') }}
     defaults:
       run:
         shell: bash
@@ -87,14 +88,12 @@ jobs:
       - name: Prepare the macOS forecasting runtime
         if: runner.os == 'macOS'
         uses: conda-incubator/setup-miniconda@04b72d7799e2bae3771b041de9b46c710d29caab # v4
-        env:
-          CONDA_OVERRIDE_OSX: "13.0"
         with:
           miniforge-version: latest
           architecture: arm64
           activate-environment: horizon-build
-          environment-file: .github/ci/macos-runtime.yml
-          channel-priority: strict
+          environment-file: .github/ci/macos-runtime.conda.lock
+          auto-update-conda: false
           auto-activate-base: false
           remove-profiles: false
 
@@ -135,5 +134,7 @@ jobs:
           NODE
 
       - name: Remove the temporary macOS application bundle
-        if: runner.os == 'macOS'
-        run: rm -rf apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/QuotaHorizon.app
+        if: always() && runner.os == 'macOS'
+        run: |
+          rm -rf apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/QuotaHorizon.app
+          rm -rf dist/reset-runtime

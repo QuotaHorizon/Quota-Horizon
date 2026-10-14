@@ -3676,7 +3676,7 @@ dependencies = [
 
 [[package]]
 name = "quota-horizon-desktop"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",

@@ -1,0 +1,30 @@
+# platform: osx-arm64
+# Exact Python/NumPy dependency closure used for macOS packaging.
+# SHA-256 fragments pin package contents; Conda skips dependency solving.
+@EXPLICIT
+https://repo.anaconda.com/pkgs/main/osx-arm64/blas-1.0-openblas.conda#4fd46cbbcfd8eea36f4b5eee916c0b973d3e9cf19931b1e046930fa087798752
+https://repo.anaconda.com/pkgs/main/osx-arm64/bzip2-1.0.8-h80987f9_6.conda#a99e7ae89274837bfa706a7f8bcb970520d909a84b9fa1d63ddce1305d96121c
+https://repo.anaconda.com/pkgs/main/osx-arm64/ca-certificates-2025.2.25-hca03da5_0.conda#985b4c072779147ee2f8cc5fe4330e1745fdc3f83d19aea7ef16edaf60b0a616
+https://repo.anaconda.com/pkgs/main/osx-arm64/expat-2.7.1-h313beb8_0.conda#a6c4e675e8903418fa395ac3998aceb0d98e60031add4de1280b2663f6506d25
+https://repo.anaconda.com/pkgs/main/osx-arm64/libcxx-14.0.6-h848a8c0_0.conda#8b5fed0c8d654c0f27dc905d747184ef680711dffed5b3e6840687a1fd1cbcb4
+https://repo.anaconda.com/pkgs/main/osx-arm64/libffi-3.4.4-hca03da5_1.conda#800216cb554d0beaf970fe7c3efeee7974bb76576c1c5e0ae070c57fca2bba93
+https://repo.anaconda.com/pkgs/main/osx-arm64/libgfortran-5.0.0-11_3_0_hca03da5_28.conda#93098a70e4861a1652542f78dc68cfb3f5809c010fc657c8c38833bfe2347e19
+https://repo.anaconda.com/pkgs/main/osx-arm64/libgfortran5-11.3.0-h009349e_28.conda#e836c0ecd4a73cbf22d350dbc6bd0af903b3beabdfe519a0d90bbca26e3bc2e7
+https://repo.anaconda.com/pkgs/main/osx-arm64/libmpdec-4.0.0-h80987f9_0.conda#f9b80c20080496cc40ae74500a1944d6a30eadad138fefa8f300bc3a6a4e80b0
+https://repo.anaconda.com/pkgs/main/osx-arm64/libopenblas-0.3.29-hea593b9_0.conda#a6d08375496f16532b8b61d20e9dd9f427f9ebd053ee2c04502baf77803aaa09
+https://repo.anaconda.com/pkgs/main/osx-arm64/llvm-openmp-14.0.6-hc6e5704_0.conda#5463fdebbc59f1e3adf5db18176dc139badc405914347fe4ec365c120c265652
+https://repo.anaconda.com/pkgs/main/osx-arm64/ncurses-6.4-h313beb8_0.conda#fe2b87be65e21d3cd3b73659e61d670901c3f8b593444dbea3e80a4c4359d7b6
+https://repo.anaconda.com/pkgs/main/osx-arm64/numpy-2.1.3-py313h7c57ca2_0.conda#27cbc927734b1b0dbc54fba971f6d954fed7d85f3b9c2eeeba6ff5617593ff95
+https://repo.anaconda.com/pkgs/main/osx-arm64/numpy-base-2.1.3-py313hb98e858_0.conda#e9feca1e7b13a79ef3bbb11d50673183e96b07fe3398cd33c9828879ee26ed10
+https://repo.anaconda.com/pkgs/main/osx-arm64/openssl-3.0.16-h02f6b3c_0.conda#0546f677f26e897791cce7dd2fbb71d19874b1dbe66b5e2131e8fc8a61854161
+https://repo.anaconda.com/pkgs/main/noarch/pip-25.1-pyhc872135_2.conda#dc705c852ed94395f0b75cf65aa0f230adfb74cda46c9daca6df94fca0b90bb7
+https://repo.anaconda.com/pkgs/main/osx-arm64/python-3.13.5-h2eb94d5_100_cp313.conda#76d24ed3893166a935c903dcc89f5244fbe92bd55372c6d403d8bc9be1642f96
+https://repo.anaconda.com/pkgs/main/osx-arm64/python_abi-3.13-0_cp313.conda#c2f3a279902a7ffa5dea555fc218500477468b47c04f2db17a5a663c535cb383
+https://repo.anaconda.com/pkgs/main/osx-arm64/readline-8.2-h1a28f6b_0.conda#0399187fd09fc52bfac1b67b3cdef33faa76a75213ff932d9fcb079238dd8584
+https://repo.anaconda.com/pkgs/main/osx-arm64/setuptools-72.1.0-py313hca03da5_0.conda#40fc42d6b2b0923d5e30534973b6a0d67e6f6780713c9fc96d814844eb14a8a0
+https://repo.anaconda.com/pkgs/main/osx-arm64/sqlite-3.45.3-h80987f9_0.conda#247a94c1f825ce386aeb27f2d40521a0e8b24155ce2112ee5435e0bbb43db03c
+https://repo.anaconda.com/pkgs/main/osx-arm64/tk-8.6.14-h6ba3021_1.conda#9df29566870e6569f87ef8a7f862cbf7016a2898cf71b9b0671d9fe0697660b0
+https://repo.anaconda.com/pkgs/main/noarch/tzdata-2025b-h04d1e81_0.conda#3c9fefdfb2335e8641642e964cfaf20513d40ec709ab559b47b52d99b2e46fea
+https://repo.anaconda.com/pkgs/main/osx-arm64/wheel-0.45.1-py313hca03da5_0.conda#824d2c836772b32431534d7c65161c97a6c1c10da0ec32ba9cb102ff7afc12e2
+https://repo.anaconda.com/pkgs/main/osx-arm64/xz-5.6.4-h80987f9_1.conda#1715b8c457f4af91e55be7551ff5880f824c0fd756c70391aa6bc9a6594bdf31
+https://repo.anaconda.com/pkgs/main/osx-arm64/zlib-1.2.13-h18a0788_1.conda#a24fd52061df9ed53ea5c26b453effeb68ae72628761d9f7434b7a2395274072
