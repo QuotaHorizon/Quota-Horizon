@@ -39,6 +39,7 @@ use capacity_domain::{
 };
 use chrono::{DateTime, Timelike, Utc};
 use codex_runtime::app_server::RuntimeConfig;
+pub use codex_runtime::discovery::CodexExecutableCandidate as ConfirmedCodexExecutable;
 pub use codex_runtime::discovery::bundled_codex_path;
 use codex_runtime::discovery::{
     CandidateVerification, CodexExecutableCandidate, DiscoveryOutcome, DiscoveryReport,
@@ -283,6 +284,7 @@ struct DesktopState {
     discovery: Mutex<DiscoveryReport>,
     owner: AsyncMutex<Option<OwnerBinding>>,
     command_gate: AsyncMutex<()>,
+    codex_home: Mutex<Option<PathBuf>>,
     persistence: Arc<Mutex<DesktopPersistence>>,
     account_binding_store: Arc<Mutex<DesktopAccountBindingStore>>,
     ephemeral_account_identity: Mutex<Option<DesktopAccountIdentity>>,
@@ -298,6 +300,7 @@ impl DesktopState {
         Self::new_with_discovery(persistence, discover_current(None))
     }
 
+    #[cfg(test)]
     fn new_with_explicit_executable(
         persistence: DesktopPersistence,
         explicit_executable: Option<PathBuf>,
@@ -335,6 +338,7 @@ impl DesktopState {
             discovery: Mutex::new(discovery),
             owner: AsyncMutex::new(None),
             command_gate: AsyncMutex::new(()),
+            codex_home: Mutex::new(None),
             persistence: Arc::new(Mutex::new(persistence)),
             account_binding_store: Arc::new(Mutex::new(account_binding_store)),
             ephemeral_account_identity: Mutex::new(None),
@@ -381,7 +385,15 @@ impl DesktopState {
         if let Some(previous) = owner.take() {
             let _ = previous.handle.shutdown().await;
         }
-        let source = CodexStatusSource::from_discovery(&discovery, RuntimeConfig::default())
+        let runtime_config = RuntimeConfig {
+            codex_home: self
+                .codex_home
+                .lock()
+                .map_err(|_| desktop_issue("desktop_state_failed"))?
+                .clone(),
+            ..RuntimeConfig::default()
+        };
+        let source = CodexStatusSource::from_discovery(&discovery, runtime_config)
             .map_err(|_| desktop_issue("codex_source_failed"))?;
         let handle = RefreshHandle::start(source, RefreshOwnerConfig::default())
             .map_err(|error| issue_for_refresh(&error))?;
@@ -737,6 +749,16 @@ pub fn initialize_with_explicit_executable(
     install_capacity_tray: bool,
     explicit_executable: Option<PathBuf>,
 ) -> tauri::Result<()> {
+    initialize_with_preferences(app, install_capacity_tray, explicit_executable, None, None)
+}
+
+pub fn initialize_with_preferences(
+    app: &mut tauri::App,
+    install_capacity_tray: bool,
+    explicit_executable: Option<PathBuf>,
+    confirmed: Option<ConfirmedCodexExecutable>,
+    codex_home: Option<PathBuf>,
+) -> tauri::Result<()> {
     let persistence = app
         .path()
         .app_data_dir()
@@ -744,7 +766,9 @@ pub fn initialize_with_explicit_executable(
             DesktopPersistence::open(&data_directory.join(CAPACITY_DATA_DIRECTORY))
         })
         .unwrap_or_else(|_| DesktopPersistence::unavailable());
-    let state = DesktopState::new_with_explicit_executable(persistence, explicit_executable);
+    let discovery = restored_executable_discovery(confirmed, explicit_executable);
+    let state = DesktopState::new_with_discovery(persistence, discovery);
+    *state.codex_home.lock().expect("initial state") = codex_home;
     let monitor_commands = state.monitor.subscribe();
     let notification_events = state.notification_sender.subscribe();
     app.manage(state);
@@ -759,6 +783,48 @@ pub fn initialize_with_explicit_executable(
         notification_events,
     ));
     Ok(())
+}
+
+fn restored_executable_discovery(
+    confirmed: Option<ConfirmedCodexExecutable>,
+    explicit_executable: Option<PathBuf>,
+) -> DiscoveryReport {
+    restore_with_probe(
+        codex_runtime::discovery::DiscoveryOptions::current(explicit_executable),
+        confirmed,
+        &codex_runtime::discovery::SystemDiscoveryProbe,
+    )
+}
+
+fn restore_with_probe(
+    mut options: codex_runtime::discovery::DiscoveryOptions,
+    confirmed: Option<ConfirmedCodexExecutable>,
+    probe: &dyn codex_runtime::discovery::DiscoveryProbe,
+) -> DiscoveryReport {
+    match confirmed {
+        Some(candidate)
+            if codex_runtime::discovery::verify_executable_identity(&candidate).is_ok() =>
+        {
+            options.explicit_path = Some(PathBuf::from(&candidate.canonical_path));
+            let verified = codex_runtime::discovery::discover(&options, probe);
+            confirmed_executable_discovery(&candidate, verified).0
+        }
+        Some(_) => {
+            options.explicit_path = None;
+            require_confirmation_after_executable_change(codex_runtime::discovery::discover(
+                &options, probe,
+            ))
+        }
+        None => codex_runtime::discovery::discover(&options, probe),
+    }
+}
+
+pub fn confirmed_codex_executable(app: &AppHandle) -> Option<ConfirmedCodexExecutable> {
+    app.state::<DesktopState>()
+        .discovery_snapshot()
+        .ok()?
+        .selected_candidate()
+        .cloned()
 }
 
 pub fn implementation_status(app_handle: &AppHandle) -> ImplementationStatus {
@@ -784,6 +850,35 @@ pub async fn bind_account_identity(
         .await
 }
 
+/// The same host-resolved home must supply both account binding and child auth.
+pub async fn configure_codex_home(
+    app_handle: &AppHandle,
+    home: Option<PathBuf>,
+) -> Result<(), DesktopIssue> {
+    let home = home
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| desktop_issue("codex_home_unavailable"))?;
+    let state = app_handle.state::<DesktopState>();
+    let _command = state.command_gate.lock().await;
+    let changed = {
+        let mut current = state
+            .codex_home
+            .lock()
+            .map_err(|_| desktop_issue("desktop_state_failed"))?;
+        if current.as_ref() == Some(&home) {
+            false
+        } else {
+            *current = Some(home);
+            true
+        }
+    };
+    if changed {
+        state.stop_owner().await;
+        state.rotate_ephemeral_binding();
+    }
+    Ok(())
+}
+
 /// Explicit native user action only. This does not take the quota command
 /// gate: live reads must continue while macOS waits for the user's decision.
 pub async fn authorize_history_keychain() -> Result<(), DesktopIssue> {
@@ -798,7 +893,21 @@ pub async fn authorize_history_keychain() -> Result<(), DesktopIssue> {
         .await
         .map_err(|_| desktop_issue("history_keychain_unavailable"))?
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        tokio::task::spawn_blocking(|| {
+            use capacity_vault::InstallationKeyStore;
+            capacity_vault::WindowsCredentialInstallationKeyStore::new()
+                .load_or_create()
+                .map(|_| ())
+                .map_err(|error| {
+                    desktop_issue(AccountBindingError::from_key_error(error).reason_code())
+                })
+        })
+        .await
+        .map_err(|_| desktop_issue("history_keychain_unavailable"))?
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     Err(desktop_issue("history_keychain_unavailable"))
 }
 
@@ -1433,7 +1542,9 @@ fn envelope_from_discovery(
                 || candidate.sources.iter().any(|source| {
                     matches!(
                         source.as_str(),
-                        "macos_chatgpt_bundle" | "macos_bundle_registry"
+                        "macos_chatgpt_bundle"
+                            | "macos_bundle_registry"
+                            | "windows_desktop_runtime"
                     )
                 })
             {
@@ -1562,16 +1673,16 @@ fn valid_executable_id(value: &str) -> bool {
 }
 
 fn trusted_mutation_lock_root(app_handle: &AppHandle) -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     {
         app_handle
             .path()
             .home_dir()
             .ok()
-            .and_then(|home| capacity_mutation::macos_shared_mutation_lock_root(home).ok())
+            .and_then(|home| capacity_mutation::platform_shared_mutation_lock_root(home).ok())
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         app_handle
             .path()
@@ -1625,6 +1736,7 @@ fn desktop_issue(code: &'static str) -> DesktopIssue {
             "Choose one verified Codex installation before reading capacity."
         }
         "codex_not_found" => "No supported Codex executable was found.",
+        "codex_home_unavailable" => "The configured Codex home is unavailable.",
         "codex_verification_failed" => "Codex executable verification failed.",
         "codex_candidate_invalid" => "The selected Codex candidate is no longer available.",
         "codex_candidate_changed" => {
@@ -1687,6 +1799,61 @@ mod tests {
         )
         .unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[test]
+    fn confirmed_windows_reader_survives_restart_but_replacements_require_confirmation() {
+        use codex_runtime::discovery::{DiscoveryOptions, DiscoveryProbe, ProbeFailure, discover};
+        struct Probe;
+        impl DiscoveryProbe for Probe {
+            fn probe_version(
+                &self,
+                _: &std::path::Path,
+                _: std::time::Duration,
+            ) -> Result<String, ProbeFailure> {
+                Ok("codex-cli synthetic".into())
+            }
+            fn registered_macos_applications(
+                &self,
+                _: std::time::Duration,
+            ) -> Result<Vec<PathBuf>, ProbeFailure> {
+                Ok(vec![])
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let bin = directory.path().join("OpenAI/Codex/bin");
+        let executable = bin.join("synthetic/codex.exe");
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&executable, b"first synthetic binary").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let mut options = DiscoveryOptions::current(Some(executable.clone()));
+        options.platform = HostPlatform::Windows;
+        options.path_environment = None;
+        options.windows_desktop_bin = Some(bin);
+        let confirmed = discover(&options, &Probe)
+            .selected_candidate()
+            .unwrap()
+            .clone();
+        let stored = serde_json::to_vec(&confirmed).unwrap();
+        let restored = restore_with_probe(
+            options.clone(),
+            Some(serde_json::from_slice(&stored).unwrap()),
+            &Probe,
+        );
+        assert_eq!(restored.outcome, DiscoveryOutcome::Selected);
+        assert_eq!(
+            restored.selected_executable_id.as_deref(),
+            Some(confirmed.executable_id.as_str())
+        );
+        std::fs::write(executable, b"different replacement binary").unwrap();
+        let replaced = restore_with_probe(options, Some(confirmed), &Probe);
+        assert_eq!(replaced.outcome, DiscoveryOutcome::ConfirmationRequired);
+        assert!(replaced.selected_executable_id.is_none());
+        assert!(replaced.candidates[0].version.is_none());
     }
 
     #[test]
@@ -2248,6 +2415,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        not(unix),
+        ignore = "Requires the explicit Unix file key-store fixture; Windows uses Credential Manager"
+    )]
     async fn formal_identity_binding_unlocks_account_separated_history() {
         let directory = tempfile::tempdir().expect("temporary identity root");
         let binding_store = DesktopAccountBindingStore::explicit_file_fallback(
@@ -2288,6 +2459,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        not(unix),
+        ignore = "Requires the explicit Unix file key-store fixture; Windows uses Credential Manager"
+    )]
     async fn executable_review_preserves_history_but_account_changes_still_clear_it() {
         let directory = tempfile::tempdir().unwrap();
         let keys =

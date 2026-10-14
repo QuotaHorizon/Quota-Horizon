@@ -22,6 +22,9 @@ const config = JSON.parse(readFileSync(join(tauriRoot, "tauri.conf.json"), "utf8
 const signing = desktopSigningPlan({ platform: process.platform, args: process.argv.slice(2),
   config, environment: process.env });
 const tauriArgs = signing.args;
+const targetIndex = tauriArgs.indexOf("--target");
+const target = targetIndex >= 0 ? tauriArgs[targetIndex + 1]
+  : tauriArgs.find((arg) => arg.startsWith("--target="))?.slice("--target=".length);
 // A non-secret build fact, not a system environment change or signing identity.
 const buildEnvironment = { ...process.env, VITE_HORIZON_SIGNING_MODE: signing.mode };
 
@@ -43,6 +46,7 @@ run("cargo", [
   "--release",
   "--package",
   "quota-horizon-desktop",
+  ...(target ? ["--target", target] : []),
 ]);
 
 if (signing.mode === "ad_hoc") {
@@ -56,8 +60,6 @@ run(process.execPath, [tauriCli, "build", ...tauriArgs], desktopRoot);
 // resources consistently. This never replaces a configured distribution
 // signature because it runs only for explicitly unsigned builds.
 if (signing.sealAdHoc) {
-  const targetIndex = tauriArgs.indexOf("--target");
-  const target = targetIndex >= 0 ? tauriArgs[targetIndex + 1] : null;
   const targetRoot = target
     ? join(tauriRoot, "target", target, "release")
     : join(tauriRoot, "target", "release");

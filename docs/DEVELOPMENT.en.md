@@ -7,6 +7,7 @@
 - Node.js `^20.19.0 || >=22.12.0` and npm.
 - Rust stable, configured by `rust-toolchain.toml`.
 - macOS: Xcode Command Line Tools; Apple Silicon bundles use the `aarch64-apple-darwin` target.
+- Windows: Visual Studio 2022 Build Tools with Desktop development with C++ (MSVC and Windows SDK), the Rust stable MSVC toolchain, and Microsoft Edge WebView2 Runtime.
 
 Frontend dependencies are locked in `apps/desktop/package-lock.json`.
 The root `Cargo.lock` belongs to the shared Rust workspace; `apps/desktop/src-tauri/Cargo.lock` belongs to the desktop workspace.
@@ -115,6 +116,47 @@ Use `npm run build` for frontend assets alone.
 The macOS bundle is at `apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/QuotaHorizon.app`.
 See [installation](INSTALLATION.en.md) for the next steps.
 
+### Windows installer
+
+On a Windows x64 host, run:
+
+```sh
+npm --prefix apps/desktop ci --no-audit --no-fund
+npm --prefix apps/desktop run build:app:win
+```
+
+Tauri automatically merges `tauri.windows.conf.json` to produce an NSIS `.exe` installer instead of a macOS `.app`.
+The expected output directory is `apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`.
+The installer defaults to per-user installation and requires internet access to download WebView2 if the target machine lacks it.
+Without Windows code-signing configuration, the package has no publisher signature; this does not establish compatibility with SmartScreen or enterprise policies.
+
+`build:app:win-arm64` additionally requires MSVC ARM64 build tools and the `aarch64-pc-windows-msvc` Rust target.
+Passing x64 builds or tests does not verify ARM64. On Windows, `npm run test:scripts` skips the macOS-only POSIX permissions/symlink test.
+
+Windows discovers the official desktop runtime at `%LOCALAPPDATA%/OpenAI/Codex/bin/<build>/codex.exe`, even when it is absent from `PATH`.
+The first read requires installation confirmation. The selection stays host-local; restart revalidates its file digest and version, and updates require confirmation again.
+History identity uses current-user Windows Credential Manager and the system random generator, without a plaintext key-file fallback.
+Mutation locks and restore points use Windows file identity, private DACLs, reparse-point checks and real file/directory flushes.
+Restore points currently require a local fixed disk and reject network paths, hard links and unsafe paths; unsupported filesystem flushes fail explicitly.
+Conversation and migration regressions use disposable synthetic data, not real account switching, cloud operations or physical power-loss experiments.
+
+The first bundle downloads NSIS tools. If the network requires a proxy, explicitly pass `HTTPS_PROXY` / `HTTP_PROXY` to the current build process.
+The bundler may not pick up Windows system proxy settings automatically. Do not disable TLS or hash verification to make downloads work.
+
+The standalone native tray test does not read accounts or use the network:
+
+```sh
+cargo run --locked -p capacity-desktop --features native-smoke --example tray_thread_smoke
+```
+
+`native-smoke` is only for the standalone test host; the desktop dependency must not enable it, which would link duplicate Windows version resources.
+Windows explicitly skips history fixtures requiring Unix file credentials; separate tests cover native credentials, locks, ACL drift, recovery and rollback.
+The native credential roundtrip uses a unique random test name, is ignored by default, and deletes its own credential after an explicit run:
+
+```sh
+cargo test --locked -p capacity-vault native_unique_credential_roundtrip -- --ignored
+```
+
 ## Build a DMG
 
 ```sh
@@ -123,7 +165,7 @@ npm run package:mac
 
 This command builds the Apple Silicon app, packages the DMG and verifies an installed copy.
 The installer uses the ready-made [create-dmg](https://github.com/sindresorhus/create-dmg) template,
-with a drag-and-drop arrow, app icon and Applications folder shortcut. The tool is installed with the project's development dependencies.
+with a drag-and-drop arrow, app icon and Applications folder shortcut. The tool is an optional dependency so its macOS-only dependencies do not block Windows `npm ci`; `package:mac` fails explicitly if the tool is missing.
 
 The DMG installer is at `dist/releases/<version>/QuotaHorizon_<version>_macos-arm64.dmg`.
 
@@ -136,6 +178,7 @@ The script checks the image, installed copy, version, architecture, resources, s
 | File | Configuration |
 | --- | --- |
 | `apps/desktop/src-tauri/tauri.conf.json` | App version, name, macOS 13.0 minimum and bundled resources |
+| `apps/desktop/src-tauri/tauri.windows.conf.json` | Windows NSIS installer target and ICO icon |
 | `apps/desktop/package.json` | Desktop version, packaging dependencies and Apple Silicon build shortcut |
 | `apps/desktop/src-tauri/Cargo.toml` | Desktop Rust package version |
 | `scripts/package-macos.mjs` | `aarch64-apple-darwin` target, DMG template, filenames and verification |

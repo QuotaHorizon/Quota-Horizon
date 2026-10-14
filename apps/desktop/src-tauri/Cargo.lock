@@ -554,6 +554,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -572,6 +573,7 @@ version = "0.1.0"
 dependencies = [
  "capacity-domain",
  "capacity-store",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -716,6 +718,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
 ]

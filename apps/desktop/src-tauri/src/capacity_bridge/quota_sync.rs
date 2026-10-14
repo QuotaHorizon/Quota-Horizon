@@ -16,7 +16,7 @@ use crate::storage::{load_usage, resolve_paths, save_usage_if_newer, usage_path,
 pub(crate) const STATUS_EVENT: &str = "capacity-status-changed";
 const BACKGROUND_INTERVAL: Duration = Duration::from_secs(30);
 
-pub(super) struct QuotaSyncState {
+pub(crate) struct QuotaSyncState {
     pub gate: tauri::async_runtime::Mutex<()>,
     pub refresh_revision: AtomicU64,
     sequence: AtomicU64,

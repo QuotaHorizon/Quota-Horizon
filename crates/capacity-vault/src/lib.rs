@@ -30,6 +30,8 @@ pub use authenticated::{
 };
 #[cfg(target_os = "macos")]
 pub use identity::MacOsKeychainInstallationKeyStore;
+#[cfg(windows)]
+pub use identity::WindowsCredentialInstallationKeyStore;
 pub use identity::{
     ACCOUNT_BINDING_DOMAIN, FileInstallationKeyStore, INSTALLATION_SECRET_BYTES, IdentityError,
     InstallationKey, InstallationKeyBackendRequest, InstallationKeyRing,

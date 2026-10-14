@@ -4,7 +4,7 @@ use std::{
     sync::{OnceLock, RwLock},
 };
 
-use tauri::{Emitter, Runtime};
+use tauri::{Emitter, Manager, Runtime};
 
 use crate::{
     models::{AppSettings, ManagerStateFile},
@@ -169,6 +169,10 @@ fn update_codex_home<R: Runtime>(
         .as_deref()
         .map(validate_custom_home)
         .transpose()?;
+    // A quota read holds this gate through child auth selection, account binding
+    // and persistence. Never change the home between those observations.
+    let quota = app.state::<crate::capacity_bridge::quota_sync::QuotaSyncState>();
+    let _quota_guard = quota.gate.blocking_lock();
     let _switch_guard = crate::commands::account_switch_lock()
         .lock()
         .map_err(|_| "Codex Home 设置锁不可用".to_string())?;

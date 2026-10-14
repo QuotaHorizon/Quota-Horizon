@@ -1,5 +1,8 @@
 use std::fmt;
-use std::fs::{self, File};
+use std::fs;
+#[cfg(unix)]
+use std::fs::File;
+#[cfg(unix)]
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,14 +11,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use capacity_domain::{AccountFingerprint, VaultRecordRef};
 
 use crate::{
-    ProtectedVaultRecord, SecretBytes, VaultBackendError, prepare_private_directory,
-    read_private_file, sync_directory, validate_root_path, verify_private_directory,
-    verify_private_file_metadata, write_private_file,
+    ProtectedVaultRecord, SecretBytes, VaultBackendError, read_private_file, sync_directory,
+    verify_private_directory, verify_private_file_metadata, write_private_file,
 };
+#[cfg(unix)]
+use crate::{prepare_private_directory, validate_root_path};
 
 mod key_ring;
 #[cfg(target_os = "macos")]
 mod macos_keychain;
+#[cfg(windows)]
+mod windows_credentials;
+#[cfg(windows)]
+pub use windows_credentials::WindowsCredentialInstallationKeyStore;
 
 pub use key_ring::{
     InstallationKeyRingRecord, InstallationKeyRingRevision, InstallationKeyStorageVersion,
@@ -526,6 +534,8 @@ impl fmt::Debug for InstallationKeyBackendRequest {
 pub enum SelectedInstallationKeyStore {
     #[cfg(target_os = "macos")]
     MacOsKeychain(MacOsKeychainInstallationKeyStore),
+    #[cfg(windows)]
+    WindowsCredential(WindowsCredentialInstallationKeyStore),
     ExplicitFileFallback(FileInstallationKeyStore),
 }
 
@@ -534,6 +544,8 @@ impl fmt::Debug for SelectedInstallationKeyStore {
         match self {
             #[cfg(target_os = "macos")]
             Self::MacOsKeychain(_) => formatter.write_str("MacOsKeychain(<redacted>)"),
+            #[cfg(windows)]
+            Self::WindowsCredential(_) => formatter.write_str("WindowsCredential(<redacted>)"),
             Self::ExplicitFileFallback(_) => {
                 formatter.write_str("ExplicitFileFallback(<redacted>)")
             }
@@ -546,6 +558,8 @@ impl InstallationKeyStore for SelectedInstallationKeyStore {
         match self {
             #[cfg(target_os = "macos")]
             Self::MacOsKeychain(store) => store.load(),
+            #[cfg(windows)]
+            Self::WindowsCredential(store) => store.load(),
             Self::ExplicitFileFallback(store) => store.load(),
         }
     }
@@ -554,6 +568,8 @@ impl InstallationKeyStore for SelectedInstallationKeyStore {
         match self {
             #[cfg(target_os = "macos")]
             Self::MacOsKeychain(store) => store.load_or_create(),
+            #[cfg(windows)]
+            Self::WindowsCredential(store) => store.load_or_create(),
             Self::ExplicitFileFallback(store) => store.load_or_create(),
         }
     }
@@ -564,6 +580,8 @@ impl InstallationKeyRingStore for SelectedInstallationKeyStore {
         match self {
             #[cfg(target_os = "macos")]
             Self::MacOsKeychain(store) => store.load_key_ring(),
+            #[cfg(windows)]
+            Self::WindowsCredential(store) => store.load_key_ring(),
             Self::ExplicitFileFallback(store) => store.load_key_ring(),
         }
     }
@@ -572,6 +590,8 @@ impl InstallationKeyRingStore for SelectedInstallationKeyStore {
         match self {
             #[cfg(target_os = "macos")]
             Self::MacOsKeychain(store) => store.load_or_create_key_ring(),
+            #[cfg(windows)]
+            Self::WindowsCredential(store) => store.load_or_create_key_ring(),
             Self::ExplicitFileFallback(store) => store.load_or_create_key_ring(),
         }
     }
@@ -584,6 +604,8 @@ impl InstallationKeyRingStore for SelectedInstallationKeyStore {
         match self {
             #[cfg(target_os = "macos")]
             Self::MacOsKeychain(store) => store.replace_key_ring(expected, replacement),
+            #[cfg(windows)]
+            Self::WindowsCredential(store) => store.replace_key_ring(expected, replacement),
             Self::ExplicitFileFallback(store) => store.replace_key_ring(expected, replacement),
         }
     }
@@ -595,6 +617,8 @@ impl InstallationKeyRingStore for SelectedInstallationKeyStore {
         match self {
             #[cfg(target_os = "macos")]
             Self::MacOsKeychain(store) => store.delete_key_ring(expected),
+            #[cfg(windows)]
+            Self::WindowsCredential(store) => store.delete_key_ring(expected),
             Self::ExplicitFileFallback(store) => store.delete_key_ring(expected),
         }
     }
@@ -611,7 +635,13 @@ pub fn select_installation_key_store(
                     MacOsKeychainInstallationKeyStore::new(),
                 ))
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(windows)]
+            {
+                Ok(SelectedInstallationKeyStore::WindowsCredential(
+                    WindowsCredentialInstallationKeyStore::new(),
+                ))
+            }
+            #[cfg(not(any(target_os = "macos", windows)))]
             {
                 Err(IdentityError::PlatformCredentialUnavailable)
             }
@@ -909,7 +939,30 @@ impl SecureRandom for OsSecureRandom {
                 .map_err(|_| IdentityError::PlatformRandomUnavailable)
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Security::Cryptography::{
+                BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
+            };
+            let length = u32::try_from(output.len())
+                .map_err(|_| IdentityError::PlatformRandomUnavailable)?;
+            let status = unsafe {
+                BCryptGenRandom(
+                    std::ptr::null_mut(),
+                    output.as_mut_ptr(),
+                    length,
+                    BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+                )
+            };
+            if status >= 0 {
+                Ok(())
+            } else {
+                output.fill(0);
+                Err(IdentityError::PlatformRandomUnavailable)
+            }
+        }
+
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = output;
             Err(IdentityError::PlatformRandomUnavailable)

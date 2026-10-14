@@ -2,7 +2,9 @@ import type { CodexCandidate, DesktopStatusEnvelope } from "../../../../capacity
 import type { Language } from "../../i18n";
 
 export function desktopInstallation(candidate: CodexCandidate) {
-  return candidate.sources.some((source) => ["macos_chatgpt_bundle", "macos_bundle_registry"].includes(source))
+  const path = (candidate.canonicalPath ?? "").replace(/\\/g, "/");
+  return candidate.sources.some((source) => ["macos_chatgpt_bundle", "macos_bundle_registry", "windows_desktop_runtime"].includes(source))
+    || /\/OpenAI\/Codex\/bin\/[^/]+\/codex\.exe$/iu.test(path)
     || /\/[^/]+\.app\/Contents\/Resources\/(?:codex|codex-cli\/(?:CodexCLI\.app\/Contents\/MacOS\/codex|bin\/codex))$/u.test(candidate.canonicalPath ?? "");
 }
 

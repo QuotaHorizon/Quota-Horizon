@@ -60,6 +60,7 @@ pub struct DiscoveryOptions {
     pub path_environment: Option<OsString>,
     pub current_directory: PathBuf,
     pub macos_bundled_codex: PathBuf,
+    pub windows_desktop_bin: Option<PathBuf>,
     pub version_timeout: Duration,
 }
 
@@ -72,6 +73,10 @@ impl DiscoveryOptions {
             path_environment: env::var_os("PATH"),
             current_directory: env::current_dir().unwrap_or_else(|_| std::env::temp_dir()),
             macos_bundled_codex: PathBuf::from(CHATGPT_BUNDLED_CODEX),
+            windows_desktop_bin: env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .map(|path| path.join("OpenAI").join("Codex").join("bin")),
             version_timeout: Duration::from_secs(2),
         }
     }
@@ -83,6 +88,7 @@ pub enum CandidateSource {
     Explicit,
     MacosChatgptBundle,
     MacosBundleRegistry,
+    WindowsDesktopRuntime,
     Path,
 }
 
@@ -96,6 +102,7 @@ impl CandidateSource {
             Self::Explicit => "explicit",
             Self::MacosChatgptBundle => "macos_chatgpt_bundle",
             Self::MacosBundleRegistry => "macos_bundle_registry",
+            Self::WindowsDesktopRuntime => "windows_desktop_runtime",
             Self::Path => "path",
         }
     }
@@ -277,6 +284,23 @@ pub fn bundled_codex_path(application: &Path) -> Option<PathBuf> {
 
 /// Presentation only; executable trust still requires discovery verification.
 pub fn is_bundled_codex_path(path: &Path) -> bool {
+    let components = path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if components.len() >= 5 {
+        let tail = &components[components.len() - 5..];
+        if tail[0].eq_ignore_ascii_case("OpenAI")
+            && tail[1].eq_ignore_ascii_case("Codex")
+            && tail[2].eq_ignore_ascii_case("bin")
+            && tail[4].eq_ignore_ascii_case("codex.exe")
+        {
+            return true;
+        }
+    }
     path.ancestors().any(|ancestor| {
         ancestor.extension().is_some_and(|ext| ext == "app")
             && (BUNDLED_CODEX_PATHS
@@ -340,6 +364,9 @@ pub fn discover(options: &DiscoveryOptions, probe: &dyn DiscoveryProbe) -> Disco
             }
         }
 
+        if options.platform == HostPlatform::Windows {
+            collect_windows_desktop_candidates(options, &mut candidates, &mut diagnostics);
+        }
         collect_path_candidates(options, &mut candidates, &mut diagnostics);
     }
 
@@ -386,6 +413,69 @@ pub fn discover(options: &DiscoveryOptions, probe: &dyn DiscoveryProbe) -> Disco
         candidates,
         diagnostics,
     }
+}
+
+fn collect_windows_desktop_candidates(
+    options: &DiscoveryOptions,
+    candidates: &mut Vec<CodexExecutableCandidate>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(root) = &options.windows_desktop_bin else {
+        return;
+    };
+    if !root.is_absolute() || !plain_directory(root) {
+        return;
+    }
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries.take(65).collect::<Result<Vec<_>, _>>(),
+        Err(error) => Err(error),
+    };
+    let Ok(mut entries) = entries else {
+        diagnostics.push(diagnostic(
+            "windows_desktop_discovery_failed",
+            DiagnosticSeverity::Warning,
+            "The Windows desktop Codex runtime directory could not be inspected.",
+        ));
+        return;
+    };
+    if entries.len() > 64 {
+        diagnostics.push(diagnostic(
+            "windows_desktop_discovery_limit",
+            DiagnosticSeverity::Warning,
+            "The Windows desktop Codex runtime directory exceeds the discovery limit.",
+        ));
+        return;
+    }
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        if !plain_directory(&entry.path()) {
+            continue;
+        }
+        let executable = entry.path().join("codex.exe");
+        if executable.is_file() {
+            collect_candidate(
+                candidates,
+                diagnostics,
+                &executable,
+                CandidateSource::WindowsDesktopRuntime,
+            );
+        }
+    }
+}
+
+fn plain_directory(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| {
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return false;
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            metadata.file_attributes() & 0x400 == 0
+        }
+        #[cfg(not(windows))]
+        true
+    })
 }
 
 fn collect_path_candidates(
@@ -490,11 +580,48 @@ fn validate_executable(path: &Path) -> Result<ValidatedExecutable, &'static str>
         return Err("executable_not_executable");
     }
     let (file_identity, identity_strength) = file_identity(&canonical_path, &metadata);
+    #[cfg(windows)]
+    let file_identity = format!(
+        "{file_identity}:sha256:{}",
+        windows_executable_digest(&canonical_path, &metadata)?
+    );
     Ok(ValidatedExecutable {
         canonical_path,
         file_identity,
         identity_strength,
     })
+}
+
+#[cfg(windows)]
+fn windows_executable_digest(path: &Path, expected: &fs::Metadata) -> Result<String, &'static str> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    use std::os::windows::fs::OpenOptionsExt;
+    // Keep writers/deleters out while hashing; metadata alone survives an
+    // equal-length replacement with a preserved modification timestamp.
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(path)
+        .map_err(|_| "executable_identity_unavailable")?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| "executable_identity_unavailable")?;
+    if metadata.len() != expected.len() || metadata.modified().ok() != expected.modified().ok() {
+        return Err("executable_identity_changed");
+    }
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|_| "executable_identity_unavailable")?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 /// Re-check the selected file immediately before starting a new child.
@@ -701,6 +828,7 @@ mod tests {
             path_environment: None,
             current_directory: root.path().to_owned(),
             macos_bundled_codex: root.path().join("ChatGPT.app/Contents/Resources/codex"),
+            windows_desktop_bin: None,
             version_timeout: Duration::from_millis(50),
         }
     }
@@ -721,6 +849,63 @@ mod tests {
         } else {
             parent.join("codex")
         }
+    }
+
+    #[test]
+    fn windows_desktop_runtime_is_discovered_without_path_and_requires_confirmation() {
+        let root = TempDir::new().unwrap();
+        let bin = root.path().join("OpenAI/Codex/bin");
+        let executable = bin.join("0123456789abcdef/codex.exe");
+        make_executable(&executable);
+        let mut options = options(&root, HostPlatform::Windows);
+        options.windows_desktop_bin = Some(bin);
+        let report = discover(&options, &FakeProbe::default());
+        assert_eq!(report.outcome, DiscoveryOutcome::ConfirmationRequired);
+        assert_eq!(report.candidates.len(), 1);
+        let candidate = &report.candidates[0];
+        assert_eq!(candidate.sources, [CandidateSource::WindowsDesktopRuntime]);
+        assert!(candidate.version.is_none());
+        assert!(candidate.requires_confirmation);
+        assert!(is_bundled_codex_path(Path::new(&candidate.canonical_path)));
+        options.explicit_path = Some(executable.clone());
+        let mut probe = FakeProbe::default();
+        probe.versions.insert(
+            fs::canonicalize(executable).unwrap(),
+            Ok("codex-cli test".into()),
+        );
+        assert_eq!(
+            discover(&options, &probe).outcome,
+            DiscoveryOutcome::Selected
+        );
+    }
+
+    #[test]
+    fn windows_desktop_versions_are_not_silently_selected_and_path_duplicates_merge() {
+        let root = TempDir::new().unwrap();
+        let bin = root.path().join("OpenAI/Codex/bin");
+        let first = bin.join("first/codex.exe");
+        make_executable(&first);
+        make_executable(&bin.join("second/codex.exe"));
+        fs::create_dir_all(bin.join("unrelated")).unwrap();
+        let mut options = options(&root, HostPlatform::Windows);
+        options.windows_desktop_bin = Some(bin);
+        options.path_environment = Some(env::join_paths([first.parent().unwrap()]).unwrap());
+        let report = discover(&options, &FakeProbe::default());
+        assert_eq!(report.outcome, DiscoveryOutcome::Ambiguous);
+        assert_eq!(report.candidates.len(), 2);
+        assert_eq!(
+            report.candidates[0].sources,
+            [
+                CandidateSource::WindowsDesktopRuntime,
+                CandidateSource::Path
+            ]
+        );
+        assert!(
+            report
+                .candidates
+                .iter()
+                .all(|candidate| candidate.version.is_none())
+        );
     }
 
     #[test]
@@ -769,6 +954,42 @@ mod tests {
 
         assert_eq!(
             verify_executable_identity(candidate),
+            Err(ExecutableIdentityError::Changed)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_identity_rejects_equal_size_replacement_with_preserved_timestamp() {
+        let root = TempDir::new().unwrap();
+        let executable = test_codex_path(root.path());
+        make_executable(&executable);
+        let timestamp = fs::metadata(&executable).unwrap().modified().unwrap();
+        let canonical = fs::canonicalize(&executable).unwrap();
+        let mut probe = FakeProbe::default();
+        probe
+            .versions
+            .insert(canonical, Ok("codex-cli test".into()));
+        let mut options = options(&root, HostPlatform::Windows);
+        options.explicit_path = Some(executable.clone());
+        let candidate = discover(&options, &probe)
+            .selected_candidate()
+            .unwrap()
+            .clone();
+        let length = fs::metadata(&executable).unwrap().len() as usize;
+        fs::write(&executable, vec![b'x'; length]).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&executable)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(timestamp))
+            .unwrap();
+        assert_eq!(
+            fs::metadata(&executable).unwrap().modified().unwrap(),
+            timestamp
+        );
+        assert_eq!(
+            verify_executable_identity(&candidate),
             Err(ExecutableIdentityError::Changed)
         );
     }
@@ -842,6 +1063,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "macOS bundle executables are extensionless; Windows only accepts .exe"
+    )]
     fn current_bundle_layout_is_selected_and_old_layout_remains_supported() {
         for relative in BUNDLED_CODEX_PATHS {
             let root = TempDir::new().unwrap();
@@ -861,6 +1086,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "macOS bundle executables are extensionless; Windows only accepts .exe"
+    )]
     fn native_reader_wins_over_legacy_file_and_registry_finds_new_layout() {
         let root = TempDir::new().unwrap();
         let application = root.path().join("Relocated Codex.app");

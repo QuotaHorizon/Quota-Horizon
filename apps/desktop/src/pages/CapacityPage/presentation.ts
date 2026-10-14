@@ -20,7 +20,7 @@ export function historyEmptyMessage(history: DesktopHistoryEnvelope | null, lang
     case "history_keychain_corrupt":
       return zh ? "历史密钥异常，暂时无法读取。请保留数据并查看问题排查。" : "The history key is invalid. Keep your data and open troubleshooting.";
     case "history_keychain_unavailable":
-      return zh ? "钥匙串暂不可用，历史记录已暂停。" : "Keychain is unavailable. History recording is paused.";
+      return zh ? "系统凭据存储暂不可用，历史记录已暂停。" : "System credential storage is unavailable. History recording is paused.";
     case "history_account_unavailable":
     case "history_context_unavailable":
       return zh ? "等待当前账号的首次额度读取。" : "Waiting for this account’s first quota read.";

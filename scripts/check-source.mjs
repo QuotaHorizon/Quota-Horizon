@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Dependency-free checks for a source checkout, including before its first commit.
@@ -26,7 +26,7 @@ const locked = json("apps/desktop/package-lock.json").packages[""];
 for (const field of ["name", "version"]) {
   if (desktop[field] !== locked[field]) errors.push(`Desktop lockfile differs: ${field}`);
 }
-for (const field of ["dependencies", "devDependencies"]) {
+for (const field of ["dependencies", "devDependencies", "optionalDependencies"]) {
   const declared = desktop[field] ?? {};
   const recorded = locked[field] ?? {};
   for (const name of new Set([...Object.keys(declared), ...Object.keys(recorded)])) {
@@ -49,7 +49,7 @@ for (const file of files) {
       // Inline dependency tables use path directories; lib/bin entries name files.
       if (/\.rs$/.test(match[1])) continue;
       const target = resolve(root, dirname(file), match[1], "Cargo.toml");
-      const name = relative(root, target);
+      const name = relative(root, target).split(sep).join("/");
       if (name.startsWith("..") || isAbsolute(name) || !candidates.has(name)) {
         errors.push(`Rust dependency is outside the source package or missing: ${file} -> ${match[1]}`);
       }
@@ -63,7 +63,7 @@ for (const file of files) {
       if (/^(?:[a-z][a-z\d+.-]*:|#|\/\/)/i.test(link)) continue;
       const target = decodeURIComponent(link.split(/[?#]/)[0]);
       if (!target) continue;
-      const name = relative(root, resolve(root, dirname(file), target));
+      const name = relative(root, resolve(root, dirname(file), target)).split(sep).join("/");
       const included = candidates.has(name) || files.some((entry) => entry.startsWith(`${name}/`));
       if (!included) errors.push(`Document target is missing or private: ${file} -> ${link}`);
       documentLinks++;

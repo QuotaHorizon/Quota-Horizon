@@ -181,6 +181,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(unix),
+        ignore = "Requires the explicit Unix file key-store fixture; Windows uses Credential Manager"
+    )]
     fn explicit_test_store_is_stable_and_account_separated() {
         let directory = tempfile::tempdir().expect("temporary key store");
         let key_store = directory.path().join("key-store");

@@ -27,3 +27,9 @@ test("non-macOS builds never receive a macOS seal", () => {
   assert.equal(plan({ platform: "win32" }).mode, "not_applicable");
   assert.equal(plan({ platform: "win32" }).sealAdHoc, false);
 });
+test("Tauri signing options stay before forwarded Cargo arguments", () => {
+  const args = ["--target", "x86_64-pc-windows-msvc", "--", "--locked"];
+  assert.deepEqual(plan({ platform: "win32", args }).args,
+    ["--target", "x86_64-pc-windows-msvc", "--no-sign", "--", "--locked"]);
+  assert.deepEqual(args, ["--target", "x86_64-pc-windows-msvc", "--", "--locked"]);
+});
