@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,6 +21,20 @@ function files(directory) {
 const systemLibrary = p => p.startsWith("/usr/lib/") || p.startsWith("/System/Library/");
 const libraries = p => run("/usr/bin/otool", ["-L", p]).trim().split("\n").slice(1).map(s => s.trim().split(" (compatibility version")[0]);
 const macho = p => [0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca].includes(readFileSync(p).subarray(0, 4).readUInt32BE());
+
+export function normalizeRuntimePermissions(directory) {
+  const stat = lstatSync(directory);
+  if (!stat.isDirectory()) throw new Error("Runtime permissions require a real directory");
+  chmodSync(directory, 0o755);
+  for (const name of readdirSync(directory)) {
+    const path = join(directory, name);
+    const entry = lstatSync(path);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) normalizeRuntimePermissions(path);
+    else if (entry.isFile()) chmodSync(path, entry.mode & 0o111 ? 0o755 : 0o644);
+    else throw new Error(`Unsupported runtime entry: ${path}`);
+  }
+}
 
 export function verifyRuntime(destination) {
   const manifest = JSON.parse(readFileSync(join(destination, "reset-runtime-manifest.json"), "utf8"));
@@ -104,6 +118,9 @@ export function bundleRuntime(python, destination = join(root, "dist/reset-runti
   const manifest = { schema_version: "reset-runtime/1", platform: "macos-arm64", python: info.version, numpy: info.numpy, modules: moduleDigest(), packages };
   manifest.revision = hash(JSON.stringify(manifest));
   writeFileSync(join(destination, "reset-runtime-manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
+  // Conda caches can contain group-writable files. DMG copying applies umask;
+  // give only the generated runtime stable distribution modes before bundling.
+  normalizeRuntimePermissions(destination);
   verifyRuntime(destination);
   console.log(`Bundled independent reset modules and verified their isolated runtime (${manifest.revision.slice(0, 12)}).`);
   return destination;
