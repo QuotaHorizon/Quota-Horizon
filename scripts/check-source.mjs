@@ -13,6 +13,13 @@ const errors = [];
 const read = (file) => readFileSync(join(root, file), "utf8");
 const json = (file) => JSON.parse(read(file));
 
+const targetBranch = process.env.GITHUB_BASE_REF
+  || (process.env.GITHUB_REF ?? "").replace(/^refs\/heads\//, "")
+  || execFileSync("git", ["branch", "--show-current"], { cwd: root, encoding: "utf8" }).trim();
+if (targetBranch === "main" && candidates.has("AGENTS.md")) {
+  errors.push("Keep AGENTS.md on dev; remove it from the main release candidate.");
+}
+
 for (const file of [
   "LICENSE", "NOTICE", "UPSTREAM.md", "Cargo.lock",
   "apps/desktop/package-lock.json", "apps/desktop/src-tauri/Cargo.lock",
