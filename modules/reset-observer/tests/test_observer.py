@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+from contextlib import closing
 import math
 from pathlib import Path
 import sqlite3
@@ -620,13 +621,13 @@ class ImportAndReportTests(TemporaryStore):
                 }
             )
 
-        with sqlite3.connect(producer) as db:
+        with closing(sqlite3.connect(producer)) as db, db:
             db.executescript(
                 "CREATE TABLE observations(id INTEGER PRIMARY KEY,source TEXT,observed_at REAL,normalized TEXT); CREATE TABLE forecasts(id TEXT,issued_at REAL,payload TEXT);"
             )
             db.execute("INSERT INTO forecasts VALUES ('a',?,?)", (T, payload(T)))
         intelligence_database(self.store, producer, T + 1)
-        with sqlite3.connect(producer) as db:
+        with closing(sqlite3.connect(producer)) as db, db:
             db.execute(
                 "UPDATE forecasts SET payload='body no longer needed' WHERE id='a'"
             )
@@ -727,7 +728,7 @@ class ImportAndReportTests(TemporaryStore):
 
     def test_readonly_producer_import_preserves_raw_curve(self):
         producer = self.root / "producer.sqlite"
-        with sqlite3.connect(producer) as db:
+        with closing(sqlite3.connect(producer)) as db, db:
             db.executescript(
                 "CREATE TABLE observations(id INTEGER PRIMARY KEY,source TEXT,observed_at REAL,normalized TEXT); CREATE TABLE forecasts(id TEXT,issued_at REAL,payload TEXT);"
             )

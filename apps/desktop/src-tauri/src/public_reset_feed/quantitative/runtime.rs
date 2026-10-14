@@ -42,11 +42,15 @@ impl Configuration {
         if let Some(root) = self
             .python_path
             .parent()
-            .and_then(Path::parent)
-            .filter(|root| root.join("reset-runtime-manifest.json").is_file())
+            .into_iter()
+            .flat_map(|parent| [Some(parent), parent.parent()])
+            .flatten()
+            .find(|root| root.join("reset-runtime-manifest.json").is_file())
         {
-            command.args(["-I", "-B"]);
-            command.env("SSL_CERT_FILE", root.join("certs.pem"));
+            command.args(["-I", "-B", "-X", "utf8"]);
+            if root.join("certs.pem").is_file() {
+                command.env("SSL_CERT_FILE", root.join("certs.pem"));
+            }
         }
         command
             .current_dir(&self.module_directory)
@@ -203,7 +207,11 @@ impl Supervisor {
 }
 
 fn bundled_configuration(root: &Path, directory: &Path) -> Configuration {
-    let python = root.join("bin/python3");
+    let python = root.join(if cfg!(windows) {
+        "python.exe"
+    } else {
+        "bin/python3"
+    });
     let version = read_json::<serde_json::Value>(&root.join("reset-runtime-manifest.json"))
         .ok()
         .and_then(|v| v.get("python").and_then(|p| p.as_str()).map(str::to_owned))
@@ -213,7 +221,7 @@ fn bundled_configuration(root: &Path, directory: &Path) -> Configuration {
     let observer = directory.join("reset-observer");
     let config_path = observer.join("runner.json");
     let config = serde_json::json!({
-        "producer_command": [python, "-I", "-B", "-m", "reset_intelligence", "run", "--db", producer.join("state.sqlite"),
+        "producer_command": [python, "-I", "-B", "-X", "utf8", "-m", "reset_intelligence", "run", "--db", producer.join("state.sqlite"),
             "--output", producer.join("consumer.json"), "--audit-output", producer.join("audit.json")]
     });
     // Generated launch arguments contain no user configuration. Refresh them
@@ -229,7 +237,11 @@ fn bundled_configuration(root: &Path, directory: &Path) -> Configuration {
     }
     Configuration {
         python_path: python,
-        module_directory: root.join(format!("lib/python{version}/site-packages")),
+        module_directory: root.join(if cfg!(windows) {
+            "Lib/site-packages".into()
+        } else {
+            format!("lib/python{version}/site-packages")
+        }),
         database_path: observer.join("state.sqlite"),
         producer_database_path: Some(producer.join("state.sqlite")),
         config_path: Some(config_path),

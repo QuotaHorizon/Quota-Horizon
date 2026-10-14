@@ -23,7 +23,7 @@ See [CPA bridge](CPA_BRIDGE.en.md) for environment variables and response format
 The overview shows the next 24 / 48-hour outlook side by side. An active explicit announcement takes
 precedence at 100% for each covered window, while retaining model estimates, scheduled times and subsequent completion reports.
 
-The macOS installer includes the [independent forecasting and evaluation modules](DEVELOPMENT.en.md#connect-the-desktop-radar).
+The macOS and Windows x64 installers include the [independent forecasting and evaluation modules](DEVELOPMENT.en.md#connect-the-desktop-radar).
 Opening the app starts background collection; no separate Python installation is needed.
 The main estimate covers a reset or a newly issued reset credit, with automatic-reset probabilities alongside it.
 The next-72-hour chart compares the combined estimate, community aggregate and historical baseline. Source comparisons

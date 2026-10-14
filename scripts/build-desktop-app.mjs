@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { desktopSigningPlan } from "./desktop-signing.mjs";
 import { bundleRuntime } from "./bundle-reset-runtime.mjs";
+import { bundleWindowsRuntime } from "./bundle-windows-runtime.mjs";
 
 // Modified by the QuotaHorizon project from Codex Switch v1.3.5.
 
@@ -37,6 +38,14 @@ if (!existsSync(tauriCli)) {
 
 if (process.platform === "darwin" && (!target || target === "aarch64-apple-darwin")) {
   const runtime = bundleRuntime(process.env.QUOTAHORIZON_PYTHON);
+  tauriArgs.splice(cargoArguments < 0 ? tauriArgs.length : cargoArguments, 0,
+    "--config", JSON.stringify({ bundle: { resources: { [`${runtime}/`]: "reset-runtime/" } } }));
+}
+if (process.platform === "win32") {
+  if (target && target !== "x86_64-pc-windows-msvc") {
+    fail("The complete Windows installer currently requires the x86_64-pc-windows-msvc target.");
+  }
+  const runtime = bundleWindowsRuntime();
   tauriArgs.splice(cargoArguments < 0 ? tauriArgs.length : cargoArguments, 0,
     "--config", JSON.stringify({ bundle: { resources: { [`${runtime}/`]: "reset-runtime/" } } }));
 }

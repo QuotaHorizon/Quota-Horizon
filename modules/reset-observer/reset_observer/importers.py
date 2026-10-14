@@ -198,7 +198,7 @@ def intelligence_database(store, path, now):
 def json_lines(store, path, now):
     """Generic forecast contract for independent clients, one Forecast per line."""
     count = 0
-    for line in Path(path).read_text().splitlines():
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         payload = json.loads(line)

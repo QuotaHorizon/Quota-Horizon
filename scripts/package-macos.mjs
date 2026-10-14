@@ -150,6 +150,15 @@ function main() {
     assert.deepEqual(readdirSync(mount).filter((name) => !name.startsWith(".")).sort(),
       ["Applications", "QuotaHorizon.app"]);
 
+    if (process.env.QUOTAHORIZON_DMG_SCREENSHOT) {
+      const screenshot = resolve(root, process.env.QUOTAHORIZON_DMG_SCREENSHOT);
+      mkdirSync(dirname(screenshot), { recursive: true });
+      run("/usr/bin/osascript", ["-e", `tell application "Finder" to open POSIX file ${JSON.stringify(mount)}`,
+        "-e", 'tell application "Finder" to activate', "-e", "delay 2"]);
+      run("/usr/sbin/screencapture", ["-x", screenshot]);
+      run("/usr/bin/osascript", ["-e", 'tell application "Finder" to close front window']);
+    }
+
     const installed = join(work, "installed", "QuotaHorizon.app");
     run("/usr/bin/ditto", [join(mount, "QuotaHorizon.app"), installed]);
     inspectBundle(installed, config);

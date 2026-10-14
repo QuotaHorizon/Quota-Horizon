@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  group: desktop-${{ github.workflow }}-${{ github.ref }}-${{ inputs.platform || 'macos-arm64' }}
   cancel-in-progress: true
 
 jobs:
@@ -106,12 +106,57 @@ jobs:
           (cd modules/reset-intelligence && python -m unittest discover -s tests)
           (cd modules/reset-observer && python -m unittest discover -s tests)
 
-      - name: Build the native application and verify embedded assets
+      - name: Build the macOS application and verify embedded assets
+        if: runner.os != 'Windows'
         run: npm --prefix apps/desktop run "${{ matrix.build }}" -- -- --locked
+
+      - name: Prepare and test the Windows forecasting runtime
+        # Windows tests use exactly the isolated runtime distributed to users.
+        if: runner.os == 'Windows'
+        run: |
+          node scripts/prepare-windows-runtime.mjs
+          node scripts/bundle-windows-runtime.mjs
+          dist/reset-runtime/python.exe -I -B -X utf8 -c 'import sys, numpy; print(sys.executable); print(numpy.__version__)'
+          dist/reset-runtime/python.exe -I -B -X utf8 -m unittest discover -s modules/reset-intelligence/tests
+          dist/reset-runtime/python.exe -I -B -X utf8 -m unittest discover -s modules/reset-observer/tests
+
+      - name: Build the Windows application and verify embedded assets
+        if: runner.os == 'Windows'
+        run: npm --prefix apps/desktop run "${{ matrix.build }}" -- -- --locked
+
+      - name: Verify the Windows installer and its installed runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-Item apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          $destination = Join-Path $env:RUNNER_TEMP 'QuotaHorizon install test'
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$destination" -WindowStyle Hidden -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          $expected = (Get-Content apps/desktop/src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $executable = Get-Item "$destination/quota-horizon-desktop.exe"
+          if ($executable.VersionInfo.ProductVersion -ne $expected) { throw 'Installed version differs' }
+          node scripts/bundle-windows-runtime.mjs --verify "$destination/reset-runtime"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed forecasting runtime failed' }
+          & "$destination/reset-runtime/python.exe" -I -B -X utf8 -m unittest discover -s modules/reset-observer/tests -p test_bundled_runtime.py
+          if ($LASTEXITCODE -ne 0) { throw 'Installed worker lifecycle failed' }
+          $uninstaller = Start-Process -FilePath "$destination/uninstall.exe" -ArgumentList '/S' -WindowStyle Hidden -PassThru -Wait
+          if ($uninstaller.ExitCode -ne 0) { throw 'Test installation cleanup failed' }
 
       - name: Package and verify the macOS installer
         if: runner.os == 'macOS'
+        env:
+          QUOTAHORIZON_DMG_SCREENSHOT: dist/installer-preview/macos.png
         run: npm run package:mac -- --skip-build
+
+      - name: Retain the macOS installer window preview
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: QuotaHorizon-macos-installer-preview-${{ github.sha }}
+          path: dist/installer-preview/macos.png
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Retain the installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

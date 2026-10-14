@@ -27,7 +27,7 @@ def atomic_write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".observer-", dir=path.parent)
     try:
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
@@ -45,9 +45,10 @@ def exclusive(db):
         if sys.platform == "win32":
             import msvcrt
 
-            handle.seek(0)
-            handle.write(b"0")
-            handle.flush()
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
             handle.seek(0)
             msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
         else:
@@ -75,7 +76,7 @@ def running(db):
 
 
 def read_config(path):
-    return json.loads(Path(path).read_text()) if path else {}
+    return json.loads(Path(path).read_text(encoding="utf-8")) if path else {}
 
 
 def producer_due(store, now, interval):
@@ -139,6 +140,7 @@ def run_once(args, config, refresh=False, evaluator=None):
                     stderr=subprocess.DEVNULL,
                     timeout=90,
                     check=False,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
                 )
                 producer = {
                     "status": "current" if result.returncode == 0 else "unavailable",
@@ -429,7 +431,7 @@ def start(args):
         return {"state": "already_running"}
     command = [
         sys.executable,
-        *(["-I", "-B"] if bundled_revision() else []),
+        *(["-I", "-B", "-X", "utf8"] if bundled_revision() else []),
         "-m",
         "reset_observer",
         "watch",
@@ -451,6 +453,7 @@ def start(args):
             stderr=log,
             start_new_session=True,
             close_fds=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
     return started_worker(process, args.db, log_path)
 

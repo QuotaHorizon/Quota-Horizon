@@ -14,11 +14,34 @@ from reset_observer.runtime import (
     worker_path,
     stop_path,
     watch,
+    atomic_write,
+    exclusive,
+    running,
+    read_config,
 )
 from reset_observer.evidence import text_stage, reported_stage
 
 
 class BundledUpgradeTests(unittest.TestCase):
+    def test_utf8_exports_and_configuration_round_trip_on_every_platform(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "radar.json"
+            value = {"statement": "额度更新 · 📈", "path": str(Path(d) / "中文目录")}
+            atomic_write(path, json.dumps(value, ensure_ascii=False))
+            self.assertEqual(json.loads(path.read_bytes().decode("utf-8")), value)
+            self.assertEqual(read_config(path), value)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows byte-range lock")
+    def test_lock_probes_do_not_grow_the_lock_file_or_release_the_worker(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / "state.sqlite"
+            with exclusive(db):
+                for _ in range(3):
+                    self.assertTrue(running(db))
+                self.assertEqual(Path(str(db) + ".lock").stat().st_size, 1)
+            self.assertFalse(running(db))
+            self.assertEqual(Path(str(db) + ".lock").stat().st_size, 1)
+
     def test_conditional_pledge_does_not_inherit_a_tracker_completion_label(self):
         text = "For the next 28 days, each day we either ship improvements or ship a full reset."
         self.assertEqual(text_stage(text), "conditional")

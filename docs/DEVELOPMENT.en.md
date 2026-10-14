@@ -46,10 +46,11 @@ Tests marked `ignored` have individual account, system credential or network req
 [Desktop CI](../.github/workflows/desktop.yml) tests and packages macOS Apple Silicon on pushes
 and pull requests to `dev` and `main`. Manual runs let you choose `macos-arm64` or `windows-x64`;
 each run builds only the selected platform, producing a DMG or NSIS `.exe` respectively.
-Both platforms test the frontend and Rust code. The macOS job also tests and bundles the independent
-forecasting and evaluation modules. [macos-runtime.conda.lock](../.github/ci/macos-runtime.conda.lock)
-pins their full Python/NumPy dependency set by package URL and SHA-256, including redistribution notices.
-The runtime is checked for isolation, Apple Silicon architecture and macOS 13 compatibility during packaging.
+Both platforms test the frontend, Rust code and independent forecasting and evaluation modules.
+[macos-runtime.conda.lock](../.github/ci/macos-runtime.conda.lock) and
+[windows-runtime.lock.json](../.github/ci/windows-runtime.lock.json) pin their runtime downloads by URL and SHA-256.
+Packaging checks runtime isolation and native architecture, including macOS 13 compatibility on Apple Silicon.
+The Windows job silently installs the NSIS package and tests the installed runtime and worker lifecycle.
 
 Download the installers from the run's artifacts; their names include the platform and source commit.
 Artifacts are retained for 14 days. The DMG job checks the bundled runtime, signature, image and install copy;
@@ -137,7 +138,7 @@ variants, compared using Brier and log loss on matching windows. The evaluator l
 
 ## Connect the desktop radar
 
-The macOS installer bundles the independent modules and their runtime. First launch creates their own databases
+The macOS and Windows x64 installers bundle the independent modules and their runtime. First launch creates their own databases
 and JSON exports in app data, then starts background collection and recovery. During an upgrade the old worker
 finishes its current tick and exits before the new revision starts; data stays in place. Existing custom connections
 and runtime configurations remain active. The commands below are for development or connecting another output.
@@ -181,7 +182,7 @@ then starts with the new arguments. Existing databases and reports remain in pla
 To manage or stop the modules yourself, rerun the JSON connection command with `--external`, then use the module's
 `stop` command. This disables automatic recovery and preserves existing processes and data. The desktop reads JSON;
 module processes manage their databases and models. Removing custom connection and runtime configuration restores
-the bundled modules on macOS. Existing event history and reading state are preserved.
+the bundled modules. Existing event history and reading state are preserved.
 
 ## Build
 
@@ -205,6 +206,7 @@ On a Windows x64 host, run:
 
 ```sh
 npm --prefix apps/desktop ci --no-audit --no-fund
+node scripts/prepare-windows-runtime.mjs
 npm --prefix apps/desktop run build:app:win
 ```
 
@@ -213,8 +215,11 @@ The expected output directory is `apps/desktop/src-tauri/target/x86_64-pc-window
 The installer defaults to per-user installation and requires internet access to download WebView2 if the target machine lacks it.
 Without Windows code-signing configuration, the package has no publisher signature; this does not establish compatibility with SmartScreen or enterprise policies.
 
-`build:app:win-arm64` additionally requires MSVC ARM64 build tools and the `aarch64-pc-windows-msvc` Rust target.
-Passing x64 builds or tests does not verify ARM64. On Windows, `npm run test:scripts` skips the macOS-only POSIX permissions/symlink test.
+The preparation script downloads the pinned official embedded CPython, NumPy wheel and time-zone data into `dist/`,
+verifies their hashes and retains redistribution notices. It leaves system Python and `PATH` unchanged.
+The build bundles these files with both modules, verifies x64 binaries, TLS certificates, time-zone data and NumPy,
+and runs independently of developer environments. Windows ARM64 packaging is not yet available.
+On Windows, `npm run test:scripts` skips the macOS-only POSIX permissions/symlink tests.
 
 Windows discovers the official desktop runtime at `%LOCALAPPDATA%/OpenAI/Codex/bin/<build>/codex.exe`, even when it is absent from `PATH`.
 The first read requires installation confirmation. The selection stays host-local; restart revalidates its file digest and version, and updates require confirmation again.

@@ -28,7 +28,7 @@ def write_json(path: str, payload: dict):
     # Readers see a complete old or new document, never a half-written forecast.
     fd, tmp = tempfile.mkstemp(prefix=".forecast-", dir=destination.parent)
     try:
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(payload, stream, ensure_ascii=False, indent=2, allow_nan=False)
             stream.write("\n")
             stream.flush()
@@ -66,7 +66,7 @@ def main(argv=None) -> int:
                 time.sleep(60)
         except KeyboardInterrupt:
             return 0
-    config_data = json.loads(Path(args.config).read_text()) if args.config else {}
+    config_data = json.loads(Path(args.config).read_text(encoding="utf-8")) if args.config else {}
     extra = config_data.get("sources", [])
     disabled = set(config_data.get("disabled_sources", []))
     specs = [s for s in [*CATALOG, *extra] if s["id"] not in disabled]

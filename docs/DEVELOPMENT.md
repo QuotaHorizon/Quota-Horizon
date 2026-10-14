@@ -46,10 +46,11 @@ cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
 [Desktop CI](../.github/workflows/desktop.yml) 在向 `dev`、`main` 推送或发起拉取请求时
 测试并打包 macOS Apple Silicon。手动运行可选择 `macos-arm64` 或 `windows-x64`；
 每次只构建选中的平台，分别生成 DMG 或 NSIS `.exe`。
-两端均执行前端与 Rust 检查。macOS 任务还测试并打包独立预测和评估模块；
-[macos-runtime.conda.lock](../.github/ci/macos-runtime.conda.lock) 使用包 URL 和 SHA-256
-锁定完整 Python / NumPy 依赖，包括再分发许可文件。打包时检查运行环境隔离、
-Apple Silicon 架构及 macOS 13 兼容性。
+两端均测试前端、Rust 以及独立预测和评估模块。
+[macos-runtime.conda.lock](../.github/ci/macos-runtime.conda.lock) 与
+[windows-runtime.lock.json](../.github/ci/windows-runtime.lock.json) 使用 URL 和 SHA-256 锁定运行时下载。
+打包时检查运行环境隔离和原生架构，其中 Apple Silicon 还检查 macOS 13 兼容性。
+Windows 任务静默安装 NSIS 包，并测试安装后的运行环境与后台进程生命周期。
 
 可从该次运行的产物下载安装器；名称包含平台与源码提交，保留 14 天。
 DMG 任务检查内置运行环境、签名、磁盘映像和安装副本；两端都检查原生可执行文件
@@ -130,7 +131,7 @@ python -m reset_observer run --db ../../private-data/reset-observer/state.sqlite
 
 ## 接入桌面雷达
 
-macOS 安装包包含独立模块及运行环境。首次打开即在应用数据目录创建各自的数据库与 JSON，
+macOS 与 Windows x64 安装包包含独立模块及运行环境。首次打开即在应用数据目录创建各自的数据库与 JSON，
 后台启动和恢复采集；升级时旧进程完成当前轮次后退出，再启动新版本，数据保留原位。
 已有自定义连接和运行配置继续生效。以下命令用于开发或连接另一份独立输出。
 
@@ -170,7 +171,7 @@ node scripts/connect-reset-modules.mjs --forecast /absolute/path/forecast.json -
 
 需要自行管理或停止模块时，先重新执行 JSON 连接命令并加 `--external`，再运行模块的 `stop`。
 这会关闭自动恢复，保留进程和数据。桌面只读取 JSON，由模块进程管理数据库与模型。
-移除自定义连接与运行配置后，macOS 应用恢复自带模块。原有事件历史与阅读状态保留。
+移除自定义连接与运行配置后，应用恢复自带模块。原有事件历史与阅读状态保留。
 
 ## 构建
 
@@ -193,6 +194,7 @@ macOS 产物位于 `apps/desktop/src-tauri/target/aarch64-apple-darwin/release/b
 
 ```sh
 npm --prefix apps/desktop ci --no-audit --no-fund
+node scripts/prepare-windows-runtime.mjs
 npm --prefix apps/desktop run build:app:win
 ```
 
@@ -201,8 +203,10 @@ Tauri 自动合并 `tauri.windows.conf.json`，生成 NSIS `.exe` 安装包，�
 安装包默认按用户安装；目标机器缺少 WebView2 时，安装程序需要联网下载运行时。
 未配置 Windows 代码签名的包没有发布者签名，不能据此认为 SmartScreen 或企业策略兼容性已经验证。
 
-`build:app:win-arm64` 另外要求 MSVC ARM64 构建组件和 `aarch64-pc-windows-msvc` Rust target；
-x64 构建或测试通过不代表 ARM64 已验证。`npm run test:scripts` 在 Windows 上跳过仅适用于 POSIX 的 macOS 权限/符号链接测试。
+准备脚本将固定版本的官方嵌入式 CPython、NumPy wheel 与时区数据下载到 `dist/`，
+校验哈希并保留再分发许可文件，系统 Python 和 `PATH` 保持不变。
+构建将运行时与两个模块一同打包，校验 x64 二进制、TLS 证书、时区数据和 NumPy，运行无需开发环境。
+Windows ARM64 安装包暂未提供。`npm run test:scripts` 在 Windows 上跳过 macOS 的 POSIX 权限/符号链接测试。
 
 Windows 会发现官方桌面应用导出的 `%LOCALAPPDATA%/OpenAI/Codex/bin/<构建>/codex.exe`，即使它不在 `PATH` 中。
 首次使用需要确认读取来源；确认记录仅保存在本机宿主，重启时重新验证文件摘要与版本，读取组件更新后须再次确认。

@@ -6,20 +6,31 @@ fn bundled_install_starts_without_developer_configuration_and_respects_external_
     let root = tempfile::tempdir().unwrap();
     let resources = root.path().join("resources");
     let runtime = resources.join("reset-runtime");
+    let site = runtime.join(if cfg!(windows) {
+        "Lib/site-packages"
+    } else {
+        "lib/python3.11/site-packages"
+    });
     fs::create_dir_all(runtime.join("bin")).unwrap();
-    fs::create_dir_all(runtime.join("lib/python3.11/site-packages/reset_observer")).unwrap();
-    fs::write(runtime.join("bin/python3"), "").unwrap();
+    fs::create_dir_all(site.join("reset_observer")).unwrap();
     fs::write(
-        runtime.join("lib/python3.11/site-packages/reset_observer/__main__.py"),
+        runtime.join(if cfg!(windows) {
+            "python.exe"
+        } else {
+            "bin/python3"
+        }),
         "",
     )
     .unwrap();
+    fs::write(site.join("reset_observer/__main__.py"), "").unwrap();
     fs::write(runtime.join("reset-runtime-manifest.json"), "{}").unwrap();
     let data = root.path().join("data");
     let mut supervisor = Supervisor::bundled(Some(resources), &data);
     supervisor.check(&data, Utc::now(), |config| {
         assert!(config.valid());
         assert!(config.command().get_args().any(|a| a == "-I"));
+        assert!(config.command().get_args().any(|a| a == "utf8"));
+        assert_eq!(config.module_directory, site);
         assert_eq!(
             config.database_path,
             data.join("reset-observer/state.sqlite")
