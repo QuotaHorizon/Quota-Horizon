@@ -12,12 +12,18 @@ from .quant import ModelConfig, Survival
 from .increments import combine, counterfactuals
 from .response import announcement_context
 from .signals import apply_comment_estimates
+from .sources import normalization_outdated
 
 HOURS = list(range(1, 73))
 
 
 def align_curve(curve, now: float, hours: list[int], baseline: Survival) -> tuple[list[float], dict] | None:
-    if curve.issues or now < curve.origin or now >= curve.expires_at:
+    if (
+        normalization_outdated(curve)
+        or curve.issues
+        or now < curve.origin
+        or now >= curve.expires_at
+    ):
         return None
     age = (now - curve.origin) / 3600
     start = curve.cdf(age)
@@ -105,7 +111,15 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                 continue
             health = next(h for h in result["source_health"] if h["id"] == c.source)
             reason = list(c.issues)
+            # Clock and event failures are independent diagnostics. Collect both
+            # before deciding admission, even when another issue already rejects it.
+            if now >= c.expires_at:
+                reason.append("expired")
+            if now < c.origin:
+                reason.append("horizon_not_started")
             if c.source == "codex_reset" and c.metadata.get("estimate_kind") != "published_complete":
+                reason.append("source_normalization_outdated")
+            if normalization_outdated(c):
                 reason.append("source_normalization_outdated")
             if c.last_reset_at is not None and c.last_reset_at < events[-1].at - 3600:
                 reason.append("missed_latest_event")

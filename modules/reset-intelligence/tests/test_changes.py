@@ -17,6 +17,7 @@ class ChangesTests(unittest.TestCase):
     def test_contributions_sum_to_actual_change_including_projection_and_entry(self):
         before = forecast(self.store, NOW, RELIEF)
         curve = Curve("lunar", RELIEF, NOW, NOW, NOW, NOW + 3600, [(24,.8),(48,.9)], metadata={"baseline_points":[(24,.2),(48,.4)]})
+        curve.metadata.update(adapter="lunar", adapter_contract=1)
         poll = {"kind":"probability_votes", "target":RELIEF, "population":"private", "id":"round",
                 "start":NOW-3600, "expires":NOW+86400, "total":20, "bins":[{"p":.9,"votes":20}], "private":True}
         self.store.save("lunar", NOW, {}, Observation("lunar", NOW, NOW, curves=[curve]))

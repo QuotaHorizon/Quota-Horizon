@@ -30,6 +30,21 @@ USER_AGENT = "ResetIntelligence/0.1 (+https://github.com/QuotaHorizon/Quota-Hori
 SOURCE_INTERVALS = {s["id"]: 60 for s in CATALOG}
 SOURCE_INTERVALS.update(lunar=300, observatory=300, dreaife=300)
 
+# Only these adapters changed normalization in this upgrade. The catalog binds
+# old public rows; explicit metadata binds newly parsed custom source IDs.
+ADAPTER_CONTRACTS = {"lunar": 1, "observatory": 1, "monitor": 1}
+
+
+def normalization_outdated(curve, adapter=None):
+    if adapter is None:
+        adapter = curve.metadata.get("adapter") or next(
+            (s["adapter"] for s in CATALOG if s["id"] == curve.source), None
+        )
+    return adapter in ADAPTER_CONTRACTS and (
+        curve.metadata.get("adapter") != adapter
+        or curve.metadata.get("adapter_contract") != ADAPTER_CONTRACTS[adapter]
+    )
+
 
 def statement_relevance(text):
     if re.search(r"\beither\b.{0,350}\bor\b.{0,60}\b(?:full |global )?reset\b", text, re.I | re.S):
@@ -140,7 +155,12 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
     elif adapter == "monitor":
         if "t" in d:
             d = inert(d)["result"]
-        last = max(stamp(e["dateTime"]) for e in d["history"] if e["type"] == "forced-reset")
+        last = max(
+            (stamp(e["dateTime"]) for e in d["history"] if e["type"] == "forced-reset"),
+            default=None,
+        )
+        if last is None:
+            obs.issues.append("missing_forced_reset_anchor")
         c = curve(AUTOMATIC, d["updatedAt"], [(24, probability(d["forecast"]["score24h"], 100)),
                   (48, probability(d["forecast"]["score48h"], 100))], 7 * 3600, last,
                   metadata={"upstream_health": d["status"], "forecast_status": d["forecastStatus"]})
@@ -179,18 +199,49 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
                 c.metadata["announcement"] = {"url": url, "at": published, "deadline": deadline}
     elif adapter == "observatory":
         vm = d["viewModel"]
-        curve(RELIEF, d["checkedAt"], [(h, vm[f"probability{h}h"]) for h in (12, 24, 48, 72)],
-              3600, vm["regularResetForecast"]["lastCompletedAt"],
-              issues=["upstream_stale"] if d["dataHealth"]["stale"] else [],
-              metadata={"upstream_health": d["dataHealth"]["overall"]})
+        curve(
+            RELIEF,
+            d["checkedAt"],
+            [(h, vm[f"probability{h}h"]) for h in (12, 24, 48, 72)],
+            3600,
+            d.get("lastRandomResetAt"),
+            issues=["upstream_stale"] if d["dataHealth"]["stale"] else [],
+            metadata={"upstream_health": d["dataHealth"]["overall"]},
+        )
+        if d.get("lastRandomResetAt") is None:
+            obs.issues.append("missing_random_reset_anchor")
     elif adapter == "lunar":
-        curve(RELIEF, d["generatedAt"], [(d["nearTerm"]["hours"], d["nearTerm"]["probability"]),
-              (24, d["next24Hours"]["probability"])], 3600, d["lastResetAt"],
-              metadata={"source_interval_24h": [d["next24Hours"]["low"], d["next24Hours"]["high"]],
-                        "source_model": d["comparisons"]["modelVersion"], "decomposition_version": 1,
-                        "baseline_points": [(d["nearTerm"]["hours"], probability(d["comparisons"]["withoutHints"]["sixHours"])),
-                                            (24, probability(d["comparisons"]["withoutHints"]["twentyFourHours"]))]
-                            if "withoutHints" in d["comparisons"] else None})
+        comparisons = d.get("comparisons") or {}
+        without_hints = comparisons.get("withoutHints") or {}
+        # The published no-hints baseline has fixed 6h/24h windows. A partial
+        # or differently windowed pair cannot decompose the complete curve.
+        paired = d["nearTerm"]["hours"] == 6 and all(
+            without_hints.get(k) is not None for k in ("sixHours", "twentyFourHours")
+        )
+        curve(
+            RELIEF,
+            d["generatedAt"],
+            [
+                (d["nearTerm"]["hours"], d["nearTerm"]["probability"]),
+                (24, d["next24Hours"]["probability"]),
+            ],
+            600,
+            d["lastResetAt"],
+            metadata={
+                "source_interval_24h": [
+                    d["next24Hours"]["low"],
+                    d["next24Hours"]["high"],
+                ],
+                "source_model": comparisons.get("modelVersion"),
+                "decomposition_version": 1,
+                "baseline_points": [
+                    (6, probability(without_hints["sixHours"])),
+                    (24, probability(without_hints["twentyFourHours"])),
+                ]
+                if paired
+                else None,
+            },
+        )
     elif adapter == "dreaife":
         d = raw["snapshot"]["data"]
         obs.generated_at = stamp(d["issued_at"])
@@ -272,6 +323,11 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
         raise ValueError("unknown source adapter")
     if obs.generated_at is not None and obs.generated_at > at + 60:
         raise ValueError("source clock is in the future")
+    if adapter in ADAPTER_CONTRACTS:
+        for c in obs.curves:
+            c.metadata.update(
+                adapter=adapter, adapter_contract=ADAPTER_CONTRACTS[adapter]
+            )
     return obs
 
 
@@ -323,6 +379,14 @@ def collect(store, specs: list[dict] | None = None, minimum_interval: float | No
     outdated.update(s["id"] for s in specs if s.get("adapter") == "codex_reset"
                     and (obs := observations.get(s["id"])) is not None
                     and any(c.metadata.get("comment_version") != 1 for c in obs.curves))
+    outdated.update(
+        s["id"]
+        for s in specs
+        if s.get("adapter") in ADAPTER_CONTRACTS
+        and (obs := observations.get(s["id"])) is not None
+        and any(normalization_outdated(c, s["adapter"]) for c in obs.curves)
+    )
+
     def interval(spec):
         normal = minimum_interval if minimum_interval is not None else SOURCE_INTERVALS.get(spec["id"], 900)
         last = latest.get(spec["id"], {})
@@ -337,6 +401,7 @@ def collect(store, specs: list[dict] | None = None, minimum_interval: float | No
                 failures += 1
             return min(900, 60 * 2 ** max(0, failures - 1))
         return 0 if spec["id"] in outdated else normal
+
     due = [s for s in specs if time.time() - latest.get(s["id"], {}).get("observed_at", 0) >= interval(s)]
     outcomes = []
     with ThreadPoolExecutor(max_workers=5) as pool:

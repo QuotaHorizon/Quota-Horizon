@@ -4,7 +4,74 @@ from __future__ import annotations
 import json
 
 from .contracts import TARGETS, digest, iso
+from .sources import normalization_outdated
 
+
+def native_support(curve, issued_at, result, component):
+    """Source deadline and freshness are different clocks; tails are model values."""
+    remaining = max(0.0, curve.points[-1][0] - (issued_at - curve.origin) / 3600)
+    last_event = result.get("last_event_at")
+    current = (
+        not normalization_outdated(curve)
+        and not (
+            curve.source == "codex_reset"
+            and curve.metadata.get("estimate_kind") != "published_complete"
+        )
+        and curve.aligned(issued_at, 0, last_event) is not None
+        and not (
+            last_event is not None
+            and curve.last_reset_at is not None
+            and curve.last_reset_at < last_event - 3600
+        )
+    )
+    # Only the issued component can establish that a tail was actually used.
+    used = bool(
+        component and component.get("metadata", {}).get("origin") == curve.origin
+    )
+    return {
+        "published_hours": curve.points[-1][0],
+        "remaining_hours": remaining,
+        "valid_until": iso(curve.expires_at),
+        "current": current,
+        "native_deadline": iso(curve.origin + curve.points[-1][0] * 3600),
+        "windows": {
+            str(h): {
+                "native_supported": current and h <= remaining,
+                "aligned_value_basis": "native"
+                if used and h <= remaining
+                else "baseline_tail"
+                if used
+                else "not_included",
+            }
+            for h in (24, 48)
+        },
+    }
+
+def participation(component):
+    role = (
+        component.get(
+            "role",
+            "community" if component.get("family") == "community" else "background",
+        )
+        if component
+        else None
+    )
+    family = component.get("family") if component else None
+    return {
+        "role": role,
+        "background_anchor": bool(
+            component and component.get("baseline_weight", 0) > 0
+        ),
+        "information_revision": bool(
+            family == "radars"
+            and role == "information"
+            and component.get("weight", 0) > 0
+        ),
+        "comparison_only": bool(family == "radars" and role == "comparison"),
+        "community_residual": bool(
+            family == "community" and component.get("weight", 0) > 0
+        ),
+    }
 
 def source_audit(store, now, results=None):
     if results is None:
@@ -13,9 +80,11 @@ def source_audit(store, now, results=None):
             row = store.db.execute("SELECT payload FROM forecasts WHERE issued_at<=? AND target=? ORDER BY issued_at DESC,rowid DESC LIMIT 1", (now, target)).fetchone()
             if row:
                 results.append(json.loads(row[0]))
-    observations = store.observations(now)
     rows, targets, attempts_by_source = [], [], {}
     for result in results:
+        issued_at = result["issued_at"]
+        observations = store.observations(issued_at)
+        target_rows = []
         components = {c["id"]: c for c in result["components"]}
         training = result.get("training", {})
         weights, groups = training.get("weights", {}), training.get("within_groups", [])
@@ -27,9 +96,10 @@ def source_audit(store, now, results=None):
             source = health["id"]
             obs = observations.get(source)
             component = components.get(source)
-            if source not in attempts_by_source:
-                attempts_by_source[source] = store.db.execute("SELECT COUNT(*) n,SUM(normalized IS NOT NULL) decoded,SUM(error IS NOT NULL) failed FROM observations WHERE source=? AND observed_at BETWEEN ? AND ?", (source, now - 7*86400, now)).fetchone()
-            attempts = attempts_by_source[source]
+            attempt_key = (source, issued_at)
+            if attempt_key not in attempts_by_source:
+                attempts_by_source[attempt_key] = store.db.execute("SELECT COUNT(*) n,SUM(normalized IS NOT NULL) decoded,SUM(error IS NOT NULL) failed FROM observations WHERE source=? AND observed_at BETWEEN ? AND ?", (source, issued_at - 7*86400, issued_at)).fetchone()
+            attempts = attempts_by_source[attempt_key]
             details = {}
             if component:
                 family = component["family"]
@@ -53,11 +123,14 @@ def source_audit(store, now, results=None):
                            "background_anchor_weight": component.get("baseline_weight"),
                            "signal_baseline_24h": (component.get("signal_baseline") or [None]*72)[23],
                            "signal_baseline_48h": (component.get("signal_baseline") or [None]*72)[47],
+                           'revision_24h_before_projection': mass * (component['probabilities'][23] - component['signal_baseline'][23]) if component.get('role') == 'information' and component.get('signal_baseline') else None,
+                           'revision_48h_before_projection': mass * (component['probabilities'][47] - component['signal_baseline'][47]) if component.get('role') == 'information' and component.get('signal_baseline') else None,
                            "comment": metadata.get("comment"),
                            "probability_24h": component["probabilities"][23], "probability_48h": component["probabilities"][47]}
             curves = [c for c in obs.curves if c.target == result["target"]] if obs else []
-            rows.append({"source": "internal_signal_" + digest(source)[:8] if health["private"] else source,
+            target_rows.append({"source": "internal_signal_" + digest(source)[:8] if health["private"] else source,
                          "private": health["private"], "target": result["target"],
+                         "issued_at": iso(issued_at), "participation": participation(component),
                          "admission": "included" if component else "excluded" if health["issues"] or health["error"] else
                                       "supporting_evidence" if obs and (obs.events or obs.facts) else "different_target_or_no_probability",
                          "has_supporting_evidence": bool(obs and (obs.events or obs.facts)),
@@ -67,15 +140,17 @@ def source_audit(store, now, results=None):
                          "seven_day_attempts": attempts["n"], "decoded_attempts": attempts["decoded"] or 0,
                          "failed_attempts": attempts["failed"] or 0,
                          "decode_rate": attempts["decoded"] / attempts["n"] if attempts["n"] else None,
-                         "native_support": [{"published_hours": c.points[-1][0], "remaining_hours": max(0, c.points[-1][0] - (now-c.origin)/3600),
-                                             "valid_until": iso(c.expires_at), "current": not c.issues and c.origin <= now < c.expires_at} for c in curves],
+                         "native_support": [native_support(c, issued_at, result, component) for c in curves],
                          "issued_contribution": details})
+        rows.extend(target_rows)
+        radar_rows = [r for r in target_rows if not r["private"] and r["issued_contribution"].get("family") == "radars"]
         targets.append({"target": result["target"], "issued_at": iso(result["issued_at"]), "status": result["status"],
                         "config_hash": result["config_hash"], "model_version": result["model_version"],
                         "family_weights": weights, "training_state": training.get("state"),
                         "training_windows": training.get("windows", 0), "coherence": result.get("coherence"),
                         "learned_weights_applied": training.get("apply_learned_weights", False),
                         "candidate_state": training.get("candidate_state"),
+                        "radar_coverage": {'included': len(radar_rows), **{key: sum((r['participation'][key] for r in radar_rows)) for key in ('background_anchor', 'information_revision', 'comparison_only')}, 'windows': {str(h): {basis: sum((any((n['windows'][str(h)]['aligned_value_basis'] == basis for n in r['native_support'])) for r in radar_rows)) for basis in ('native', 'baseline_tail')} for h in (24, 48)}},
                         "community_dependency_groups": len(training.get("increment_groups", {}).get("community", []))
                             if result.get("combination_method") == "baseline_plus_revisions" else len([g for g in groups if g["family"] == "community"]),
                         "excluded_targeted_events": result.get("event_audit", {}).get("excluded_targeted_events", []),

@@ -58,6 +58,7 @@ class PoolingTests(unittest.TestCase):
 
     def test_eligible_votes_have_bounded_mass_and_deadline_reduces_it(self):
         curve = Curve("lunar", RELIEF, NOW, NOW, NOW, NOW+3600, [(24,.4),(48,.6)])
+        curve.metadata.update(adapter="lunar", adapter_contract=1)
         self.store.save("lunar", NOW, {}, Observation("lunar", NOW, NOW, curves=[curve]))
         poll = {"kind":"probability_votes", "target":RELIEF, "population":"voters", "id":"r",
                 "start":NOW, "expires":NOW+86400, "total":50, "bins":[{"p":.9,"votes":50}]}
@@ -77,6 +78,7 @@ class PoolingTests(unittest.TestCase):
 
     def test_mirrored_radars_cannot_increase_weight_or_change_forecast(self):
         c = Curve("lunar", RELIEF, NOW, NOW, NOW, NOW+3600, [(24,.6),(48,.8)])
+        c.metadata.update(adapter="lunar", adapter_contract=1)
         self.store.save("lunar", NOW, {}, Observation("lunar", NOW, NOW, curves=[c]))
         a = forecast(self.store, NOW, RELIEF)
         clone = deepcopy(c); clone.source = "mirror"
