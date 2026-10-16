@@ -66,21 +66,36 @@
 - UI text should lead with results, time, source and an action when needed.
   Avoid repetitive disclaimers, internal phase IDs and raw reason/status enums.
   Keep real missing/stale/error states and consequential-action warnings.
-- The published preview has a prebuilt macOS Apple Silicon DMG and an ordinary
-  download/install/open flow; source publication alone does not complete delivery.
-  On 2026-10-14 the owner confirmed that future releases should deliver macOS
-  Apple Silicon and Windows x64 together, from the same source commit and version.
-  Preserve both platforms' working behavior, validate native installers in CI,
-  and inspect actual feature gaps before claiming equivalent packaged support.
+- Public installers are generated only from an accepted `main` commit for an
+  external release explicitly confirmed by the owner. Source publication alone
+  does not complete an authorized installer release. The 2026-10-14 requirement
+  to deliver macOS Apple Silicon and Windows x64 from the same source and version
+  applies to that release workflow, not routine `dev` work. Preserve both platforms'
+  working behavior; run release CI only within its separately authorized scope.
+  Daily development uses a local build and direct replacement on the current
+  machine, without Windows builds, CI, or public installer generation unless
+  the owner specifically requests them.
   The owner has explicitly excluded Apple notarization and paid enrollment from
   this plan. Do not reopen these as blockers, recurring recommendations or tasks.
-- Reuse polished, established installer templates before designing a custom one.
+- For an authorized public release, reuse established installer templates.
   The macOS DMG uses Sindre Sorhus's create-dmg template. Validate the real Finder
   window and provide its screenshot; a structurally valid image alone is not
   complete installer UX. Keep packaging dependencies local to the project.
 
 ## Git and Delivery
 
+- On 2026-10-16 the owner granted standing authorization for local `dev` commits.
+  After completing and verifying a coherent work package, create its commit
+  without asking for separate commit approval. Review the exact diff and stage
+  only that work package; preserve unrelated changes and exclude private notes.
+  This authorization does not include pushing, merging into `main`, tags,
+  GitHub CI, or public releases.
+- Routine `dev` app delivery is local: run proportionate checks, build for the
+  current machine, directly replace the daily-use app, reopen it and verify the
+  affected behavior and data continuity, then commit the completed work package.
+  Do not turn routine delivery into Windows validation, CI, DMG/EXE packaging,
+  or release preparation. Public installers belong only to an owner-confirmed
+  release of an accepted `main` commit; local app bundles are development builds.
 - Keep `AGENTS.md` tracked on `dev` and development branches, and absent from the
   committed `main` tree. `.gitignore` only protects untracked copies; it does not
   exclude a tracked file from a merge.
@@ -106,10 +121,11 @@
   delivered versions with tags/releases and record ordinary fixes and reverts honestly.
 - The initial independent baseline is published on `main` in
   `https://github.com/QuotaHorizon/Quota-Horizon`. Continue work on `dev`, validate
-  the natural work package, then review and merge into `main` through a pull request.
-  Tag an accepted `main` commit for release and match any distributed artifact to
-  that exact source. Commit/push/release authorization remains separate. Keep this
-  owner-specific workflow and commit conventions in this development-branch file.
+  and commit the natural work package locally. Only when the owner confirms an
+  external release, prepare the filtered release pull request into `main`, tag
+  the accepted commit and match public installers to that exact source. Push,
+  merge, CI and release authorization remain separate from standing local `dev`
+  commit authorization. Keep these conventions in this development-branch file.
 - Folding the initial publication corrections into one commit was explicitly
   authorized for that initial release. Future published-history rewrites require
   their own authorization; normal development retains meaningful commits.
@@ -127,7 +143,15 @@
 
 - Never add AI co-author/coworker trailers, AI-generated attribution, bot
   signatures, or `Co-Authored-By` attribution to an AI in commits or PRs.
-- Commit only authorized, reviewed changes. Never stage the entire workspace
+- On 2026-10-16 the owner explicitly authorized automatic removal of any
+  tool-added AI attribution from local, unpublished commits created for the
+  current work. Do not ask for separate signature-removal approval again.
+  Amend only the affected commit message, preserving its tree, parents and
+  author identity; verify the actual stored message after creation or correction.
+  This does not authorize rewriting published commits or changing Git identity,
+  configuration or hooks.
+- Commit only reviewed, in-scope changes under the standing local `dev`
+  authorization or a specific user request. Never stage the entire workspace
   blindly; confirm the exact staged paths and that local handoff files remain
   excluded. Do not force-add ignored files.
 - This repository uses the user's confirmed GitHub noreply email for commits.
@@ -137,9 +161,9 @@
 - The user authorized the initial commit/push and the project chat's development
   branch setup. Future publishing actions follow the current user request;
   GitHub Release creation and installer upload remain separate from source pushes.
-- For a delivered app change, do proportionate tests, build/install when authorized,
-  verify the installed app, then commit the natural work package. Source completion
-  alone is not installation completion. Report any genuine remaining step plainly.
+- For routine app changes, complete the local build/install/verification sequence
+  above before committing. Source completion alone is not installation completion.
+  Respect any task-specific restriction and report a genuine remaining step plainly.
 - The owner requested direct app replacement on 2026-10-03 and removal of all
   previous QuotaHorizon backups on 2026-10-12. Do not create or retain routine
   app, data or source backup copies unless the owner explicitly requests them.
