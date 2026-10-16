@@ -1,7 +1,9 @@
 from copy import deepcopy
+from http.client import IncompleteRead
+from io import StringIO
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import test_engine as fixtures
 from test_engine import NOW, history
@@ -11,7 +13,138 @@ from reset_intelligence.contracts import AUTOMATIC, RELIEF, Curve, Observation, 
 from reset_intelligence.evaluation import canonical_events
 from reset_intelligence.pipeline import align_curve, complete_tail, forecast
 from reset_intelligence.quant import ModelConfig, Survival
-from reset_intelligence.sources import collect, parse
+from reset_intelligence.sources import collect, fetch, parse
+
+
+class SourceReadFailureTests(unittest.TestCase):
+    setUp = fixtures.LedgerTests.setUp
+    tearDown = fixtures.LedgerTests.tearDown
+
+    def spec(self, name="truncated", adapter="statements"):
+        return {
+            "id": name,
+            "adapter": adapter,
+            "url": f"https://example.test/{name}",
+            "calendar_url": "https://example.test/calendar",
+        }
+
+    def test_json_truncation_returns_only_stable_error(self):
+        with (
+            patch(
+                "reset_intelligence.sources.get_json",
+                side_effect=IncompleteRead(b"private partial body", 99),
+            ),
+            patch("reset_intelligence.sources.parse") as parse_mock,
+            patch("sys.stdout", new_callable=StringIO) as stdout,
+            patch("sys.stderr", new_callable=StringIO) as stderr,
+        ):
+            result = fetch(self.spec())
+        self.assertEqual(result[2:], (None, None, "IncompleteRead"))
+        parse_mock.assert_not_called()
+        self.assertEqual(stdout.getvalue() + stderr.getvalue(), "")
+
+    def test_response_read_truncation_covers_json_and_calendar_text(self):
+        for adapter in ("statements", "calendar_preference"):
+            with self.subTest(adapter=adapter):
+                response = MagicMock()
+                response.url = "https://example.test/response"
+                response.read.side_effect = IncompleteRead(b"private partial body", 99)
+                response.__enter__.return_value = response
+                with patch(
+                    "reset_intelligence.sources.urlopen", return_value=response
+                ) as open_mock:
+                    result = fetch(self.spec(adapter=adapter))
+                self.assertEqual(result[2:], (None, None, "IncompleteRead"))
+                response.read.assert_called_once_with(4 * 1024 * 1024 + 1)
+                open_mock.assert_called_once()
+
+    def test_second_calendar_and_dynamic_snapshot_reads_share_failure_boundary(self):
+        health = {"current_prediction_ref": {"snapshot_url": "/snapshot"}}
+        for adapter in ("calendar_preference", "dreaife"):
+            with (
+                self.subTest(adapter=adapter),
+                patch(
+                    "reset_intelligence.sources.get_text",
+                    return_value='<script id="oct28-bootstrap">{"timeZone":"America/Los_Angeles","sides":["reset","feature"]}</script>',
+                ),
+                patch(
+                    "reset_intelligence.sources.get_json",
+                    side_effect=(
+                        [IncompleteRead(b"private partial body", 99)]
+                        if adapter == "calendar_preference"
+                        else [health, IncompleteRead(b"private partial body", 99)]
+                    ),
+                ) as get_json,
+                patch("reset_intelligence.sources.parse") as parse_mock,
+            ):
+                result = fetch(self.spec(adapter=adapter))
+                self.assertEqual(result[3:], (None, "IncompleteRead"))
+                self.assertEqual(
+                    result[2], None if adapter == "calendar_preference" else health
+                )
+                self.assertNotIn("private partial body", repr(result))
+                self.assertEqual(
+                    get_json.call_count, 1 if adapter == "calendar_preference" else 2
+                )
+                parse_mock.assert_not_called()
+
+    def test_mixed_collection_records_failure_backoff_and_recovery(self):
+        failed, good = self.spec(), self.spec("good")
+        payload = {"generatedAt": NOW, "posts": []}
+
+        def read(url, headers=None):
+            if url == failed["url"]:
+                raise IncompleteRead(b"private partial body", 99)
+            return payload
+
+        with (
+            patch("reset_intelligence.sources.time.time", return_value=NOW) as clock,
+            patch("reset_intelligence.sources.get_json", side_effect=read) as get_json,
+            patch("sys.stdout", new_callable=StringIO) as stdout,
+            patch("sys.stderr", new_callable=StringIO) as stderr,
+        ):
+            outcomes = collect(self.store, [failed, good], minimum_interval=60)
+            rows = {r["source"]: r for r in outcomes}
+            self.assertEqual(rows["truncated"]["error"], "IncompleteRead")
+            self.assertEqual(rows["good"]["status"], "collected")
+            attempts = {r["source"]: r for r in self.store.attempts(NOW)}
+            self.assertEqual(attempts["truncated"]["error"], "IncompleteRead")
+            self.assertIsNone(attempts["good"]["error"])
+            self.assertNotIn("truncated", self.store.observations(NOW))
+            self.assertIn("good", self.store.observations(NOW))
+            original = [
+                tuple(r)
+                for r in self.store.db.execute("SELECT * FROM observations ORDER BY id")
+            ]
+            self.assertNotIn("private partial body", repr(original) + repr(outcomes))
+            for elapsed, status in ((59, "cached"), (60, "error"), (179, "cached")):
+                clock.return_value = NOW + elapsed
+                get_json.reset_mock()
+                self.assertEqual(collect(self.store, [failed])[0]["status"], status)
+                self.assertEqual(get_json.call_count, int(status == "error"))
+            clock.return_value = NOW + 180
+            get_json.side_effect = None
+            get_json.return_value = payload
+            self.assertEqual(collect(self.store, [failed])[0]["status"], "collected")
+            self.assertIn("truncated", self.store.observations(NOW + 180))
+            latest = next(
+                r for r in self.store.attempts(NOW + 180) if r["source"] == "truncated"
+            )
+            self.assertIsNone(latest["error"])
+            current = [
+                tuple(r)
+                for r in self.store.db.execute("SELECT * FROM observations ORDER BY id")
+            ]
+            self.assertEqual(current[: len(original)], original)
+            self.assertEqual(stdout.getvalue() + stderr.getvalue(), "")
+
+    def test_unexpected_programming_errors_still_escape(self):
+        with patch(
+            "reset_intelligence.sources.get_json",
+            side_effect=RuntimeError("programming failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "programming failure"):
+                fetch(self.spec())
 
 
 class SourceQualityTests(unittest.TestCase):

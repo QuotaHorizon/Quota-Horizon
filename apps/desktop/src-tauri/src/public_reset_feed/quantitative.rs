@@ -284,6 +284,8 @@ struct Provider {
     last_attempt: String,
     generated_at: Option<String>,
     healthy: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Summary {
@@ -730,6 +732,20 @@ fn parse_report(path: &Path) -> Result<Report, String> {
     });
     r.comparisons
         .retain(|f| identity(&f.left) && identity(&f.right) && target(&f.target));
+    for provider in &mut r.outcome_providers {
+        if !matches!(
+            provider.state.as_deref(),
+            Some(
+                "healthy"
+                    | "collector_overdue"
+                    | "request_or_decode_failure"
+                    | "stale_source_content"
+                    | "incomplete_source_evidence"
+            )
+        ) {
+            provider.state = None;
+        }
+    }
     for o in &mut r.outcomes {
         o.references.retain(|s| public_reference(s));
         if o.reason.as_deref() != Some("conditional_pledge") {

@@ -249,6 +249,48 @@ fn fixture() -> Value {
     json!({"schema_version":"reset-intelligence-consumer/1","forecasts":forecasts})
 }
 #[test]
+fn outcome_provider_states_are_optional_and_allowlisted() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("report.json");
+    let mut report = json!({
+        "schema_version":"reset-observer/1", "generated_at":"2026-10-17T00:00:00Z",
+        "started_at":"2026-10-03T00:00:00Z", "state":"scoring",
+        "policy":{"reporting_grace_seconds":10800,"minimum_rank_windows":30,"minimum_rank_events":5},
+        "summary":{"forecast_snapshots":0,"frozen_trials":0,"scored_nonoverlapping_trials":0,
+            "settlements":{},"next_maturity":null,"settlement_revisions":0},
+        "latest":[],"curves":[],"scorecards":[],"comparisons":[],"outcomes":[],
+        "outcome_providers":[{"provider":"quota_events","last_attempt":"2026-10-17T00:00:00Z",
+            "generated_at":"2026-10-13T00:00:00Z","healthy":true}]
+    });
+    for state in [
+        None,
+        Some("healthy"),
+        Some("collector_overdue"),
+        Some("request_or_decode_failure"),
+        Some("stale_source_content"),
+        Some("incomplete_source_evidence"),
+        Some("private_diagnostic_content"),
+    ] {
+        report["outcome_providers"][0]["state"] = json!(state);
+        fs::write(&path, report.to_string()).unwrap();
+        let parsed = parse_report(&path).unwrap();
+        let expected = state.filter(|s| *s != "private_diagnostic_content");
+        assert_eq!(parsed.outcome_providers[0].state.as_deref(), expected);
+        assert!(parsed.outcome_providers[0].healthy);
+        assert!(!serde_json::to_string(&parsed)
+            .unwrap()
+            .contains("private_diagnostic_content"));
+    }
+    report["outcome_providers"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("state");
+    fs::write(&path, report.to_string()).unwrap();
+    assert!(parse_report(&path).unwrap().outcome_providers[0]
+        .state
+        .is_none());
+}
+#[test]
 fn separate_comment_score_crosses_boundary_without_overwriting_source_points() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("consumer.json");

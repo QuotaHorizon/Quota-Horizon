@@ -59,7 +59,8 @@ export interface QuantReport {
     unique_events: number; brier_skill: number | null; loss_difference: Interval; error_correlation: number | null }[];
   outcomes: { id: string; status: string; reason?: string | null; kind: string; from: number | null; to: number | null;
     announced_at: number | null; known_at: number; references: string[]; primary_references: number; completion_reports: number }[];
-  outcome_providers: { provider: string; last_attempt: string; generated_at: string | null; healthy: boolean }[];
+  outcome_providers: { provider: string; last_attempt: string; generated_at: string | null; healthy: boolean;
+    state?: "healthy" | "collector_overdue" | "request_or_decode_failure" | "stale_source_content" | "incomplete_source_evidence" | null }[];
 }
 export interface QuantitativeView {
   connected: boolean; checkedAt: string; forecastIssue: string | null; evaluationIssue: string | null;

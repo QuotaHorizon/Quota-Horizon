@@ -12,6 +12,25 @@ import type { PublicResetTimeline } from "./types";
 const now = Date.parse("2026-10-04T02:10:00Z");
 const timeline = (): PublicResetTimeline => ({sources:[],entries:[],revisionCount:0,evidenceFamilyCount:0,quantitative:quantitativeFixture(now)});
 describe("independent quantitative integration", () => {
+  it.each(["zh", "en"] as const)("preserves outcome provider failure states and legacy reports in %s", language => {
+    const view = quantitativeFixture(now, true);
+    const cases = [
+      ["healthy", true, "可用", "Available"],
+      ["collector_overdue", true, "采集已逾期", "Collection overdue"],
+      ["request_or_decode_failure", false, "读取失败", "Read failed"],
+      ["stale_source_content", false, "来源内容已过期", "Source content stale"],
+      ["incomplete_source_evidence", false, "来源证据不完整", "Source evidence incomplete"],
+      [undefined, true, "可用", "Available"],
+      [undefined, false, "待更新", "Update due"],
+    ] as const;
+    for (const [state, healthy, zh, en] of cases) {
+      view.evaluation!.outcome_providers = [{provider:"quota_events", last_attempt:new Date(now).toISOString(), generated_at:new Date(now).toISOString(), healthy, state}];
+      const html = renderToStaticMarkup(<QuantitativeEvaluation view={view} language={language} now={now} />);
+      expect(html).toContain(`QuotaResets · ${language === "zh" ? zh : en}`);
+      expect(html).not.toContain("collector_overdue");
+      expect(html).not.toContain("request_or_decode_failure");
+    }
+  });
   it.each(["zh", "en"] as const)("distinguishes report read failures from first-run waiting in %s", language => {
     const view=quantitativeFixture(now);
     view.evaluation=null;view.evaluationIssue=null;

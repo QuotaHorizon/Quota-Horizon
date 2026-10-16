@@ -2,6 +2,37 @@ use super::*;
 use std::cell::Cell;
 
 #[test]
+fn refresh_feedback_does_not_claim_cache_or_pending_collection_completed() {
+    assert!(refresh_receipt(Ok("refreshed")).is_ok());
+    assert!(refresh_receipt(Ok("partial")).is_ok());
+    assert!(refresh_receipt(Ok("cached")).unwrap_err().contains("缓存"));
+    assert!(refresh_receipt(Err("refresh_failed")).unwrap_err().contains("数据更新失败"));
+    for state in ["refreshing", "starting", "running"] {
+        assert!(refresh_receipt(Ok(state)).unwrap_err().contains("未完成"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn refresh_receipts_distinguish_collection_cache_failure_and_process_start() {
+    for (state, expected) in [
+        ("refreshed", Ok("refreshed")),
+        ("partial", Ok("partial")),
+        ("cached", Ok("cached")),
+        ("failed", Err("refresh_failed")),
+        ("refreshing", Ok("refreshing")),
+        ("already_running", Ok("running")),
+        ("starting", Ok("starting")),
+        ("restarting", Ok("starting")),
+        ("unavailable", Err("start_failed")),
+    ] {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &format!("printf '{{\"state\":\"{state}\"}}'")]);
+        assert_eq!(invoke(command, Duration::from_secs(1)), expected, "{state}");
+    }
+}
+
+#[test]
 fn bundled_install_starts_without_developer_configuration_and_respects_external_connection() {
     let root = tempfile::tempdir().unwrap();
     let resources = root.path().join("resources");

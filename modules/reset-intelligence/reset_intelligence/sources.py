@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from http.client import IncompleteRead
 import json
 import re
 import time
@@ -354,7 +355,7 @@ def fetch(spec: dict) -> tuple[dict, float, object | None, Observation | None, s
             raw = {"health": raw, "snapshot": get_json(url)}
         at = time.time()
         return spec, at, raw, parse(spec, raw, at), None
-    except (ValueError, KeyError, TypeError, IndexError, OSError) as exc:
+    except (ValueError, KeyError, TypeError, IndexError, OSError, IncompleteRead) as exc:
         # Do not put arbitrary upstream responses, query strings or credentials
         # into logs. The retained payload supports local diagnosis.
         code = f"http_{exc.code}" if isinstance(exc, HTTPError) else type(exc).__name__

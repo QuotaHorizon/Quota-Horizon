@@ -3,9 +3,11 @@
 The estimand is a publicly reported broad completion/grant. It is not a check
 of individual accounts. Relays sharing a primary URL are one primary claim.
 """
+
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from http.client import IncompleteRead
 import json
 import re
 import time
@@ -20,14 +22,37 @@ FEEDS = {
     "completion_feed": "https://codex-reset.pro/api/reset-feed",
     "public_catalogue": "https://codex-resets.com/api/v1/resets?limit=100",
 }
-INTERPRETATION_VERSION = "event-scoped-claims-v4"
+INTERPRETATION_VERSION = "event-scoped-claims-v5"
 
 
 def population(text):
-    text = event_clauses(text)
+    # Retain explicit standalone scope labels, not unrelated or future sentences.
+    labels = [
+        s
+        for s in re.split(r"(?<=[.!?])\s+|\n+", text)
+        if re.fullmatch(r"(?:Pro\s*500|All paid accounts)[.!]?", s.strip(), re.I)
+    ]
+    text = " ".join([event_clauses(text), *labels])
     if re.search(r"pro\s*500|specific accounts|affected users|not all|everyone who|(?:less than|under) \d+%|reset to \d+[km]? users|部分.*用户|仅.*用户|非全局", text, re.I):
         return "targeted"
-    if re.search(r"\ball\b|everyone|\bglobal\b|(?:usage|rate) limits? (?:across|for) (?:Codex|ChatGPT Work)|paid (?:users|subscriptions|accounts)|全[部体]|所有|广泛|全球", text, re.I):
+    # A universal quantifier needs an explicit population, not "All fixed",
+    # "thank you all", or an unqualified "for all". Keep this inside the
+    # selected event clauses so a future grant cannot widen a past reset.
+    product_or_plan = r"(?:ChatGPT(?: Work)?|Codex|Plus|Pro|Business)"
+    named_population = (
+        rf"{product_or_plan}(?:(?:,\s*(?:and\s+)?|\s+and\s+){product_or_plan})*"
+    )
+    if re.search(
+        rf"\b(?:all|every)\s+(?:our\s+)?(?:paid\s+)?(?:{named_population}\s+(?:users?|accounts?|subscriptions?|plans?)|plans)\b",
+        text,
+        re.I,
+    ):
+        return "broad"
+    if re.search(
+        r"\ball (?:users|accounts|limits)\b|resets? all propagated|everyone|\bglobal\b|(?:usage|rate) limits? (?:across|for) (?:Codex|ChatGPT Work)|paid (?:users|subscriptions|accounts)|全[部体]|所有|广泛|全球",
+        text,
+        re.I,
+    ):
         return "broad"
     return "unspecified"
 
@@ -44,7 +69,11 @@ def clause_stage(text):
 
 def event_clauses(text):
     """A future global grant cannot widen the scope of an earlier compensation."""
-    clauses = [s for s in re.split(r"(?<=[.!?])\s+|\n+", text) if re.search(r"reset|credit|重置|额度", s, re.I)]
+    clauses = [
+        s
+        for s in re.split(r"(?<=[.!?])\s+|\n+", text)
+        if re.search(r"reset|credit|\bbrand new usage\b|重置|额度", s, re.I)
+    ]
     completed = [s for s in clauses if clause_stage(s) == "completed"]
     current = [s for s in clauses if clause_stage(s) != "announced"]
     return " ".join(completed or current or clauses) or text
@@ -83,21 +112,46 @@ def parse(provider, raw, now):
             if r.get("state") in ("retracted", "cancelled", "disputed"):
                 stage = r["state"]
             stage = reported_stage(stage, text)
-            claims.append(Claim(provider, r["slug"], ["quota:" + r.get("resetId", r["slug"]), *refs], refs,
-                                "banked" if r["type"] == "banked_reset" else "automatic", stage,
-                                population(r.get("cohort", "") + " " + text), stamp(r["announcedAt"]),
-                                stamp(r["confirmedAt"]) if stage == "completed" else None,
-                                now, text, "official_relay" if source.get("kind") == "authorized_social" else "catalogue"))
+            # Cohort is a separate structured field, but its text can conflict
+            # with the current event's wording. Explicit targeting takes priority.
+            populations = {population(r.get("cohort", "")), population(text)}
+            scope = next(
+                (p for p in ("targeted", "broad") if p in populations), "unspecified"
+            )
+            claims.append(
+                Claim(
+                    provider,
+                    r["slug"],
+                    ["quota:" + r.get("resetId", r["slug"]), *refs],
+                    refs,
+                    "banked" if r["type"] == "banked_reset" else "automatic",
+                    stage,
+                    scope,
+                    stamp(r["announcedAt"]),
+                    stamp(r["confirmedAt"]) if stage == "completed" else None,
+                    now,
+                    text,
+                    "official_relay"
+                    if source.get("kind") == "authorized_social"
+                    else "catalogue",
+                )
+            )
         # An infrequently generated catalogue can corroborate events, but does
         # not certify that an uneventful monitoring window was fully covered.
-        healthy = 0 <= now - generated <= 3600
+        healthy = -60 <= now - generated <= 3600
     elif provider == "completion_feed":
         generated = stamp(raw["generatedAt"])
         for r in raw["posts"]:
             if r.get("eventType") not in ("usage_reset", "reset_card") or not r.get("url"):
                 continue
-            stage = {"scheduled": "announced", "completed": "completed", "started": "started",
-                     "cancelled": "cancelled", "retracted": "retracted"}.get(r.get("stage"), "announced")
+            stage = {
+                "scheduled": "announced",
+                "completed": "completed",
+                "started": "started",
+                "rolling_out": "started",
+                "cancelled": "cancelled",
+                "retracted": "retracted",
+            }.get(r.get("stage"), "announced")
             stage = reported_stage(stage, r["original"])
             ref = url_key(r["url"])
             claims.append(Claim(provider, str(r["id"]), [ref], [ref],
@@ -105,7 +159,7 @@ def parse(provider, raw, now):
                                 population(r["original"]), stamp(r["at"]),
                                 stamp(r["at"]) if stage == "completed" else None, now, r["original"],
                                 "official_relay" if r.get("handle") in ("thsottiaux", "sama", "OpenAI") else "community_report"))
-        healthy = 0 <= now - generated <= 3600
+        healthy = -60 <= now - generated <= 3600
     elif provider == "public_catalogue":
         generated = stamp(raw["meta"]["generated_at"])
         for r in raw["data"]:
@@ -119,7 +173,7 @@ def parse(provider, raw, now):
             claims.append(Claim(provider, str(r["id"]), [ref], [ref], kind, stage, population(r["text"]),
                                 at, at if stage == "completed" else None, now, r["text"],
                                 "official_relay" if r["source"].get("author") in ("thsottiaux", "sama", "OpenAI") else "catalogue"))
-        healthy = not raw["pagination"]["has_more"] and 0 <= now - generated <= 3600
+        healthy = not raw["pagination"]["has_more"] and -60 <= now - generated <= 3600
     else:
         raise ValueError("unsupported outcome provider")
     if generated > now + 60:
@@ -140,7 +194,14 @@ def fetch(provider):
         now = time.time()
         generated, healthy, claims = parse(provider, raw, now)
         return provider, now, generated, healthy, claims, raw, None
-    except (KeyError, ValueError, TypeError, AttributeError, OSError) as exc:
+    except (
+        KeyError,
+        ValueError,
+        TypeError,
+        AttributeError,
+        OSError,
+        IncompleteRead,
+    ) as exc:
         error = f"http_{exc.code}" if isinstance(exc, HTTPError) else type(exc).__name__
         return provider, time.time(), None, False, None, raw, error
 

@@ -98,10 +98,18 @@ pub(crate) fn refresh(directory: &Path) -> Result<(), String> {
         .or_else(|| read_json::<Configuration>(&directory.join("reset-radar-runtime.json")).ok())
         .filter(Configuration::valid);
     if let Some(config) = configuration {
-        invoke(config.action("refresh"), Duration::from_secs(45))
-            .map_err(|_| "独立雷达更新未完成，后台将继续重试。".to_string())?;
+        refresh_receipt(invoke(config.action("refresh"), Duration::from_secs(45)))?;
     }
     Ok(())
+}
+
+fn refresh_receipt(result: Result<&str, &str>) -> Result<(), String> {
+    match result {
+        Ok("refreshed" | "partial") => Ok(()),
+        Ok("cached") => Err("结果来源沿用有效缓存，本轮未完成新采集。".into()),
+        Err("refresh_failed") => Err("独立雷达数据更新失败，后台将继续重试。".into()),
+        _ => Err("独立雷达更新未完成，后台将继续重试。".into()),
+    }
 }
 
 pub(crate) fn status(directory: &Path) -> Status {
@@ -290,7 +298,10 @@ fn invoke(mut command: Command, timeout: Duration) -> Result<&'static str, &'sta
     match value.get("state").and_then(|s| s.as_str()) {
         Some("already_running") => Ok("running"),
         Some("starting" | "restarting") => Ok("starting"),
-        Some("refreshed") => Ok("running"),
+        Some("refreshed") => Ok("refreshed"),
+        Some("partial") => Ok("partial"),
+        Some("cached") => Ok("cached"),
+        Some("failed") => Err("refresh_failed"),
         Some("refreshing") => Ok("refreshing"),
         _ => Err("start_failed"),
     }

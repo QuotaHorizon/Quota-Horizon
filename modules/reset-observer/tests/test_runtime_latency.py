@@ -17,25 +17,35 @@ class RuntimeLatencyTests(TemporaryStore):
         args=SimpleNamespace(db=self.store.path,producer_db=None,ingest=None,output=None,html=None)
         started, release = threading.Event(), threading.Event()
         calls=[]
+
         def slow(*args):
             calls.append(args[2]);started.set()
             if not release.wait(5):raise AssertionError("evaluation did not release")
             return {}
+
         worker=BackgroundEvaluation()
         try:
-            with patch("reset_observer.runtime.collect", return_value=[]), patch("reset_observer.runtime.evaluate", side_effect=slow):
-                first=run_once(args,{},evaluator=worker)
+            with (
+                patch("reset_observer.runtime.collect", return_value=[]),
+                patch("reset_observer.runtime.evaluate", side_effect=slow),
+            ):
+                first = run_once(args, {}, evaluator=worker)
                 self.assertTrue(started.wait(2))
-                second=run_once(args,{},refresh=True,evaluator=worker)
-                self.assertEqual(second["refresh_state"],"refreshed")
-                self.assertEqual(first["evaluation"],"background")
+                second = run_once(args, {}, refresh=True, evaluator=worker)
+                self.assertEqual(
+                    second["refresh_state"], "failed"
+                )  # No outcome observations in this fixture.
+                self.assertEqual(first["evaluation"], "background")
                 self.assertFalse(worker.future.done())
-                self.assertEqual(len(calls),1)
-                release.set();worker.future.result(timeout=2)
-                worker.poll();worker.future.result(timeout=2)
-                self.assertEqual(len(calls),2)
+                self.assertEqual(len(calls), 1)
+                release.set()
+                worker.future.result(timeout=2)
+                worker.poll()
+                worker.future.result(timeout=2)
+                self.assertEqual(len(calls), 2)
         finally:
-            release.set();worker.close()
+            release.set()
+            worker.close()
 
     def test_transient_failure_does_not_erase_valid_24h_and_48h_coverage(self):
         initialize(self.store,T,self.policy)
