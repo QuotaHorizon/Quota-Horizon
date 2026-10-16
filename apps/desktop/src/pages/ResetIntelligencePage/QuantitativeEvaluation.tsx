@@ -11,7 +11,7 @@ export function QuantitativeEvaluation({ view, language, now, onOpenSource }: {
 }) {
   const zh = language === "zh", report = view.evaluation;
   const [selected, setSelected] = useState("");
-  if (!report) return <article id="forecast-evaluation" className={styles.card}><h2>{zh ? "预测评估" : "Forecast evaluation"}</h2><p className={styles.caption}>{zh ? "等待独立评估器输出；预测与实际事件会在这里持续对照。" : "Waiting for the independent evaluator. Forecasts and actual outcomes will be compared here."}</p></article>;
+  if (!report) return <article id="forecast-evaluation" className={styles.card}><h2>{zh ? "预测评估" : "Forecast evaluation"}</h2><p className={styles.caption}>{view.evaluationIssue ? (zh ? "评估报告读取失败，后台会自动重试。" : "The evaluation report could not be read. Retrying automatically in the background.") : (zh ? "等待独立评估器输出；预测与实际事件会在这里持续对照。" : "Waiting for the independent evaluator. Forecasts and actual outcomes will be compared here.")}</p></article>;
   const stale = evaluationStale(view,now), s = report.summary;
   const name = (id: string) => sourceNames[id] ?? ({ survival_baseline: zh ? "历史基准" : "Historical baseline", without_community: zh ? "移除社区" : "Without community", without_response_cohort: zh ? "移除消息响应分组" : "Without response grouping", without_comment_estimates: zh ? "移除独立承诺判断" : "Without separate commitment estimates", without_information: zh ? "移除来源修正" : "Without source revisions", without_radars: zh ? "移除雷达" : "Without radars", without_baseline: zh ? "移除历史基准" : "Without baseline", equal_components: zh ? "各分量等权" : "Equal component weights" }[id] ?? (zh ? "对照模型" : "Comparison model"));
   const scope = (t: string) => t === "automatic_reset" ? (zh ? "自动重置" : "Automatic reset") : (zh ? "重置或发卡" : "Reset or credit");

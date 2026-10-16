@@ -36,6 +36,66 @@ export function normalizeRuntimePermissions(directory) {
   }
 }
 
+export function bundleTimezoneData(prefix, destination, site) {
+  const source = join(prefix, "share/zoneinfo");
+  for (const name of ["UTC", "America/Los_Angeles"]) {
+    if (!existsSync(join(source, name)) || !statSync(join(source, name)).isFile()) throw new Error(`Missing Conda tzdata: share/zoneinfo/${name}`);
+  }
+  cpSync(source, join(destination, "share/zoneinfo"), { recursive: true, dereference: true });
+  // -I still loads sitecustomize. Resolve from the installed prefix, never the
+  // build host's compiled TZPATH or an environment variable.
+  // The stdlib precedes site-packages and Conda can supply its own startup
+  // hook there. Replace that copied hook rather than let it shadow ours.
+  writeFileSync(join(dirname(site), "sitecustomize.py"), "import os\nimport sys\nimport zoneinfo\n\nzoneinfo.reset_tzpath((os.path.join(sys.prefix, 'share', 'zoneinfo'),))\n");
+  return files(source).map(p => relative(prefix, p));
+}
+
+export function timezoneDigest(destination, site) {
+  return hash([...files(join(destination, "share/zoneinfo")), join(dirname(site), "sitecustomize.py")].sort().map(p =>
+    `${relative(destination, p)}:${hash(readFileSync(p))}`).join("\n"));
+}
+
+export function copyRuntimeNotices(prefix, destination, used) {
+  const notices = join(destination, "licenses"); mkdirSync(notices);
+  const packages = [];
+  for (const entry of readdirSync(join(prefix, "conda-meta")).filter(n => n.endsWith(".json"))) {
+    const meta = JSON.parse(readFileSync(join(prefix, "conda-meta", entry), "utf8"));
+    if (!meta.files?.some(p => used.has(p))) continue;
+    const source = meta.link?.source && join(meta.link.source, "info/licenses");
+    if (!source || !existsSync(source) || !files(source).length) throw new Error(`Missing redistribution notices for ${meta.name}`);
+    cpSync(source, join(notices, meta.name), { recursive: true });
+    packages.push({ name: meta.name, version: meta.version, license: meta.license });
+  }
+  if (!packages.some(p => p.name === "tzdata")) throw new Error("Missing Conda tzdata package ownership and redistribution notices");
+  return packages;
+}
+
+export function verifyRuntimeTimezone(python, destination) {
+  execFileSync(python, ["-I", "-B", "-c", `
+import os, sys, zoneinfo
+from datetime import datetime, timedelta, timezone
+path = os.path.join(sys.prefix, 'share', 'zoneinfo')
+assert os.path.realpath(sys.prefix) == os.path.realpath(sys.argv[1]), 'Timezone prefix escapes bundle'
+assert zoneinfo.TZPATH == (path,), 'Timezone search path escapes bundle'
+for name in ('UTC', 'America/Los_Angeles'):
+    assert os.path.isfile(os.path.join(path, name)), 'Missing bundled tzdata: ' + name
+la = zoneinfo.ZoneInfo('America/Los_Angeles')
+assert datetime(2026, 1, 15, tzinfo=la).utcoffset() == timedelta(hours=-8)
+assert datetime(2026, 7, 15, tzinfo=la).utcoffset() == timedelta(hours=-7)
+for utc, expected in (
+    ('2026-03-08T09:59:59', '2026-03-08T01:59:59-08:00'),
+    ('2026-03-08T10:00:00', '2026-03-08T03:00:00-07:00'),
+    ('2026-11-01T08:59:59', '2026-11-01T01:59:59-07:00'),
+    ('2026-11-01T09:00:00', '2026-11-01T01:00:00-08:00'),
+    ('2026-03-08T07:59:59', '2026-03-07T23:59:59-08:00'),
+    ('2026-03-08T08:00:00', '2026-03-08T00:00:00-08:00'),
+    ('2026-11-01T06:59:59', '2026-10-31T23:59:59-07:00'),
+    ('2026-11-01T07:00:00', '2026-11-01T00:00:00-07:00'),
+):
+    assert datetime.fromisoformat(utc).replace(tzinfo=timezone.utc).astimezone(la).isoformat() == expected
+`, destination], { cwd: "/", encoding: "utf8", env: { PATH: "/usr/bin:/bin" } });
+}
+
 export function verifyRuntime(destination) {
   const manifest = JSON.parse(readFileSync(join(destination, "reset-runtime-manifest.json"), "utf8"));
   for (const p of files(destination).filter(p => statSync(p).size >= 4 && macho(p))) {
@@ -55,6 +115,7 @@ export function verifyRuntime(destination) {
     cwd: "/", encoding: "utf8", env: { PATH: "/usr/bin:/bin", SSL_CERT_FILE: join(destination, "certs.pem") },
   }));
   if (realpathSync(check.prefix) !== realpathSync(destination) || check.paths.some(p => p && !p.startsWith(destination + "/")) || !check.certs) throw new Error("Runtime isolation or certificate verification failed");
+  verifyRuntimeTimezone(python, destination);
   return manifest;
 }
 
@@ -75,6 +136,7 @@ export function bundleRuntime(python, destination = join(root, "dist/reset-runti
     filter: p => !excluded.has(basename(p)) && !/^(?:config-|_test|xx|_tkinter|_curses|readline)/.test(basename(p)) && !/\.(?:pyc|a)$/.test(p) });
   const site = join(lib, "site-packages");
   mkdirSync(site);
+  const timezoneFiles = bundleTimezoneData(prefix, destination, site);
   cpSync(info.numpy_path, join(site, "numpy"), { recursive: true, dereference: true, filter: p => !["tests", "__pycache__"].includes(basename(p)) && !p.endsWith(".pyc") });
   cpSync(join(dirname(info.numpy_path), `numpy-${info.numpy}.dist-info`), join(site, `numpy-${info.numpy}.dist-info`), { recursive: true });
   for (const [directory, name] of [["reset-intelligence", "reset_intelligence"], ["reset-observer", "reset_observer"]]) {
@@ -103,19 +165,10 @@ export function bundleRuntime(python, destination = join(root, "dist/reset-runti
   }
   // Conda's package cache contains the upstream licenses for its runtime
   // binaries. Copy notices for the packages owning the selected files only.
-  const notices = join(destination, "licenses"); mkdirSync(notices);
-  const used = new Set([...originals.values(), realpathSync(join(prefix, "ssl/cacert.pem"))].map(p => relative(prefix, p)));
-  const packages = [];
-  for (const entry of readdirSync(join(prefix, "conda-meta")).filter(n => n.endsWith(".json"))) {
-    const meta = JSON.parse(readFileSync(join(prefix, "conda-meta", entry), "utf8"));
-    if (!meta.files?.some(p => used.has(p))) continue;
-    const source = meta.link?.source && join(meta.link.source, "info/licenses");
-    if (!source || !existsSync(source)) throw new Error(`Missing redistribution notices for ${meta.name}`);
-    cpSync(source, join(notices, meta.name), { recursive: true });
-    packages.push({ name: meta.name, version: meta.version, license: meta.license });
-  }
-  cpSync(join(prefix, libraryPath, "LICENSE.txt"), join(notices, "PYTHON-LICENSE.txt"));
-  const manifest = { schema_version: "reset-runtime/1", platform: "macos-arm64", python: info.version, numpy: info.numpy, modules: moduleDigest(), packages };
+  const used = new Set([...originals.values(), realpathSync(join(prefix, "ssl/cacert.pem"))].map(p => relative(prefix, p)).concat(timezoneFiles));
+  const packages = copyRuntimeNotices(prefix, destination, used);
+  cpSync(join(prefix, libraryPath, "LICENSE.txt"), join(destination, "licenses/PYTHON-LICENSE.txt"));
+  const manifest = { schema_version: "reset-runtime/1", platform: "macos-arm64", python: info.version, numpy: info.numpy, modules: moduleDigest(), packages, timezone: timezoneDigest(destination, site) };
   manifest.revision = hash(JSON.stringify(manifest));
   writeFileSync(join(destination, "reset-runtime-manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
   // Conda caches can contain group-writable files. DMG copying applies umask;

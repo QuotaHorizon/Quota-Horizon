@@ -6,6 +6,9 @@ use std::collections::BTreeMap;
 pub(crate) mod runtime;
 
 const LIMIT: u64 = 8 * 1024 * 1024;
+// Evaluation exports include accumulated curves and scoring history, unlike
+// the bounded current forecast/configuration documents.
+const REPORT_LIMIT: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Forecast {
@@ -345,6 +348,13 @@ struct ConnectionConfig {
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
+    read_json_with_limit(path, LIMIT)
+}
+
+fn read_json_with_limit<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    limit: u64,
+) -> Result<T, String> {
     let file = fs::File::open(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             "missing"
@@ -353,18 +363,19 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
         }
         .to_owned()
     })?;
-    if !file
-        .metadata()
-        .is_ok_and(|m| m.is_file() && m.len() <= LIMIT)
-    {
+    let metadata = file.metadata().map_err(|_| "invalid")?;
+    if !metadata.is_file() {
         return Err("invalid".into());
     }
+    if metadata.len() > limit {
+        return Err("too_large".into());
+    }
     let mut bytes = Vec::new();
-    file.take(LIMIT + 1)
+    file.take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "unreadable")?;
-    if bytes.len() as u64 > LIMIT {
-        return Err("invalid".into());
+    if bytes.len() as u64 > limit {
+        return Err("too_large".into());
     }
     serde_json::from_slice(&bytes).map_err(|_| "invalid".into())
 }
@@ -683,7 +694,7 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
     Ok(c)
 }
 fn parse_report(path: &Path) -> Result<Report, String> {
-    let mut r: Report = read_json(path)?;
+    let mut r: Report = read_json_with_limit(path, REPORT_LIMIT)?;
     if r.curve_basis.as_deref() != Some("received_publication_values") {
         r.curve_basis = None;
     }

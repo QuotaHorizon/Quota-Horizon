@@ -510,6 +510,161 @@ class StatisticalTests(unittest.TestCase):
 
 
 class ImportAndReportTests(TemporaryStore):
+    def test_publication_continuity_precedes_hourly_sampling(self):
+        for cadence in (60, 300):
+            for minute in range(55, 181, cadence // 60):
+                at = T + minute * 60
+                self.store.add_forecast(
+                    forecast(
+                        source=str(cadence),
+                        origin=at,
+                        generated_at=at,
+                        available_at=at,
+                        expires_at=at + cadence + 30,
+                        points=[[24, minute / 1000], [48, minute / 500]],
+                    )
+                )
+        now = T + 180 * 60
+        curves = publication_curves(self.store, now)
+        self.assertEqual(curves, publication_curves(self.store, now))
+        for curve in curves:
+            cadence = int(curve["source"])
+            minutes = list(range(55, 181, cadence // 60))
+            latest = {}
+            for minute in minutes:
+                latest[int((T + minute * 60) // 3600)] = minute
+            self.assertEqual(
+                curve["points"],
+                [
+                    {
+                        "at": iso(T + m * 60),
+                        "p": m / (1000 if curve["hours"] == 24 else 500),
+                    }
+                    for m in latest.values()
+                ],
+            )
+
+    def test_publication_same_hour_gap_keeps_recovery_and_latest_receipts(self):
+        for minute, expiry in ((1, 5), (10, 30), (20, 40)):
+            at = T + minute * 60
+            self.store.add_forecast(
+                forecast(
+                    origin=at,
+                    generated_at=at,
+                    available_at=at,
+                    expires_at=T + expiry * 60,
+                )
+            )
+        for curve in publication_curves(self.store, T + 21 * 60):
+            p = 0.2 if curve["hours"] == 24 else 0.36
+            self.assertEqual(
+                curve["points"],
+                [
+                    {"at": iso(T + 60), "p": p},
+                    {"at": iso(T + 300), "p": None},
+                    {"at": iso(T + 600), "p": p},
+                    {"at": iso(T + 1200), "p": p},
+                ],
+            )
+
+    def test_publication_shorter_ttl_does_not_shorten_existing_coverage(self):
+        for minute, expiry in ((1, 150), (59, 65), (119, 125)):
+            at = T + minute * 60
+            self.store.add_forecast(
+                forecast(
+                    origin=at,
+                    generated_at=at,
+                    available_at=at,
+                    expires_at=T + expiry * 60,
+                )
+            )
+        for curve in publication_curves(self.store, T + 140 * 60):
+            self.assertEqual(
+                [p["at"] for p in curve["points"]],
+                [iso(T + 59 * 60), iso(T + 119 * 60)],
+            )
+            self.assertTrue(all(p["p"] is not None for p in curve["points"]))
+        for curve in publication_curves(self.store, T + 160 * 60):
+            self.assertEqual(curve["points"][-1], {"at": iso(T + 150 * 60), "p": None})
+
+    def test_publication_invalid_receipts_break_only_their_horizon(self):
+        for kind in ("issues", "unsupported", "expired", "future_origin"):
+            for minute in (1, 10, 20, 30):
+                at = T + minute * 60
+                changes = {}
+                if minute == 10:
+                    changes = (
+                        {"issues": ["unusable"]}
+                        if kind == "issues"
+                        else (
+                            {"points": [[24, 0.2]]}
+                            if kind == "unsupported"
+                            else (
+                                {"origin": at - 60, "expires_at": at}
+                                if kind == "expired"
+                                else {"origin": at + 1}
+                            )
+                        )
+                    )
+                self.store.add_forecast(
+                    replace(
+                        forecast(
+                            source=kind,
+                            origin=at,
+                            generated_at=at,
+                            available_at=at,
+                        ),
+                        **changes,
+                    )
+                )
+        for curve in publication_curves(self.store, T + 31 * 60):
+            if curve["source"] == "unsupported" and curve["hours"] == 24:
+                self.assertEqual(len(curve["points"]), 1)
+            else:
+                self.assertEqual(
+                    [p["at"] for p in curve["points"]],
+                    [iso(T + 60), iso(T + 600), iso(T + 1200), iso(T + 1800)],
+                )
+                self.assertIsNone(curve["points"][1]["p"])
+
+    def test_publication_bounds_tracks_versions_and_repeat_imports(self):
+        first = forecast(available_at=T + 60, expires_at=T + 120)
+        self.store.add_forecast(first)
+        self.store.add_forecast(replace(first, available_at=T + 90))
+        for changes in (
+            {"version": "v2"},
+            {"target": AUTOMATIC},
+            {"track": "model"},
+            {"source": "second"},
+        ):
+            self.store.add_forecast(forecast(available_at=T + 180, **changes))
+        self.store.add_forecast(forecast(available_at=T + 1000, source="future"))
+        self.store.add_forecast(
+            forecast(
+                origin=T - 8 * 86400,
+                generated_at=T - 8 * 86400,
+                available_at=T - 8 * 86400,
+                source="old",
+            )
+        )
+        self.store.add_forecast(forecast(track="shadow", source="shadow"))
+        curves = publication_curves(self.store, T + 300)
+        self.assertEqual(len(curves), 10)
+        base = next(
+            c
+            for c in curves
+            if c["source"] == "radar"
+            and c["version"] == "v1"
+            and c["target"] == RELIEF
+            and c["track"] == "native"
+            and c["hours"] == 24
+        )
+        self.assertEqual(
+            base["points"],
+            [{"at": iso(T + 60), "p": 0.2}, {"at": iso(T + 120), "p": None}],
+        )
+        self.assertEqual(curves, publication_curves(self.store, T + 300))
+
     def test_published_24h_trend_survives_late_receipt_without_relaxing_scoring(self):
         f = forecast(points=[[6,.1],[24,.4]], available_at=T+60, expires_at=T+3600)
         self.store.add_forecast(f)

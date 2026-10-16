@@ -60,30 +60,91 @@ def publication_curves(store, now):
 
     A 24h-only forecast remains a valid published 24h observation even if its
     receipt is a minute late. It cannot score a later, unsupported 24h window.
-    Keep the latest receipt in each hour/version, with explicit expiry gaps.
+    Determine continuity from every receipt before keeping the latest point per
+    hour/continuous segment. Recovery boundaries remain actual receipt points.
     """
-    rows = store.db.execute("""SELECT f.payload FROM forecasts f JOIN (SELECT id,
-        ROW_NUMBER() OVER (PARTITION BY source,target,track,version,CAST(available_at/3600 AS INTEGER)
-        ORDER BY available_at DESC,origin DESC,id DESC) rank FROM forecasts
+    # Use the receipt-time index and project only curve fields: model metadata
+    # can be large, and neither older history nor other tracks belong here.
+    rows = store.db.execute(
+        """SELECT source,version,target,track,origin,available_at,expires_at,
+        json_extract(payload,'$.private','$.issues','$.points','$.generated_at') AS fields
+        FROM forecasts
         WHERE available_at BETWEEN ? AND ? AND track IN ('native','model')
-        ) selected ON selected.id=f.id WHERE selected.rank=1 ORDER BY f.available_at,f.origin""", (now-7*86400, now))
-    curves, previous = defaultdict(list), {}
+        ORDER BY available_at,origin,id""",
+        (now - 7 * 86400, now),
+    )
+    curves, coverage_end, recovery = defaultdict(list), {}, {}
     for row in rows:
-        f = Forecast(**json.loads(row[0]))
-        if f.private:
+        private, issues, points, generated_at = json.loads(row["fields"])
+        if private:
             continue
-        for h in (24,48):
+        f = Forecast(
+            **{
+                name: row[name]
+                for name in (
+                    "source",
+                    "version",
+                    "target",
+                    "track",
+                    "origin",
+                    "available_at",
+                    "expires_at",
+                )
+            },
+            points=points,
+            generated_at=generated_at,
+            issues=issues or [],
+        )
+        for h in (24, 48):
             key = f.source, f.version, f.target, f.track, h
-            if key in previous and previous[key] + 60 < f.available_at and curves[key][-1]["p"] is not None:
-                curves[key].append({"at":iso(previous[key]), "p":None})
-            p = f.cdf(h) if not f.issues and f.origin <= f.available_at < f.expires_at else None
-            curves[key].append({"at":iso(f.available_at), "p":p})
-            previous[key] = f.expires_at
-    for key, expiry in previous.items():
-        if expiry + 60 < now and curves[key][-1]["p"] is not None:
-            curves[key].append({"at":iso(expiry), "p":None})
-    return [{"source":k[0], "version":k[1], "target":k[2], "track":k[3], "hours":k[4], "points":v}
-            for k,v in sorted(curves.items())]
+            values = curves[key]
+            end = coverage_end.get(key)
+            if end is not None and end < f.available_at:
+                values.append({"at": end, "p": None})
+                coverage_end.pop(key)
+            p = (
+                f.cdf(h)
+                if not f.issues and f.origin <= f.available_at < f.expires_at
+                else None
+            )
+            point = {"at": f.available_at, "p": p}
+            if p is None:
+                # An explicit invalid/unsupported publication is a boundary,
+                # even while an earlier forecast would otherwise cover it.
+                if not values or values[-1]["p"] is not None:
+                    values.append(point)
+                coverage_end.pop(key, None)
+            else:
+                if values and values[-1]["p"] is None:
+                    recovery[key] = len(values)
+                    values.append(point)
+                elif (
+                    values
+                    and int(values[-1]["at"] // 3600) == int(f.available_at // 3600)
+                    and recovery.get(key) != len(values) - 1
+                ):
+                    values[-1] = point
+                else:
+                    values.append(point)
+                # A newer short TTL must not erase still-valid coverage from
+                # earlier receipts in this same version/horizon/segment.
+                coverage_end[key] = max(
+                    coverage_end.get(key, f.expires_at), f.expires_at
+                )
+    for key, expiry in coverage_end.items():
+        if expiry < now:
+            curves[key].append({"at": expiry, "p": None})
+    return [
+        {
+            "source": k[0],
+            "version": k[1],
+            "target": k[2],
+            "track": k[3],
+            "hours": k[4],
+            "points": [{"at": iso(p["at"]), "p": p["p"]} for p in v],
+        }
+        for k, v in sorted(curves.items())
+    ]
 
 
 def build_report(store, now, policy, evidence):

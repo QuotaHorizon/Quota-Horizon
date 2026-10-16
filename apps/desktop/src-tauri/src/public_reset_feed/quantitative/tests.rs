@@ -1,6 +1,10 @@
 use super::*;
 use serde_json::{json, Value};
 
+// load() keeps one process-wide saved connection; retention tests must not
+// replace each other's cache between successive reads.
+static LOAD_TEST: Mutex<()> = Mutex::new(());
+
 fn fixture() -> Value {
     let forecasts: Vec<_> = ["broad_quota_relief", "automatic_reset"].iter().map(|target| json!({
         "target": target, "status": "current", "issued_at": "2026-10-04T00:00:00Z", "valid_until": "2026-10-04T00:15:00Z",
@@ -95,6 +99,7 @@ fn readonly_disconnected_does_not_create_files() {
 }
 #[test]
 fn exports_are_validated_filtered_and_retained_on_partial_failure() {
+    let _guard = LOAD_TEST.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
     let f = root.path().join("consumer.json");
     let report = root.path().join("report.json");
@@ -126,6 +131,103 @@ fn exports_are_validated_filtered_and_retained_on_partial_failure() {
     invalid["schema_version"] = json!("next-schema");
     fs::write(&f, invalid.to_string()).unwrap();
     assert!(parse_forecast(&f).is_err());
+}
+#[test]
+fn large_report_loads_cold_and_retains_curves_after_invalid_or_oversized_updates() {
+    let _guard = LOAD_TEST.lock().unwrap_or_else(|e| e.into_inner());
+    let root = tempfile::tempdir().unwrap();
+    let forecast = root.path().join("consumer.json");
+    let report = root.path().join("report.json");
+    fs::write(&forecast, fixture().to_string()).unwrap();
+    fs::write(
+        root.path().join("reset-radar-connection.json"),
+        json!({"forecastPath":forecast,"evaluationPath":report}).to_string(),
+    )
+    .unwrap();
+    let value = json!({
+        "schema_version":"reset-observer/1", "generated_at":"2026-10-15T00:00:00Z",
+        "started_at":"2026-10-03T16:00:00Z", "state":"scoring",
+        "policy":{"reporting_grace_seconds":10800,"minimum_rank_windows":30,"minimum_rank_events":5},
+        "summary":{"forecast_snapshots":500,"frozen_trials":264,"scored_nonoverlapping_trials":37,
+            "settlements":{"settled":264},"next_maturity":null,"settlement_revisions":300},
+        "latest":[],"curve_basis":"received_publication_values",
+        "curves":[{"source":"horizon","version":"test-model","track":"model",
+            "target":"broad_quota_relief","hours":24,
+            "points":[{"at":"2026-10-14T23:00:00Z","p":0.24},{"at":"2026-10-15T00:00:00Z","p":0.25}]}],
+        "scorecards":[],"comparisons":[],"outcomes":[],"outcome_providers":[]
+    });
+    // Whitespace increases the valid export size without inventing model data.
+    let mut bytes = serde_json::to_vec(&value).unwrap();
+    bytes.resize(9 * 1024 * 1024, b' ');
+    fs::write(&report, bytes).unwrap();
+    let good = load(root.path(), &now());
+    assert!(good.connected);
+    assert!(good.forecast_issue.is_none());
+    assert_eq!(good.evaluation_issue, None);
+    let saved = good.evaluation.unwrap();
+    assert_eq!(saved.curves.len(), 1);
+    assert_eq!(saved.curves[0].points.len(), 2);
+    assert_eq!(saved.curves[0].points[1].p, Some(0.25));
+    let expected = serde_json::to_value(&saved).unwrap();
+    for invalid in [json!(1.1), json!(-0.1)] {
+        let mut bad = value.clone();
+        bad["curves"][0]["points"][0]["p"] = invalid;
+        fs::write(&report, bad.to_string()).unwrap();
+        let retained = load(root.path(), &now());
+        assert_eq!(retained.evaluation_issue.as_deref(), Some("invalid"));
+        assert_eq!(
+            serde_json::to_value(retained.evaluation.unwrap()).unwrap(),
+            expected
+        );
+    }
+    let mut bad = value;
+    bad["curves"][0]["points"][0]["at"] = json!("invalid-time");
+    for invalid in [bad.to_string(), "{".into()] {
+        fs::write(&report, invalid).unwrap();
+        let retained = load(root.path(), &now());
+        assert_eq!(retained.evaluation_issue.as_deref(), Some("invalid"));
+        assert_eq!(
+            serde_json::to_value(retained.evaluation.unwrap()).unwrap(),
+            expected
+        );
+    }
+    fs::File::create(&report)
+        .unwrap()
+        .set_len(64 * 1024 * 1024 + 1)
+        .unwrap();
+    let retained = load(root.path(), &now());
+    assert_eq!(retained.evaluation_issue.as_deref(), Some("too_large"));
+    assert_eq!(
+        serde_json::to_value(retained.evaluation.unwrap()).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn forecast_and_configuration_keep_the_eight_mib_limit() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("consumer.json");
+    let mut bytes = serde_json::to_vec(&fixture()).unwrap();
+    bytes.resize(8 * 1024 * 1024, b' ');
+    fs::write(&path, &bytes).unwrap();
+    assert!(parse_forecast(&path).is_ok());
+    bytes.push(b' ');
+    fs::write(&path, bytes).unwrap();
+    assert_eq!(parse_forecast(&path).unwrap_err(), "too_large");
+    let config = root.path().join("reset-radar-connection.json");
+    let mut bytes = serde_json::to_vec(
+        &json!({"forecastPath":path,"evaluationPath":root.path().join("report.json")}),
+    )
+    .unwrap();
+    bytes.resize(8 * 1024 * 1024, b' ');
+    fs::write(&config, &bytes).unwrap();
+    assert!(read_json::<ConnectionConfig>(&config).is_ok());
+    bytes.push(b' ');
+    fs::write(&config, bytes).unwrap();
+    assert_eq!(
+        read_json::<ConnectionConfig>(&config).err().as_deref(),
+        Some("too_large")
+    );
 }
 #[test]
 fn output_identity_and_links_are_allowlisted() {
@@ -237,7 +339,10 @@ fn capture_installed_connection() {
     let q = &timeline.quantitative;
     assert!(
         q.connected && q.forecast_issue.is_none() && q.evaluation_issue.is_none(),
-        "{q:?}"
+        "connected={}, forecast_issue={:?}, evaluation_issue={:?}",
+        q.connected,
+        q.forecast_issue,
+        q.evaluation_issue
     );
     let f = q.forecast.as_ref().unwrap();
     let r = q.evaluation.as_ref().unwrap();

@@ -6,10 +6,36 @@ import { forecastPresentation } from "./resetBriefingModel";
 import { activeForecastAnnouncement, combinedStatements, communityEffect, evaluationStale, forecastFor, forecastStale, seriesPaths, sourceRows } from "./quantitativeModel";
 import { ResetNoticeChip } from "../../components/CapacityPopover/ResetNoticeChip";
 import { TiboBriefing } from "./TiboBriefing";
+import { QuantitativeTrend } from "./QuantitativeTrend";
+import { QuantitativeEvaluation } from "./QuantitativeEvaluation";
 import type { PublicResetTimeline } from "./types";
 const now = Date.parse("2026-10-04T02:10:00Z");
 const timeline = (): PublicResetTimeline => ({sources:[],entries:[],revisionCount:0,evidenceFamilyCount:0,quantitative:quantitativeFixture(now)});
 describe("independent quantitative integration", () => {
+  it.each(["zh", "en"] as const)("distinguishes report read failures from first-run waiting in %s", language => {
+    const view=quantitativeFixture(now);
+    view.evaluation=null;view.evaluationIssue=null;
+    const render=()=>[
+      renderToStaticMarkup(<QuantitativeTrend view={view} language={language} now={now} />),
+      renderToStaticMarkup(<QuantitativeEvaluation view={view} language={language} now={now} />),
+    ];
+    const waiting=language === "zh" ? ["等待评估器的首个整点观测", "等待独立评估器输出"] : ["Awaiting the evaluator’s first hourly observation", "Waiting for the independent evaluator"];
+    const error=language === "zh" ? "评估报告读取失败，后台会自动重试。" : "The evaluation report could not be read. Retrying automatically in the background.";
+    render().forEach((html,i)=>{ expect(html).toContain(waiting[i]);expect(html).not.toContain(error); });
+    view.evaluationIssue="invalid";
+    render().forEach((html,i)=>{ expect(html).toContain(error);expect(html).not.toContain(waiting[i]); });
+  });
+  it.each(["zh", "en"] as const)("retains saved curves and scores after a report read failure in %s", language => {
+    const view=quantitativeFixture(now,true);
+    const before=renderToStaticMarkup(<QuantitativeTrend view={view} language={language} now={now} />);
+    expect(before).toMatch(/<path d="M[^\"]+L/);
+    view.evaluationIssue="invalid";
+    expect(renderToStaticMarkup(<QuantitativeTrend view={view} language={language} now={now} />)).toBe(before);
+    const report=renderToStaticMarkup(<QuantitativeEvaluation view={view} language={language} now={now} />);
+    expect(report).toContain("0.184");
+    expect(report).toContain(language === "zh" ? "评估器最近未更新，以下为保存的报告。" : "The evaluator has not updated recently. Showing the saved report.");
+    expect(report).not.toContain(language === "zh" ? "评估报告读取失败" : "The evaluation report could not be read");
+  });
   it("keeps the separate commitment estimate visible beside original window values", () => {
     const t=timeline(), f=forecastFor(t.quantitative)!;
     f.sources=[{id:"codex_reset",probabilities:Array(72).fill(.83),source_points:[[24,.45],[48,.70]],
