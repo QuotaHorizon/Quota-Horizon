@@ -180,5 +180,5 @@ class Store:
             self.db.execute("INSERT INTO reports(at,payload) VALUES (?,?)", (now, zlib.compress(packed(payload).encode())))
 
     def report_at(self, now):
-        row = self.db.execute("SELECT payload FROM reports WHERE at<=? ORDER BY at DESC,id DESC LIMIT 1", (now,)).fetchone()
+        row = self.db.execute("SELECT payload FROM reports WHERE id=(SELECT id FROM reports WHERE at<=? ORDER BY at DESC,id DESC LIMIT 1)", (now,)).fetchone()
         return json.loads(zlib.decompress(row[0])) if row else None

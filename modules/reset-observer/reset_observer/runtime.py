@@ -213,7 +213,7 @@ def evaluate(args, policy, now, evidence, runtime):
             store.report(now, report)
             store.put("last_report_hash", report_hash)
         if args.output:
-            atomic_write(args.output, json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2) + "\n")
+            atomic_write(args.output, json.dumps(report, ensure_ascii=False, allow_nan=False, separators=(",", ":")) + "\n")
         if args.html:
             atomic_write(args.html, html_report(report))
         return {"state": report["state"], "settlement_updates": revisions, "summary": report["summary"]}

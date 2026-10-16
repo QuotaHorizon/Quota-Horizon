@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import json
 from contextlib import closing
 import math
 from pathlib import Path
+import random
 import sqlite3
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+import zlib
 
 import numpy as np
 
@@ -27,6 +30,7 @@ from reset_observer.contracts import (
     Forecast,
     Policy,
     iso,
+    packed,
     url_key,
 )
 from reset_observer.evidence import coverage, parse, population, reconcile, text_stage
@@ -39,6 +43,7 @@ from reset_observer.importers import (
 from reset_observer.reporting import build_report, html_report, publication_curves
 from reset_observer.runtime import (
     atomic_write,
+    evaluate,
     exclusive,
     producer_due,
     run_once,
@@ -143,6 +148,168 @@ class TemporaryStore(unittest.TestCase):
         for provider in providers:
             for t in np.arange(start, end + 901, 900):
                 self.store.observation(provider, float(t), float(t), True, [], {})
+
+
+class ReportStorageTests(TemporaryStore):
+    original_query = (
+        "SELECT id,payload FROM reports WHERE at<=? ORDER BY at DESC,id DESC LIMIT 1"
+    )
+
+    def assert_report_selection(self, at, expected_id):
+        statements = []
+        self.store.db.set_trace_callback(statements.append)
+        try:
+            actual = self.store.report_at(at)
+        finally:
+            self.store.db.set_trace_callback(None)
+        query = next(
+            q for q in statements if q.startswith("SELECT payload FROM reports")
+        )
+        selected = self.store.db.execute(
+            query.replace("SELECT payload", "SELECT id,payload", 1)
+        ).fetchone()
+        original = self.store.db.execute(self.original_query, (at,)).fetchone()
+        self.assertEqual(
+            tuple(selected) if selected else None, tuple(original) if original else None
+        )
+        self.assertEqual(selected["id"] if selected else None, expected_id)
+        self.assertEqual(
+            actual,
+            json.loads(zlib.decompress(original["payload"])) if original else None,
+        )
+        return query
+
+    def test_report_at_boundaries_out_of_order_and_ties(self):
+        self.assert_report_selection(T, None)
+        for at, name in (
+            (30, "later"),
+            (10, "earlier"),
+            (20, "中间"),
+            (20, "tie winner"),
+        ):
+            report = {
+                "name": name,
+                "nullable": None,
+                "p": 0.125,
+                "pairs": [["b", "a"], ["a", "c"]],
+            }
+            self.store.report(T + at, report)
+            blob = self.store.db.execute(
+                "SELECT payload FROM reports ORDER BY id DESC LIMIT 1"
+            ).fetchone()[0]
+            self.assertEqual(blob, zlib.compress(packed(report).encode()))
+        for at, expected in (
+            (9, None),
+            (10, 2),
+            (15, 2),
+            (20, 4),
+            (25, 4),
+            (30, 1),
+            (40, 1),
+        ):
+            with self.subTest(at=at):
+                self.assert_report_selection(T + at, expected)
+
+    def test_report_at_corrupt_latest_keeps_original_exception(self):
+        self.store.report(T, {"valid": True})
+        for offset, blob, error in (
+            (1, b"broken zlib", zlib.error),
+            (2, zlib.compress(b"not json"), json.JSONDecodeError),
+        ):
+            with self.subTest(error=error.__name__):
+                with self.store.db:
+                    self.store.db.execute(
+                        "INSERT INTO reports(at,payload) VALUES (?,?)",
+                        (T + offset, blob),
+                    )
+                original = self.store.db.execute(
+                    self.original_query, (T + offset,)
+                ).fetchone()
+                self.assertEqual(original["payload"], blob)
+                with self.assertRaises(error) as old:
+                    json.loads(zlib.decompress(original["payload"]))
+                with self.assertRaises(error) as new:
+                    self.store.report_at(T + offset)
+                self.assertEqual(str(new.exception), str(old.exception))
+        self.assert_report_selection(T, 1)
+
+    def test_report_at_synthetic_growth_preserves_all_rows(self):
+        # Row-count growth only: bounded synthetic payloads, never a live DB copy.
+        rng = random.Random(17)
+        blobs = [
+            zlib.compress(
+                packed(
+                    {
+                        "source": f"来源-{i}",
+                        "p": i / 16,
+                        "nullable": None,
+                        "comparisons": [
+                            {"left": a, "right": b, "n": 0, "difference": None}
+                            for a in range(4)
+                            for b in range(a + 1, 4)
+                        ],
+                        "provenance": rng.randbytes(512).hex(),
+                    }
+                ).encode()
+            )
+            for i in range(16)
+        ]
+
+        def fingerprint(limit):
+            result = hashlib.sha256()
+            for row in self.store.db.execute(
+                "SELECT id,at,payload FROM reports WHERE id<=? ORDER BY id", (limit,)
+            ):
+                result.update(packed([row["id"], row["at"]]).encode())
+                result.update(row["payload"])
+            return result.digest()
+
+        previous_count, previous_digest = 0, fingerprint(0)
+        for count in (8600, 8600 + 719, 8600 + 5033):
+            with self.subTest(rows=count):
+                with self.store.db:
+                    self.store.db.executemany(
+                        "INSERT INTO reports(at,payload) VALUES (?,?)",
+                        (
+                            (T + i // 2, blobs[i % len(blobs)])
+                            for i in range(previous_count, count)
+                        ),
+                    )
+                self.assertEqual(fingerprint(previous_count), previous_digest)
+                before = fingerprint(count)
+                self.assertEqual(
+                    self.store.db.execute("SELECT COUNT(*) FROM reports").fetchone()[0],
+                    count,
+                )
+                for cutoff, expected in (
+                    (T - 1, None),
+                    (T, 2),
+                    (T + 100.5, 202),
+                    (T + count, count),
+                ):
+                    query = self.assert_report_selection(cutoff, expected)
+                plan = [
+                    row[3]
+                    for row in self.store.db.execute("EXPLAIN QUERY PLAN " + query)
+                ]
+                old_plan = [
+                    row[3]
+                    for row in self.store.db.execute(
+                        "EXPLAIN QUERY PLAN " + self.original_query, (T + count,)
+                    )
+                ]
+                self.assertTrue(
+                    any("INTEGER PRIMARY KEY" in step for step in plan), plan
+                )
+                self.assertTrue(any("SCAN reports" in step for step in plan), plan)
+                self.assertEqual(fingerprint(count), before)
+                self.assertEqual(
+                    list(self.store.db.execute("PRAGMA index_list(reports)")), []
+                )
+                print(
+                    f"synthetic reports={count}; old_plan={old_plan}; id_first_plan={plan}"
+                )
+                previous_count, previous_digest = count, before
 
 
 class ContractTests(unittest.TestCase):
@@ -1143,9 +1310,117 @@ class ImportAndReportTests(TemporaryStore):
         atomic_write(output, '{"value":2}')
         self.assertEqual(json.loads(output.read_text())["value"], 2)
         self.assertEqual(list(self.root.glob(".observer-*")), [])
+        old = output.read_bytes()
+        for operation in ("write", "flush", "fsync", "replace"):
+            with self.subTest(operation=operation):
+                if operation in ("write", "flush"):
+                    import os
+
+                    fdopen = os.fdopen
+
+                    def failing_stream(*args, **kwargs):
+                        stream = fdopen(*args, **kwargs)
+                        wrapper = Mock(wraps=stream)
+                        getattr(wrapper, operation).side_effect = OSError(
+                            "synthetic failure"
+                        )
+                        return closing(wrapper)
+
+                    failure = patch(
+                        "reset_observer.runtime.os.fdopen", side_effect=failing_stream
+                    )
+                else:
+                    failure = patch(
+                        f"reset_observer.runtime.os.{operation}",
+                        side_effect=OSError("synthetic failure"),
+                    )
+                with failure, self.assertRaises(OSError):
+                    atomic_write(output, '{"value":3}')
+                self.assertEqual(output.read_bytes(), old)
+                self.assertEqual(list(self.root.glob(".observer-*")), [])
         initialize(self.store, T, self.policy)
         with self.assertRaises(ValueError):
             initialize(self.store, T + 1, replace(self.policy, alert_threshold=0.8))
+
+    def test_compact_export_preserves_complete_report_and_order(self):
+        initialize(self.store, T, self.policy)
+        for source in ("radar", "另一来源", "third"):
+            self.store.add_forecast(forecast(source=source))
+            self.store.freeze(
+                trial(source=source, origin=T + (6 * 3600 if source == "third" else 0))
+            )
+        freeze_grid(self.store, T + 10, self.policy)
+        self.cover(T, T + 20 * 3600)
+        evidence = {"events": [], "estimand": "test"}
+        settle_all(self.store, T + 20 * 3600, self.policy, evidence)
+        report = build_report(self.store, T + 20 * 3600, self.policy, evidence)
+        self.assertTrue(report["comparisons"])
+        output = self.root / "report.json"
+        args = SimpleNamespace(db=self.store.path, output=output, html=None)
+        with (
+            patch("reset_observer.runtime.build_report", return_value=report),
+            patch("reset_observer.runtime.settle_all", return_value=0),
+            patch("reset_observer.preferences.settle"),
+        ):
+            evaluate(
+                args,
+                self.policy,
+                T + 10,
+                {},
+                {
+                    "phase_seconds": {},
+                    "note": "中文 🌅",
+                    "nullable": None,
+                    "fraction": 0.125,
+                },
+            )
+        pretty = (
+            json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2) + "\n"
+        )
+        compact = output.read_text(encoding="utf-8")
+        self.assertEqual(
+            compact,
+            json.dumps(
+                report, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+            )
+            + "\n",
+        )
+        self.assertEqual(json.loads(pretty), json.loads(compact))
+        self.assertEqual(
+            json.loads(pretty, object_pairs_hook=list),
+            json.loads(compact, object_pairs_hook=list),
+        )
+        self.assertEqual(json.loads(compact)["comparisons"], report["comparisons"])
+        self.assertIn("中文 🌅", compact)
+        self.assertLess(len(compact.encode()), len(pretty.encode()))
+        self.assertEqual(self.store.report_at(T + 10), report)
+
+    def test_export_rejects_nonfinite_numbers_without_replacing_file(self):
+        output = self.root / "report.json"
+        atomic_write(output, '{"old":"完整"}\n')
+        old = output.read_bytes()
+        args = SimpleNamespace(db=self.store.path, output=output, html=None)
+        for value in (math.nan, math.inf, -math.inf):
+            with self.subTest(value=value):
+                report = {"latest": [], "state": "test", "summary": {}}
+                # Keep the nonfinite value in runtime (outside the semantic hash),
+                # and bypass DB encoding to exercise the export encoder itself.
+                with (
+                    patch("reset_observer.runtime.build_report", return_value=report),
+                    patch("reset_observer.runtime.settle_all", return_value=0),
+                    patch("reset_observer.preferences.settle"),
+                    patch.object(Store, "report"),
+                    self.assertRaises(ValueError),
+                ):
+                    evaluate(
+                        args,
+                        self.policy,
+                        T,
+                        {},
+                        {"phase_seconds": {}, "invalid": value},
+                    )
+                self.assertEqual(output.read_bytes(), old)
+                self.assertEqual(list(self.root.glob(".observer-*")), [])
 
 
 if __name__ == "__main__":

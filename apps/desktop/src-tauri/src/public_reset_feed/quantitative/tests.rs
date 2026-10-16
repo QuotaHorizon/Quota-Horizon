@@ -5,6 +5,239 @@ use serde_json::{json, Value};
 // replace each other's cache between successive reads.
 static LOAD_TEST: Mutex<()> = Mutex::new(());
 
+// Synthetic history, not a projection of production growth: four historical
+// versions of twelve public identities, sampled every fifteen minutes over
+// fourteen days. Additional days extend native sources and introduce one daily
+// model revision, with real points, day windows, scores and pair comparisons.
+fn content_report(extra_days: usize) -> Value {
+    let start = DateTime::parse_from_rfc3339("2026-10-01T00:00:00Z").unwrap();
+    let at = |quarter: usize| {
+        (start + chrono::Duration::minutes((quarter * 15) as i64))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    };
+    let sources = [
+        ("horizon", "model"),
+        ("codex_reset", "native"),
+        ("nextreset", "native"),
+        ("observatory", "native"),
+        ("lunar", "native"),
+        ("dreaife", "native"),
+        ("survival_baseline", "shadow"),
+        ("without_community", "shadow"),
+        ("without_radars", "shadow"),
+        ("without_information", "shadow"),
+        ("without_comment_estimates", "shadow"),
+        ("equal_components", "shadow"),
+    ];
+    let mut identities = Vec::new();
+    let mut curves = Vec::new();
+    let mut latest = Vec::new();
+    let mut scorecards = Vec::new();
+    let mut comparisons = Vec::new();
+    let end = (14 + extra_days) * 96;
+    for index in 0..48 + extra_days {
+        let (source, track) = if index < 48 {
+            sources[index % 12]
+        } else {
+            sources[0]
+        };
+        let version = if index < 48 {
+            index / 12
+        } else {
+            index - 48 + 4
+        };
+        let identity =
+            json!({"source":source,"track":track,"version":format!("synthetic-v{version}")});
+        let first = if index < 48 {
+            version * 336
+        } else {
+            14 * 96 + (index - 48) * 96
+        };
+        let last = if index < 36 {
+            first + 336
+        } else if index < 48 && source != "horizon" {
+            end
+        } else if index < 48 {
+            14 * 96
+        } else {
+            first + 96
+        };
+        for target in ["broad_quota_relief", "automatic_reset"] {
+            let p = 0.125 + (index % 12) as f64 / 32.;
+            let mut item = identity.clone();
+            item["target"] = json!(target);
+            item["origin"] = json!(at(last - 1));
+            item["received_at"] = json!(at(last - 1));
+            item["valid_until"] = json!(at(last));
+            item["state"] = json!("current");
+            item["probabilities_at_publication"] = json!({"24":p,"48":p + 0.125});
+            latest.push(item);
+            for hours in [24, 48] {
+                let probability = p + if hours == 48 { 0.125 } else { 0. };
+                let mut curve = identity.clone();
+                curve["target"] = json!(target);
+                curve["hours"] = json!(hours);
+                curve["points"] = json!((first..last)
+                    .map(|q| json!({
+                        "at":at(q), "p":if q % 97 == 1 { None } else { Some(probability) }
+                    }))
+                    .collect::<Vec<_>>());
+                curves.push(curve);
+            }
+            for hours in [6, 12, 24, 48] {
+                let n = (last - first) / (hours * 4);
+                let mut card = identity.clone();
+                card["target"] = json!(target);
+                card["hours"] = json!(hours);
+                card["scheduled_windows"] = json!(n);
+                card["forecast_coverage"] = json!(1.);
+                card["settlement_states"] = json!({"settled":n});
+                card["scores"] = json!({"n":n,"unique_events":0,"brier":p*p,
+                    "log_loss":-(1.-p).ln(),"state":"insufficient_events",
+                    "brier_interval":{"mean":p*p,"ci95":null,"blocks":n},
+                    "calibration":[{"n":n,"mean_probability":p,"event_frequency":0.}]});
+                card["observed_event_scores"] = Value::Null;
+                card["alerts"] = json!({"threshold":0.5,"episodes":0,"false_alerts":0,
+                    "precision":null,"event_recall":null,"median_lead_hours":null});
+                scorecards.push(card);
+            }
+        }
+        identities.push(identity);
+    }
+    for (i, left) in identities.iter().enumerate() {
+        for right in identities.iter().skip(i + 1) {
+            // Different historical versions have no shared evaluation window.
+            // Keep every zero-sample comparison rather than pruning empty pairs.
+            for target in ["broad_quota_relief", "automatic_reset"] {
+                for hours in [6, 12, 24, 48] {
+                    let shared = left["version"] == right["version"];
+                    let left_p = 0.125 + (i % 12) as f64 / 32.;
+                    let right_index = sources
+                        .iter()
+                        .position(|(s, _)| *s == right["source"].as_str().unwrap())
+                        .unwrap();
+                    let right_p = 0.125 + right_index as f64 / 32.;
+                    let difference = if shared {
+                        Some(left_p * left_p - right_p * right_p)
+                    } else {
+                        None
+                    };
+                    comparisons.push(json!({"left":left,"right":right,"target":target,
+                        "hours":hours,"n":usize::from(shared),"unique_events":0,"brier_skill":null,
+                        "loss_difference":{"mean":difference,"ci95":null,"blocks":usize::from(shared)},
+                        "error_correlation":null}));
+                }
+            }
+        }
+    }
+    let mut private_curve = curves[0].clone();
+    private_curve["source"] = json!("private_signal");
+    curves.push(private_curve);
+    json!({"schema_version":"reset-observer/1","generated_at":at(end),"started_at":at(0),
+        "state":"scoring","policy":{"reporting_grace_seconds":10800,"minimum_rank_windows":30,"minimum_rank_events":5},
+        "summary":{"forecast_snapshots":end*12,"frozen_trials":end,"scored_nonoverlapping_trials":14+extra_days,
+            "settlements":{"settled":14+extra_days},"next_maturity":null,"settlement_revisions":end},
+        "latest":latest,"curve_basis":"received_publication_values","curves":curves,
+        "scorecards":scorecards,"comparisons":comparisons,
+        "outcomes":[{"id":"synthetic-合成-🌅","status":"unconfirmed","reason":null,
+            "kind":"automatic_reset","from":null,"to":null,"announced_at":null,
+            "known_at":1790812800.,"references":["https://x.com/i/status/123","https://private.invalid/hidden"],
+            "primary_references":0,"completion_reports":0}],"outcome_providers":[],
+        "calendar_sentiment":{"version":"calendar-preference-increments-1","production_weight":0.,
+            "automatic_promotion":false,"vote_units":"clicks_not_unique_people",
+            "trials":(0..14+extra_days).map(|day| json!({"id":format!("synthetic-day-{day}"),
+                "features":{"window_start":1790812800+day*86400,"window_end":1790812800+(day+1)*86400,
+                    "unique_participants":null,"production_weight":0.},
+                "candidates":{"raw_click_share":0.375,"repeat_sensitive_share":0.5},
+                "settlement":null})).collect::<Vec<_>>()},
+        "diagnostics":{"note":"合成内容 / café / 🌅","private_provenance":"never serialize this"}})
+}
+
+#[test]
+fn pretty_and_compact_reports_preserve_filtered_content_and_cold_growth() {
+    let _guard = LOAD_TEST.lock().unwrap_or_else(|e| e.into_inner());
+    let mut previous_size = 0;
+    for extra_days in [0, 1, 7] {
+        let value = content_report(extra_days);
+        assert_eq!(
+            value["calendar_sentiment"]["trials"]
+                .as_array()
+                .unwrap()
+                .len(),
+            14 + extra_days
+        );
+        let mut pretty = serde_json::to_vec_pretty(&value).unwrap();
+        let mut compact = serde_json::to_vec(&value).unwrap();
+        pretty.push(b'\n');
+        compact.push(b'\n');
+        assert!(
+            serde_json::from_slice::<Value>(&pretty).unwrap()
+                == serde_json::from_slice::<Value>(&compact).unwrap(),
+            "pretty/compact decoded content differs at +{extra_days} days"
+        );
+        assert!(compact.len() > previous_size && compact.len() < pretty.len());
+        assert!(pretty.len() < REPORT_LIMIT as usize);
+        previous_size = compact.len();
+        let mut expected = None;
+        for (encoding, bytes) in [("pretty", &pretty), ("compact", &compact)] {
+            // New connection paths guarantee no saved evaluation for this load.
+            let root = tempfile::tempdir().unwrap();
+            let report = root.path().join("report.json");
+            let forecast = root.path().join("consumer.json");
+            fs::write(&forecast, fixture().to_string()).unwrap();
+            fs::write(
+                root.path().join("reset-radar-connection.json"),
+                json!({"forecastPath":forecast,"evaluationPath":report}).to_string(),
+            )
+            .unwrap();
+            let missing = load(root.path(), &now());
+            assert_eq!(missing.evaluation_issue.as_deref(), Some("missing"));
+            assert!(missing.evaluation.is_none());
+            fs::write(&report, bytes).unwrap();
+            let started = std::time::Instant::now();
+            let loaded = load(root.path(), &now());
+            let load_elapsed = started.elapsed();
+            assert!(loaded.connected && loaded.forecast_issue.is_none());
+            assert_eq!(loaded.evaluation_issue, None);
+            let parsed = loaded.evaluation.unwrap();
+            assert_eq!(parsed.curves.len(), (48 + extra_days) * 4);
+            assert_eq!(parsed.curves[0].points[0].p, Some(0.125));
+            assert_eq!(parsed.curves[0].points[1].p, None);
+            assert_eq!(parsed.curves[0].points[2].p, Some(0.125));
+            assert_eq!(parsed.curves[4].points[0].p, Some(0.15625));
+            assert_eq!(parsed.curves[0].identity.version, "synthetic-v0");
+            assert_eq!(parsed.curves[48].identity.version, "synthetic-v1");
+            assert_eq!(parsed.scorecards.len(), (48 + extra_days) * 8);
+            assert_eq!(
+                parsed.comparisons.len(),
+                (48 + extra_days) * (47 + extra_days) * 4
+            );
+            assert!(parsed.comparisons.iter().any(|c| c.n == 0));
+            assert!(parsed.comparisons.iter().any(|c| c.n > 0));
+            assert_eq!(parsed.outcomes[0].id, "synthetic-合成-🌅");
+            assert_eq!(parsed.outcomes[0].references.len(), 1);
+            let filtered = serde_json::to_value(&parsed).unwrap();
+            let serialized = serde_json::to_string(&filtered).unwrap();
+            assert!(
+                !serialized.contains("private_signal")
+                    && !serialized.contains("private_provenance")
+            );
+            if let Some(expected) = &expected {
+                assert!(&filtered == expected, "filtered encodings differ");
+            } else {
+                expected = Some(filtered.clone());
+            }
+            let started = std::time::Instant::now();
+            let directly_parsed = parse_report(&report).unwrap();
+            let parse_elapsed = started.elapsed();
+            assert!(serde_json::to_value(directly_parsed).unwrap() == filtered);
+            println!("content-growth extra_days={extra_days} encoding={encoding} bytes={} curves={} scorecards={} comparisons={} cold_connection_load_ms={:.3} repeat_parse_report_ms={:.3}",
+                bytes.len(), parsed.curves.len(), parsed.scorecards.len(), parsed.comparisons.len(),
+                load_elapsed.as_secs_f64()*1000., parse_elapsed.as_secs_f64()*1000.);
+        }
+    }
+}
+
 fn fixture() -> Value {
     let forecasts: Vec<_> = ["broad_quota_relief", "automatic_reset"].iter().map(|target| json!({
         "target": target, "status": "current", "issued_at": "2026-10-04T00:00:00Z", "valid_until": "2026-10-04T00:15:00Z",
@@ -180,7 +413,7 @@ fn large_report_loads_cold_and_retains_curves_after_invalid_or_oversized_updates
             expected
         );
     }
-    let mut bad = value;
+    let mut bad = value.clone();
     bad["curves"][0]["points"][0]["at"] = json!("invalid-time");
     for invalid in [bad.to_string(), "{".into()] {
         fs::write(&report, invalid).unwrap();
@@ -200,6 +433,15 @@ fn large_report_loads_cold_and_retains_curves_after_invalid_or_oversized_updates
     assert_eq!(
         serde_json::to_value(retained.evaluation.unwrap()).unwrap(),
         expected
+    );
+    let mut recovered = value;
+    recovered["curves"][0]["points"][1]["p"] = json!(0.375);
+    fs::write(&report, serde_json::to_vec(&recovered).unwrap()).unwrap();
+    let restored = load(root.path(), &now());
+    assert_eq!(restored.evaluation_issue, None);
+    assert_eq!(
+        restored.evaluation.unwrap().curves[0].points[1].p,
+        Some(0.375)
     );
 }
 
