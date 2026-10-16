@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from reset_observer.contracts import RELIEF, Policy
+from reset_observer.contracts import AUTOMATIC, RELIEF, Policy, digest, packed
 from reset_observer.preferences import capture, current_features, freeze, report, settle
 from reset_observer.store import Store
 from reset_observer.reporting import build_report, html_report
@@ -100,6 +100,104 @@ class CalendarPreferenceTests(unittest.TestCase):
         self.put(T,poll(17050,5000))
         evidence={"events":[event(**{"from":T-30,"to":T-30})]}
         self.assertEqual(freeze(self.store,T,self.policy,evidence),0)
+
+    def test_first_future_freeze_includes_same_window_shadow_baseline_metadata(self):
+        self.put(T - 60, poll())
+        self.put(T, poll(17050, 5000))
+        baseline = forecast(
+            source="survival_baseline",
+            track="shadow",
+            origin=T - 1800,
+            generated_at=T - 1800,
+            available_at=T,
+            metadata={
+                "baseline_kind": "source_declared_anchor_with_survival_fallback",
+                "inputs_hash": "not-needed-in-comparison",
+            },
+        )
+        self.store.add_forecast(baseline)
+        self.store.add_forecast(forecast(source="horizon", track="model"))
+        self.store.add_forecast(forecast(source="observatory", track="native"))
+        self.assertEqual(freeze(self.store, T, self.policy, {"events": []}), 1)
+        trial = report(self.store, T)["trials"][0]
+        self.assertEqual(trial["origin"], T)
+        self.assertEqual(trial["hours"], 1)
+        comparisons = {c["source"]: c for c in trial["comparisons"]}
+        self.assertEqual(
+            set(comparisons), {"survival_baseline", "horizon", "observatory"}
+        )
+        self.assertEqual(
+            comparisons["survival_baseline"],
+            {
+                "source": baseline.source,
+                "version": baseline.version,
+                "forecast_id": baseline.id,
+                "probability": baseline.align(T, 1),
+                "metadata": {"baseline_kind": baseline.metadata["baseline_kind"]},
+            },
+        )
+
+    def test_shadow_baseline_exclusions_do_not_admit_other_shadow_forecasts(self):
+        cases = {
+            "late": {"available_at": T + 1},
+            "expired": {"origin": T - 60, "generated_at": T - 60, "expires_at": T},
+            "private": {"private": True},
+            "wrong_target": {"target": AUTOMATIC},
+            "other_shadow": {"source": "other_baseline"},
+            "other_track": {"track": "adapted"},
+            "unsupported_window": {"points": [[0.5, 0.1]]},
+            "not_started": {"origin": T + 1},
+            "quality_excluded": {"issues": ["invalid_source"]},
+        }
+        for name, overrides in cases.items():
+            with self.subTest(case=name):
+                store = Store(Path(self.tmp.name) / (name + ".sqlite"))
+                try:
+                    capture(store, "didcodex_poll", T - 60, T - 60, poll())
+                    capture(store, "didcodex_poll", T, T, poll(17050, 5000))
+                    values = {
+                        "source": "survival_baseline",
+                        "track": "shadow",
+                        **overrides,
+                    }
+                    store.add_forecast(forecast(**values))
+                    self.assertEqual(freeze(store, T, self.policy, {"events": []}), 1)
+                    self.assertEqual(report(store, T)["trials"][0]["comparisons"], [])
+                finally:
+                    store.close()
+
+    def test_existing_trial_remains_byte_identical_without_baseline_backfill_or_refreeze(
+        self,
+    ):
+        self.eligible()
+        saved = self.store.db.execute(
+            "SELECT id,frozen_at,payload FROM preference_trials"
+        ).fetchone()
+        expected_id = digest(
+            [
+                "didcodex_poll",
+                poll()["id"],
+                "calendar-preference-increments-1",
+                self.policy.hash,
+            ]
+        )
+        self.assertEqual(saved["id"], expected_id)
+        self.assertEqual(
+            json.loads(saved["payload"])["version"], "calendar-preference-increments-1"
+        )
+        self.store.add_forecast(forecast(source="survival_baseline", track="shadow"))
+        self.put(T + 60, poll(17060, 5050))
+        self.assertEqual(freeze(self.store, T + 60, self.policy, {"events": []}), 0)
+        # The existing key also keeps INSERT OR IGNORE non-replacing on conflict.
+        with self.store.db:
+            self.store.db.execute(
+                "INSERT OR IGNORE INTO preference_trials VALUES (?,?,?)",
+                (expected_id, T + 60, packed({"comparisons": ["replacement"]})),
+            )
+        rows = self.store.db.execute(
+            "SELECT id,frozen_at,payload FROM preference_trials"
+        ).fetchall()
+        self.assertEqual([tuple(row) for row in rows], [tuple(saved)])
 
     def test_prior_day_reset_excludes_old_cycle_comparator(self):
         self.put(T-60,poll(start=T-30))

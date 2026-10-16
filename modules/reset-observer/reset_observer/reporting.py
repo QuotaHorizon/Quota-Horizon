@@ -579,10 +579,10 @@ def html_report(report):
     diagnostic_html += "<p>社区 25% / 50% / 75% 与移除社区、历史基线、等权组合同步前瞻记录。仅在相同时间窗比较误差；候选筛选后还需新的留出窗口验证，再人工决定权重。没有自动替换线上模型。</p>"
     preference_html = ""
     preference = report.get("calendar_sentiment", {})
-    if preference.get("latest"):
+    if preference.get("latest") or preference.get("trials"):
         states = {"ready_for_evaluation": "已达样本门槛", "insufficient_recent_votes": "新增票不足 50",
                   "upcoming": "等待该日开始", "closed": "已结束", "stale": "采集待更新"}
-        current = [p for p in preference["latest"] if p["window_end"] > stamp(report["generated_at"])
+        current = [p for p in preference.get("latest", []) if p["window_end"] > stamp(report["generated_at"])
                    and p["window_start"] < stamp(report["generated_at"])+72*3600]
         rows = []
         for p in current:
@@ -591,17 +591,36 @@ def html_report(report):
                  f'{p["repeat_adjusted_units"]:.2f}', iso(p["latest_vote_at"]) if p["latest_vote_at"] else "—", states[p["state"]])) + "</tr>")
         preference_html = ('<h2>Did Codex Reset · 实时新增投票</h2><p>按太平洋日历日采样，近 6 小时至少 50 个新增点击后冻结候选；'
             '重复点击敏感性按每 IP 每 24 小时最多 100 次折算。独立参与人数未知。愿望与预测混合，当前主概率权重为 0。</p>'
-            '<div class="panel"><table><thead><tr><th>活动日</th><th>累计点击</th><th>实际新增</th><th>新增重置占比</th>'
+            '<div class="panel"><table><thead><tr><th>活动日</th><th>累计点击</th><th>实际新增</th><th>新增重置占比（未加权）</th>'
             '<th>重复折算单位</th><th>最后增票 · UTC</th><th>状态</th></tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>')
         evaluations = []
         for trial in preference.get("trials", []):
             settlement = trial.get("settlement") or {}
+            has_label = settlement.get("label") is not None
+            trial_scored = has_label and settlement.get("score_eligible")
+            event_scored = has_label and settlement.get("event_score_eligible")
+            reason = settlement.get("reason")
+            if trial_scored:
+                state = "已记分"
+            elif event_scored:
+                state = "完成事件单列误差（结果覆盖不足）"
+            elif reason == "window_not_mature":
+                state = "待成熟 · " + iso(settlement["matures_at"]) + " UTC"
+            elif reason == "incomplete_outcome_coverage":
+                state = "已成熟未决：结果覆盖不足"
+            elif reason == "boundary_or_evidence_conflict":
+                state = "已成熟未决：时间边界、证据冲突或适用人群未知"
+                if settlement.get("coverage_complete") is False:
+                    state += "；结果覆盖不足"
+            else:
+                state = "等待结算记录" if not settlement else "结果待核验，未记分"
             for name, p in {**trial["candidates"], **{c["source"]+":"+c["version"]: c["probability"] for c in trial["comparisons"]}}.items():
-                loss = settlement.get("candidate_losses", {}).get(name, {})
-                state = "已记分" if settlement.get("score_eligible") else "完成事件单列误差" if settlement.get("event_score_eligible") else "待窗口成熟或证据完整"
+                loss = settlement.get("candidate_losses", {}).get(name, {}) if trial_scored or event_scored else {}
+                label = {"raw_click_share": "时效加权点击候选",
+                         "repeat_sensitive_share": "重复参与敏感性候选"}.get(name, name)
                 evaluations.append("<tr>"+"".join(f"<td>{escape(str(v))}</td>" for v in
-                    (trial["features"]["date"], name, pct(p), f'{loss["brier"]:.4f}' if loss else "—", state))+"</tr>")
-        preference_html += (f'<p>已冻结 {len(preference.get("trials", []))} 个独立日样本，已记分 {preference.get("scored_days", 0)} 个。'
+                    (trial["features"]["date"], label, pct(p), f'{loss["brier"]:.4f}' if loss else "—", state))+"</tr>")
+        preference_html += (f'<p>已冻结 {len(preference.get("trials", []))} 个活动日窗，已记分 {preference.get("scored_days", 0)} 个。'
                             '候选与同一时刻的 Horizon、来源预测按相同剩余日窗口核验；每一天只冻结一次。</p>')
         if evaluations:
             preference_html += ('<div class="panel"><table><thead><tr><th>活动日</th><th>候选 / 对照</th><th>冻结值</th>'

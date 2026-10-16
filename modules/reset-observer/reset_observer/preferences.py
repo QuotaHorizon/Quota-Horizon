@@ -135,12 +135,16 @@ def freeze(store, now, policy, evidence):
                       "repeat_sensitive_share": f["repeat_sensitive_candidate"]}
         comparisons = []
         for source in store.forecasts(now, latest=True):
-            if source.target != RELIEF or source.private or source.track not in ("model", "native"):
+            baseline = source.source == "survival_baseline" and source.track == "shadow"
+            if source.target != RELIEF or source.private or (source.track not in ("model", "native") and not baseline):
                 continue
             probability, _ = trial_probability(source, now, hours, evidence["events"], policy)
             if probability is not None:
-                comparisons.append({"source": source.source, "version": source.version,
-                                    "forecast_id": source.id, "probability": probability})
+                comparison = {"source": source.source, "version": source.version,
+                              "forecast_id": source.id, "probability": probability}
+                if baseline:
+                    comparison["metadata"] = {k: source.metadata[k] for k in ("baseline_kind",) if k in source.metadata}
+                comparisons.append(comparison)
         trial = {"source": f["source"], "round_id": f["round_id"], "version": VERSION,
                  "target": RELIEF, "origin": now, "hours": hours, "frozen_at": now,
                  "p": f["weighted_reset_share"],

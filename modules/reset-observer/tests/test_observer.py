@@ -976,6 +976,103 @@ class ImportAndReportTests(TemporaryStore):
         self.assertEqual(rows[RELIEF]["without_community"]["points"],[.55])
         self.assertEqual(rows[AUTOMATIC]["without_community"]["points"],[.55])
 
+    def calendar_html_report(self, latest=None, settlement=None):
+        initialize(self.store, T, self.policy)
+        self.store.add_forecast(
+            forecast(
+                source="SECRET_PLATFORM",
+                private=True,
+                metadata={"rule_reference": "https://private.example/contract"},
+            )
+        )
+        report = build_report(
+            self.store, T + 10, self.policy, {"events": [], "estimand": "test"}
+        )
+        report["calendar_sentiment"] = {
+            "latest": latest or [],
+            "scored_days": int(bool(settlement and settlement.get("score_eligible"))),
+            "trials": [
+                {
+                    "features": {"date": "2026-10-13"},
+                    "candidates": {
+                        "raw_click_share": 0.4,
+                        "repeat_sensitive_share": 0.3,
+                    },
+                    "comparisons": [
+                        {"source": "horizon", "version": "v8", "probability": 0.5}
+                    ],
+                    "settlement": settlement,
+                }
+            ],
+        }
+        return report
+
+    def test_calendar_html_preserves_history_without_latest_samples(self):
+        report = self.calendar_html_report()
+        html = html_report(report)
+        self.assertIn("2026-10-13", html)
+        self.assertIn("已冻结 1 个活动日窗", html)
+        self.assertIn("等待结算记录", html)
+        self.assertNotIn("独立日样本", html)
+        self.assertNotIn("SECRET_PLATFORM", html)
+        self.assertNotIn("private.example", html)
+
+    def test_calendar_html_explains_settlement_reasons_and_unknown_labels(self):
+        cases = [
+            (T, True, [], "待成熟", None),
+            (T + 20 * 3600, False, [], "结果覆盖不足", None),
+            (
+                T + 20 * 3600,
+                False,
+                [event(status="disputed")],
+                "证据冲突或适用人群未知",
+                None,
+            ),
+            (T + 20 * 3600, True, [], "已记分", 0),
+        ]
+        for now, covered, events, expected, label in cases:
+            with self.subTest(expected=expected):
+                settlement = label_window(trial(), events, now, self.policy, covered)
+                self.assertEqual(settlement["label"], label)
+                settlement["candidate_losses"] = {"raw_click_share": {"brier": 0.16}}
+                report = self.calendar_html_report(settlement=settlement)
+                html = html_report(report)
+                section = html.split("<h2>Did Codex Reset", 1)[-1].split(
+                    "<h2>近期事件核验", 1
+                )[0]
+                self.assertIn(expected, section)
+                if settlement["status"] == "pending":
+                    self.assertIn(iso(settlement["matures_at"]), section)
+                elif label is None:
+                    self.assertNotIn("待成熟", section)
+                self.assertEqual("0.1600" in section, label is not None)
+                self.assertEqual("已记分</td>" in section, label is not None)
+
+    def test_calendar_html_distinguishes_weighted_candidate_from_unweighted_share(self):
+        latest = [
+            {
+                "date": "2026-10-13",
+                "window_start": T,
+                "window_end": T + 86400,
+                "total_clicks": 100,
+                "recent_votes": 60,
+                "reset_share": 0.6,
+                "repeat_adjusted_units": 0.6,
+                "latest_vote_at": T,
+                "state": "ready_for_evaluation",
+            }
+        ]
+        report = self.calendar_html_report(latest=latest)
+        before = json.dumps(report, sort_keys=True)
+        html = html_report(report)
+        self.assertIn("时效加权点击候选", html)
+        self.assertIn("重复参与敏感性候选", html)
+        self.assertIn("新增重置占比（未加权）", html)
+        self.assertIn("40.0%", html)
+        self.assertIn("60.0%", html)
+        self.assertNotIn("raw_click_share", html)
+        self.assertEqual(json.dumps(report, sort_keys=True), before)
+
     def test_private_provenance_does_not_leave_report(self):
         initialize(self.store, T, self.policy)
         self.store.add_forecast(
