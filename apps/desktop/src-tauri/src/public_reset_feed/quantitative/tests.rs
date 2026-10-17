@@ -258,7 +258,11 @@ fn outcome_provider_states_are_optional_and_allowlisted() {
         "policy":{"reporting_grace_seconds":10800,"minimum_rank_windows":30,"minimum_rank_events":5},
         "summary":{"forecast_snapshots":0,"frozen_trials":0,"scored_nonoverlapping_trials":0,
             "settlements":{},"next_maturity":null,"settlement_revisions":0},
-        "latest":[],"curves":[],"scorecards":[],"comparisons":[],"outcomes":[],
+        "latest":[],"curves":[],"scorecards":[],"comparisons":[],
+        "outcomes":[{"id":"completed-scope-pending","status":"pending","kind":"automatic",
+            "from":1792045693.,"to":1792045693.,"announced_at":1792045693.,"known_at":1792053933.,
+            "references":["https://x.com/i/status/2110618732666257557"],
+            "primary_references":1,"completion_reports":1}],
         "outcome_providers":[{"provider":"quota_events","last_attempt":"2026-10-17T00:00:00Z",
             "generated_at":"2026-10-13T00:00:00Z","healthy":true}]
     });
@@ -280,6 +284,23 @@ fn outcome_provider_states_are_optional_and_allowlisted() {
         assert!(!serde_json::to_string(&parsed)
             .unwrap()
             .contains("private_diagnostic_content"));
+    }
+    for reason in [
+        None,
+        Some("population_unspecified"),
+        Some("conditional_pledge"),
+        Some("private_diagnostic_content"),
+    ] {
+        report["outcomes"][0]["reason"] = json!(reason);
+        fs::write(&path, report.to_string()).unwrap();
+        let parsed = parse_report(&path).unwrap();
+        assert_eq!(
+            parsed.outcomes[0].reason.as_deref(),
+            reason.filter(|r| *r != "private_diagnostic_content")
+        );
+        assert_eq!(parsed.outcomes[0].status, "pending");
+        assert_eq!(parsed.outcomes[0].completion_reports, 1);
+        assert_eq!(parsed.outcomes[0].to, Some(1792045693.));
     }
     report["outcome_providers"][0]
         .as_object_mut()

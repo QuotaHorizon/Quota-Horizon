@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ResetCalendar } from "./ResetCalendar";
+import { quantitativeFixture } from "../../preview/quantitativeFixture";
+import type { QuantReport } from "./quantitativeTypes";
 import { calendarEventTime, calendarTimeLabel, exactPublicTime, localCalendarDate, resetCalendarMonths, resetCalendarRecords } from "./resetCalendarModel";
 import type { PublicResetArchive, PublicResetArchiveEntry, PublicTimelineEntry } from "./types";
 
@@ -37,7 +39,92 @@ function announcedGrant(): PublicTimelineEntry {
   return input;
 }
 
+const completionAt = Date.parse("2026-10-15T06:28:13Z");
+const afterCompletion = Date.parse("2026-10-17T02:00:00Z");
+function completion(overrides: Partial<QuantReport["outcomes"][number]> = {}): QuantReport["outcomes"][number] {
+  return { id: "october-completion", status: "pending", reason: "population_unspecified", kind: "automatic",
+    from: completionAt / 1000, to: completionAt / 1000, announced_at: completionAt / 1000,
+    known_at: (completionAt + 3600_000) / 1000,
+    references: ["https://x.com/i/status/2110618732666257557"], primary_references: 1, completion_reports: 1,
+    ...overrides };
+}
+
 describe("reset calendar evidence and time semantics", () => {
+  it.each(["zh", "en"] as const)("shows an observed completion in the default calendar while scope remains pending in %s", language => {
+    const outcomes = [completion()];
+    const saved = JSON.stringify(outcomes);
+    const records = resetCalendarRecords([], [], language, afterCompletion, outcomes);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ kind: "reset", mode: "events", time: completionAt,
+      timeBasis: "completion_report", reviewed: false, completionStatus: "scope_pending", publishedAt: null });
+    const quantitative = quantitativeFixture(afterCompletion);
+    quantitative.evaluation!.outcomes = outcomes;
+    const html = renderToStaticMarkup(<ResetCalendar archive={null}
+      timeline={{ sources: [], entries: [], revisionCount: 0, evidenceFamilyCount: 0, quantitative }}
+      now={afterCompletion} language={language} />);
+    const day = localCalendarDate(new Date(completionAt));
+    expect(html).toContain(`aria-label="${day}`);
+    expect(html).toContain(language === "zh" ? "已报告完成 · 范围待核验" : "Completion reported · scope under review");
+    expect(html).toContain(language === "zh" ? "完成报告时间" : "Completion report time");
+    expect(html).toContain(language === "zh" ? "实际到账时间未提供" : "Account delivery time is unavailable");
+    expect(html).toContain("https://x.com/i/status/2110618732666257557");
+    expect(html.match(new RegExp(`<button[^>]*aria-label="${day}[^>]*>`, "u"))?.[0]).toContain('data-activity="reset"');
+    expect(html.match(new RegExp(`<button[^>]*aria-label="${day}[^>]*>`, "u"))?.[0]).not.toContain('data-reviewed="true"');
+    expect(JSON.stringify(outcomes)).toBe(saved);
+  });
+
+  it("does not promote announcements, targeted grants, disputed or undated completions", () => {
+    for (const overrides of [
+      { completion_reports: 0 }, { status: "pending", reason: "no_completion_report" },
+      { status: "targeted" }, { status: "disputed" }, { status: "retracted" },
+      { reason: "conditional_pledge" }, { kind: "unknown" }, { from: null }, { to: null },
+      { from: completionAt / 1000 + 1 }, { to: NaN }, { to: afterCompletion / 1000 + 60 },
+      { known_at: afterCompletion / 1000 + 60 }, { references: ["https://private.invalid/evidence"] },
+    ]) {
+      expect(resetCalendarRecords([], [], "en", afterCompletion, [completion(overrides)])).toEqual([]);
+    }
+  });
+
+  it("deduplicates explicit source references but keeps announcement and completion times distinct", () => {
+    const notice = lead("2110618732666257557");
+    notice.signal.semantics = "explicit_future_reset";
+    notice.signal.occurredAt = null;
+    notice.signal.source.publishedAt = "2026-10-15T04:56:07Z";
+    const saved = JSON.stringify(notice);
+    const report = completion();
+    const records = resetCalendarRecords([], [notice], "en", afterCompletion, [report, report]);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ time: completionAt, timeBasis: "completion_report", conflictingTimes: false });
+    expect(records[0].sources).toHaveLength(2);
+    const separate = lead("2110595554036400151");
+    separate.signal.semantics = "explicit_future_reset"; separate.signal.occurredAt = null;
+    expect(resetCalendarRecords([], [notice, separate], "en", afterCompletion, [report])).toHaveLength(2);
+    expect(JSON.stringify(notice)).toBe(saved);
+  });
+
+  it("preserves a reviewed occurrence time and prevents a source withdrawal from being resurrected", () => {
+    const prior = reviewed("2110618732666257557");
+    prior.signal.occurredAt = "2026-10-15T06:13:01Z";
+    const record = resetCalendarRecords([prior], [], "en", afterCompletion, [completion({ status: "confirmed", reason: null })])[0];
+    expect(record).toMatchObject({ reviewed: true, time: Date.parse(prior.signal.occurredAt), timeBasis: "occurred", conflictingTimes: false });
+    expect(record.sources).toContainEqual({ url: "https://x.com/i/status/2110618732666257557", time: completionAt, basis: "completion_report" });
+    const denial = lead("2110618732666257557");
+    denial.signal.semantics = "negative_signal";
+    expect(resetCalendarRecords([], [denial], "en", afterCompletion, [completion()])).toEqual([]);
+  });
+
+  it("keeps reset and grant completions separate and converts completion time in the local zone", () => {
+    const at = Date.parse("2026-10-15T23:28:13Z");
+    const automatic = completion({ from: at / 1000, to: at / 1000 });
+    const grant = { ...automatic, id: "grant-completion", kind: "banked", status: "confirmed", reason: null };
+    const records = resetCalendarRecords([], [], "zh", afterCompletion, [automatic, grant]);
+    expect(records.map(r => r.kind).sort()).toEqual(["grant", "reset"]);
+    expect(records.every(r => !r.reviewed && r.timeBasis === "completion_report")).toBe(true);
+    const day = localCalendarDate(new Date(records[0].time!));
+    if (process.env.TZ === "Asia/Shanghai") expect(day).toBe("2026-10-16");
+    if (process.env.TZ === "America/New_York") expect(day).toBe("2026-10-15");
+  });
+
   it("includes an announced card rollout in the default grant calendar without fabricating delivery time", () => {
     const grant = announcedGrant();
     const record = resetCalendarRecords([], [grant], "zh", afterGrant)[0];

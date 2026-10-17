@@ -748,7 +748,10 @@ fn parse_report(path: &Path) -> Result<Report, String> {
     }
     for o in &mut r.outcomes {
         o.references.retain(|s| public_reference(s));
-        if o.reason.as_deref() != Some("conditional_pledge") {
+        if !matches!(
+            o.reason.as_deref(),
+            Some("conditional_pledge" | "population_unspecified")
+        ) {
             o.reason = None;
         }
     }
