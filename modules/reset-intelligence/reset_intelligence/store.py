@@ -4,8 +4,36 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
+import zlib
 
 from .contracts import Observation, digest
+
+
+_COMPRESSED_JSON = b"QHJSON\x01ZLIB\x00"
+
+
+def _json_text(value: object) -> str:
+    # These columns are also read directly by the observer and replay tools.
+    # Keep them ordinary JSON, without the per-row whitespace/ASCII overhead.
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+
+
+def _payload_body(value: object) -> str | bytes:
+    text = _json_text(value)
+    raw = text.encode("utf-8")
+    compressed = _COMPRESSED_JSON + zlib.compress(raw)
+    # Tiny payloads cost less as text; the marker identifies compressed rows
+    # without changing content hashes or rewriting any historical evidence.
+    return compressed if len(compressed) < len(raw) else text
+
+
+def _read_payload(body: str | bytes) -> object:
+    if isinstance(body, bytes) and body.startswith(_COMPRESSED_JSON):
+        try:
+            body = zlib.decompress(body[len(_COMPRESSED_JSON):])
+        except zlib.error as error:
+            raise ValueError("invalid compressed source payload") from error
+    return json.loads(body)
 
 
 class Store:
@@ -44,10 +72,15 @@ class Store:
         with self.db:
             h = digest(raw) if raw is not None else None
             if raw is not None:
-                self.db.execute("INSERT OR IGNORE INTO payloads VALUES (?,?)", (h, json.dumps(raw, ensure_ascii=False, allow_nan=False)))
+                self.db.execute("INSERT OR IGNORE INTO payloads VALUES (?,?)", (h, _payload_body(raw)))
             self.db.execute("INSERT INTO observations(source,observed_at,generated_at,payload_hash,normalized,error) VALUES (?,?,?,?,?,?)",
                             (source, at, observation.generated_at if observation else None, h,
-                             json.dumps(observation.to_dict(), ensure_ascii=False, allow_nan=False) if observation else None, error))
+                             _json_text(observation.to_dict()) if observation else None, error))
+
+    def raw_payload(self, payload_hash: str) -> object | None:
+        """Read original source content from either legacy JSON or compressed rows."""
+        row = self.db.execute("SELECT body FROM payloads WHERE hash=?", (payload_hash,)).fetchone()
+        return _read_payload(row[0]) if row else None
 
     def observations(self, as_of: float) -> dict[str, Observation]:
         # Select the last successfully decoded observation as it was known then.
@@ -66,7 +99,7 @@ class Store:
     def record_config(self, config: dict, at: float) -> str:
         h = digest(config)
         with self.db:
-            self.db.execute("INSERT OR IGNORE INTO source_config VALUES (?,?,?)", (h, at, json.dumps(config, sort_keys=True)))
+            self.db.execute("INSERT OR IGNORE INTO source_config VALUES (?,?,?)", (h, at, _json_text(config)))
         return h
 
     def config_at(self, at: float) -> dict | None:
@@ -85,7 +118,7 @@ class Store:
         h = digest(result)
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO forecasts VALUES (?,?,?,?,?)",
-                            (h, result["issued_at"], result["target"], result["model_version"], json.dumps(result, allow_nan=False)))
+                            (h, result["issued_at"], result["target"], result["model_version"], _json_text(result)))
         return h
 
     def forecasts(self, before: float, target: str) -> list[dict]:

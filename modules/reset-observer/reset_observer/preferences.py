@@ -1,13 +1,15 @@
 """Prospective evaluation of calendar click preferences, separate from forecasts.
 
-Only observed increments qualify. The first eligible sample in each local day is
-frozen once, and matched forecasts are captured then, before learning its outcome.
+Only observed increments qualify. The first eligible sample in each local day and
+prospective intraday checkpoints freeze their contemporary matched forecasts.
 Neither candidate is automatically admitted to the production probability model.
 """
 from __future__ import annotations
 
 import json
 import math
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from .benchmark import label_window, matching, trial_probability
 from .contracts import RELIEF, digest, iso, packed
@@ -17,6 +19,9 @@ VERSION = "calendar-preference-increments-1"
 MINIMUM_VOTES = 50
 WINDOW_SECONDS = 6 * 3600
 MAX_GAP_SECONDS = 1800
+CHECKPOINT_VERSION = "calendar-preference-checkpoints-1"
+CHECKPOINT_HOURS = (6, 12, 18)
+PACIFIC = "America/Los_Angeles"
 
 
 def capture(store, source, observed_at, received_at, poll):
@@ -116,7 +121,53 @@ def current_features(store, now):
     return output
 
 
+def checkpoint(f, now, activated_at, first_origin):
+    """Select only the current future-enabled slot, never reconstruct past slots."""
+    local_start = datetime.fromtimestamp(f["window_start"], ZoneInfo(PACIFIC))
+    boundaries = [(hour, local_start.replace(hour=hour, minute=0, second=0, microsecond=0).timestamp())
+                  for hour in CHECKPOINT_HOURS]
+    for index, (hour, at) in enumerate(boundaries):
+        end = boundaries[index+1][1] if index+1 < len(boundaries) else f["window_end"]
+        if (f["window_start"] <= at < f["window_end"] and at >= activated_at
+                and first_origin < at <= f["observed_at"] <= now < end):
+            return {"mode": "fixed_checkpoint", "version": CHECKPOINT_VERSION,
+                    "timezone": PACIFIC, "local_hour": hour, "scheduled_at": at,
+                    "slot_end": end, "observation_at": f["observed_at"],
+                    "delay_seconds": now-at}
+    return None
+
+
+def frozen_trial(store, f, now, policy, evidence, sampling):
+    hours = (f["window_end"]-now)/3600
+    candidates = {"raw_click_share": f["weighted_reset_share"],
+                  "repeat_sensitive_share": f["repeat_sensitive_candidate"]}
+    comparisons = []
+    for source in store.forecasts(now, latest=True):
+        baseline = source.source == "survival_baseline" and source.track == "shadow"
+        if source.target != RELIEF or source.private or (source.track not in ("model", "native") and not baseline):
+            continue
+        probability, _ = trial_probability(source, now, hours, evidence["events"], policy)
+        if probability is not None:
+            comparison = {"source": source.source, "version": source.version,
+                          "forecast_id": source.id, "probability": probability}
+            if baseline:
+                comparison["metadata"] = {k: source.metadata[k] for k in ("baseline_kind",) if k in source.metadata}
+            comparisons.append(comparison)
+    return {"source": f["source"], "round_id": f["round_id"], "version": VERSION,
+            "target": RELIEF, "origin": now, "hours": hours, "frozen_at": now,
+            "p": f["weighted_reset_share"], "sampling": sampling,
+            "activity_day_cluster": digest([f["source"], f["round_id"]]),
+            "evaluation_endpoint": "within_day_completion",
+            "policy_hash": policy.hash, "features": f, "candidates": candidates,
+            "comparisons": comparisons}
+
+
 def freeze(store, now, policy, evidence):
+    activation_key = CHECKPOINT_VERSION + ":activated_at"
+    activated_at = store.get(activation_key)
+    if activated_at is None:
+        store.put(activation_key, now)
+        activated_at = now
     created = 0
     for f in current_features(store, now):
         if f["state"] != "ready_for_evaluation":
@@ -128,28 +179,18 @@ def freeze(store, now, policy, evidence):
                for e in evidence["events"]):
             continue
         key = digest([f["source"], f["round_id"], VERSION, policy.hash])
-        if store.db.execute("SELECT 1 FROM preference_trials WHERE id=?", (key,)).fetchone():
-            continue
-        hours = (f["window_end"]-now)/3600
-        candidates = {"raw_click_share": f["weighted_reset_share"],
-                      "repeat_sensitive_share": f["repeat_sensitive_candidate"]}
-        comparisons = []
-        for source in store.forecasts(now, latest=True):
-            baseline = source.source == "survival_baseline" and source.track == "shadow"
-            if source.target != RELIEF or source.private or (source.track not in ("model", "native") and not baseline):
+        first = store.db.execute("SELECT payload FROM preference_trials WHERE id=?", (key,)).fetchone()
+        if first is None:
+            sampling = {"mode": "first_eligible", "timezone": PACIFIC}
+        else:
+            sampling = checkpoint(f, now, activated_at, json.loads(first[0])["origin"])
+            if sampling is None:
                 continue
-            probability, _ = trial_probability(source, now, hours, evidence["events"], policy)
-            if probability is not None:
-                comparison = {"source": source.source, "version": source.version,
-                              "forecast_id": source.id, "probability": probability}
-                if baseline:
-                    comparison["metadata"] = {k: source.metadata[k] for k in ("baseline_kind",) if k in source.metadata}
-                comparisons.append(comparison)
-        trial = {"source": f["source"], "round_id": f["round_id"], "version": VERSION,
-                 "target": RELIEF, "origin": now, "hours": hours, "frozen_at": now,
-                 "p": f["weighted_reset_share"],
-                 "policy_hash": policy.hash, "features": f, "candidates": candidates,
-                 "comparisons": comparisons}
+            key = digest([f["source"], f["round_id"], CHECKPOINT_VERSION,
+                          sampling["local_hour"], policy.hash])
+            if store.db.execute("SELECT 1 FROM preference_trials WHERE id=?", (key,)).fetchone():
+                continue
+        trial = frozen_trial(store, f, now, policy, evidence, sampling)
         with store.db:
             cursor = store.db.execute("INSERT OR IGNORE INTO preference_trials VALUES (?,?,?)", (key, now, packed(trial)))
         created += cursor.rowcount
@@ -183,18 +224,61 @@ def settle(store, now, policy, evidence):
     return changed
 
 
+def activity_endpoint(sample, settlement):
+    """The upstream activity classification is a separate research endpoint."""
+    outcome = sample.get("upstream_outcome") if sample else None
+    label = {"reset": 1, "both": 1, "improvement": 0}.get(outcome)
+    completion_label = settlement.get("label") if settlement else None
+    mismatch = None
+    if label is not None and completion_label is not None and label != completion_label:
+        mismatch = ("activity_reset_without_within_day_completion" if label == 1
+                    else "within_day_completion_without_activity_reset")
+    return {"endpoint": "activity_classification", "scope": "whole_Pacific_activity_day",
+            "upstream_outcome": outcome, "label": label,
+            "observed_at": sample.get("observed_at") if sample else None,
+            "state": "reported" if label is not None else "awaiting_upstream_classification",
+            "comparison_endpoint": "within_day_completion", "completion_label": completion_label,
+            "mismatch": mismatch, "used_for_completion_settlement": False}
+
+
 def report(store, now):
     latest = current_features(store, now)
     trials = []
+    activity_samples = {}
     for row in store.db.execute("SELECT id,payload FROM preference_trials WHERE frozen_at<=? ORDER BY frozen_at DESC", (now,)):
         trial = json.loads(row["payload"])
         last = store.db.execute("SELECT payload FROM preference_settlements WHERE trial=? AND at<=? ORDER BY at DESC,rowid DESC LIMIT 1", (row["id"], now)).fetchone()
-        trials.append({"id": row["id"], **trial, "settlement": json.loads(last[0]) if last else None})
+        settlement = json.loads(last[0]) if last else None
+        day = (trial["source"], trial["round_id"])
+        if day not in activity_samples:
+            sample = store.db.execute("""SELECT payload FROM preference_samples
+                WHERE source=? AND round_id=? AND observed_at<=? AND received_at<=?
+                ORDER BY observed_at DESC,id DESC LIMIT 1""", (*day, now, now)).fetchone()
+            activity_samples[day] = json.loads(sample[0]) if sample else None
+        trials.append({"id": row["id"], **trial,
+                       "sampling": trial.get("sampling", {"mode": "first_eligible", "timezone": PACIFIC}),
+                       "activity_day_cluster": trial.get("activity_day_cluster", digest(list(day))),
+                       "evaluation_endpoint": "within_day_completion", "settlement": settlement,
+                       "activity_classification": activity_endpoint(activity_samples[day], settlement)})
+    scored = [t for t in trials if t["settlement"] and t["settlement"].get("score_eligible")]
+    day_keys = lambda rows: {(t["source"], t["round_id"]) for t in rows}
     return {"version": VERSION, "minimum_recent_votes": MINIMUM_VOTES,
             "sampling_window_hours": WINDOW_SECONDS/3600,
             "vote_units": "clicks_not_unique_people", "repeat_sensitivity": "100_clicks_per_unit_Jeffreys_prior",
             "question_scope": "preference_or_prediction_for_one_Pacific_calendar_day",
             "production_weight": 0., "automatic_promotion": False,
+            "checkpoint_sampling": {"version": CHECKPOINT_VERSION, "timezone": PACIFIC,
+                                    "local_hours": list(CHECKPOINT_HOURS),
+                                    "initial": "first_eligible", "missed_slots": "not_backfilled",
+                                    "activated_at": store.get(CHECKPOINT_VERSION + ":activated_at"),
+                                    "independence_unit": "source_activity_day"},
             "latest": latest, "trials": trials,
             "sample_observations": store.db.execute("SELECT COUNT(*) FROM preference_samples WHERE received_at<=?", (now,)).fetchone()[0],
-            "scored_days": sum(bool(t["settlement"] and t["settlement"].get("score_eligible")) for t in trials)}
+            "frozen_days": len(day_keys(trials)), "frozen_trials": len(trials),
+            "scored_days": len(day_keys(scored)), "scored_trials": len(scored),
+            "sampling_groups": [{"mode": mode, "local_hour": hour,
+                                 "frozen_days": len(day_keys(group)), "frozen_trials": len(group),
+                                 "scored_days": len(day_keys([t for t in group if t in scored]))}
+                                for mode, hour in [("first_eligible", None)]+[("fixed_checkpoint", h) for h in CHECKPOINT_HOURS]
+                                if (group := [t for t in trials if t["sampling"]["mode"] == mode
+                                              and t["sampling"].get("local_hour") == hour])]}

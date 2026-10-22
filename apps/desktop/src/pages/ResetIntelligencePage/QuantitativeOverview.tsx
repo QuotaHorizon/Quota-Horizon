@@ -1,13 +1,14 @@
 import { Activity, ArrowDownRight, Radio } from "lucide-react";
 import type { Language } from "../../i18n";
 import type { PublicReadReceipt, PublicResetTimeline } from "./types";
-import type { QuantForecast, QuantitativeView } from "./quantitativeTypes";
+import type { CommentEstimate, QuantForecast, QuantitativeView } from "./quantitativeTypes";
 import { communityEffect, controllingPoint, forecastFor, forecastStale, percent, points, precedesCompletion, probabilityAt, sourceColors, sourceNames, sourceRows, sourceUrls } from "./quantitativeModel";
 import { forecastPresentation } from "./resetBriefingModel";
 import { publicEvidenceTime } from "./presentation";
 import { EvidenceLink } from "./ArchiveView";
 import { TiboBriefing } from "./TiboBriefing";
 import { CommunityForecasts } from "./CommunityForecasts";
+import { CalendarSentiment } from "./CalendarSentiment";
 import { ProbabilityCurve, QuantitativeTrend } from "./QuantitativeTrend";
 import { ModuleRuntimeStatus } from "./ModuleRuntimeStatus";
 import { QuantitativeEvaluation } from "./QuantitativeEvaluation";
@@ -64,7 +65,7 @@ export function QuantitativeOverview({ timeline, language, now, failed, onOpenSo
         {!sources.length && <p className={styles.caption}>{zh ? "评估器完成下一次导入后显示各来源原值。" : "Source values appear after the evaluator’s next import."}</p>}
         <details className={styles.disclosure}><summary>{zh ? "查看转换后的模型输入" : "Inspect aligned model inputs"}</summary>
           <p>{zh ? "上表保留各自发布时的窗口。下表为生成本次模型时转换的输入；来源支持范围之外由历史基准补足，并单独标记。" : "The comparison preserves each source’s publication windows. Inputs below are aligned to this model’s issue time; unsupported tails use the historical baseline and are marked."}</p>
-          {view.forecast?.forecasts.map(f => <div key={f.target}><h3>{f.target === "automatic_reset" ? (zh ? "自动重置" : "Automatic reset") : (zh ? "重置或发卡" : "Reset or new credit")}</h3>{f.sources.map(s => <div key={s.id} className={styles.inputRow}><span>{sourceNames[s.id] ?? (zh ? "历史基准" : "Historical baseline")}</span><span>{percent(s.probabilities[23])} / {percent(s.probabilities[47])} · {zh ? "修正权重 " : "Revision weight "}{percent(s.weight)}</span>{s.baseline_weight != null && <small>{zh ? "历史起点权重 " : "Historical-anchor weight "}{percent(s.baseline_weight)}</small>}{s.baseline_points && <small>{zh ? "来源完整预测已包含信号调整；其历史基准为 " : "The complete forecast includes source adjustments; its historical baseline is "}{s.baseline_points.map(p => percent(p[1])).join(" / ")}</small>}{s.source_coverage_hours != null && <small>{zh ? `原始曲线还支持 ${s.source_coverage_hours.toFixed(1)}h` : `Native support remaining: ${s.source_coverage_hours.toFixed(1)}h`}</small>}</div>)}</div>)}
+          {view.forecast?.forecasts.map(f => <div key={f.target}><h3>{f.target === "automatic_reset" ? (zh ? "自动重置" : "Automatic reset") : (zh ? "重置或发卡" : "Reset or new credit")}</h3>{f.sources.map(s => <div key={s.id} className={styles.inputRow}><span>{sourceNames[s.id] ?? (zh ? "历史基准" : "Historical baseline")}</span><span>{percent(s.probabilities[23])} / {percent(s.probabilities[47])} · {zh ? "修正权重 " : "Revision weight "}{percent(s.weight)}</span>{s.baseline_weight != null && <small>{zh ? "历史起点权重 " : "Historical-anchor weight "}{percent(s.baseline_weight)}</small>}{s.baseline_points && <small>{zh ? "来源完整预测已包含信号调整；其历史基准为 " : "The complete forecast includes source adjustments; its historical baseline is "}{s.baseline_points.map(p => percent(p[1])).join(" / ")}</small>}<CommentEvidence comment={s.comment} language={language} onOpenSource={onOpenSource} />{s.source_coverage_hours != null && <small>{zh ? `原始曲线还支持 ${s.source_coverage_hours.toFixed(1)}h` : `Native support remaining: ${s.source_coverage_hours.toFixed(1)}h`}</small>}</div>)}</div>)}
           {sources.filter(s => s.state === "excluded").map(s => <p key={s.source}>{sourceNames[s.source]} · {zh ? "质量或口径审查未通过，保留观测但不纳入当前模型。" : "Quality or scope review pending; observations retained and excluded from the current model."}</p>)}
         </details>
       </article>
@@ -105,6 +106,19 @@ function PoolWeights({ forecast, automatic, language }: { forecast: QuantForecas
   </div>;
 }
 
+function CommentEvidence({ comment, language, onOpenSource }: {
+  comment?: CommentEstimate | null; language: Language; onOpenSource?: (url: string) => void;
+}) {
+  if (!comment?.timing_evidence?.length) return null;
+  const zh = language === "zh";
+  const evidence = [...new Map(comment.timing_evidence.map(e => [e.timing_url, e])).values()];
+  return <small><EvidenceLink url={comment.url} label={zh ? "承诺原帖" : "Commitment post"} onOpen={onOpenSource} />
+    {evidence.map(e => <span key={e.timing_url}> · <EvidenceLink url={e.timing_url}
+      label={e.relationship === "direct_reply" ? (zh ? "关联回复与时间" : "Linked reply and timing") : (zh ? "事件时间" : "Event timing")}
+      onOpen={onOpenSource} /> · {zh ? "截止 " : "By "}{publicEvidenceTime(new Date(e.deadline * 1000).toISOString(), language)}</span>)}
+  </small>;
+}
+
 function Community({ view, language, now }: { view: QuantitativeView; language: Language; now: number }) {
   const zh = language === "zh", f = forecastFor(view), c = f?.community;
   return <article className={`${styles.card} ${styles.community}`}>
@@ -123,6 +137,7 @@ function Community({ view, language, now }: { view: QuantitativeView; language: 
       {f.community_coverage && <p className={styles.coverage}>{zh ? `${f.community_coverage.included} 项有效 · ${f.community_coverage.unavailable} 项待新数据或质量达标` : `${f.community_coverage.included} eligible · ${f.community_coverage.unavailable} awaiting fresh or qualifying data`}
         {f.community_coverage.supplementary_checked > 0 && <span>{zh ? `补充社区指标：${f.community_coverage.supplementary_included}/${f.community_coverage.supplementary_checked} 项纳入，权重 ` : `Supplementary community indicators: ${f.community_coverage.supplementary_included}/${f.community_coverage.supplementary_checked} admitted, weight `}{percent(f.community_coverage.supplementary_weight)}</span>}</p>}
     </section>)}</div>
-    <div className={styles.communityStatus}>{!c ? (zh ? "本次没有可用的近期投票。" : "No eligible recent ballots in this forecast.") : forecastStale(view,f,now) ? (zh ? "上次社区结果 · 等待模块更新" : "Saved community result · awaiting an update") : (zh ? "已参与本次综合判断" : "Included in this combined forecast")}</div>
+    <CalendarSentiment report={view.evaluation} language={language} now={now} />
+    <div className={styles.communityStatus}>{!c ? (zh ? "本次暂无可直接计入概率的近期投票。" : "No recent ballots currently qualify as a probability input.") : forecastStale(view,f,now) ? (zh ? "上次社区结果 · 等待模块更新" : "Saved community result · awaiting an update") : (zh ? "已参与本次综合判断" : "Included in this combined forecast")}</div>
   </article>;
 }

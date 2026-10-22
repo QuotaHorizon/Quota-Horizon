@@ -332,11 +332,178 @@ fn separate_comment_score_crosses_boundary_without_overwriting_source_points() {
         source.comment.as_ref().unwrap().timing_sources,
         ["nextreset"]
     );
+    assert!(source.comment.as_ref().unwrap().timing_evidence.is_empty());
+    assert!(serde_json::to_value(source).unwrap()["comment"]
+        .get("timing_evidence")
+        .is_none());
     value["forecasts"][0]["sources"][0]["comment"]["url"] = json!("https://private.example/hidden");
     fs::write(&path, value.to_string()).unwrap();
     assert!(parse_forecast(&path).unwrap().forecasts[0].sources[0]
         .comment
         .is_none());
+}
+#[test]
+fn comment_timing_evidence_retains_public_links_and_filters_private_provenance() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("consumer.json");
+    let mut value = fixture();
+    let direct = json!({
+        "source":"nextreset", "deadline":1791075600., "relationship":"direct_reply",
+        "estimate_url":"https://x.com/i/status/1234", "timing_url":"https://x.com/thsottiaux/status/5678",
+        "links":[{"child_url":"https://x.com/thsottiaux/status/5678", "parent_url":"https://x.com/i/status/1234",
+            "at":1791070200., "source":"tibo_posts", "private_provenance":"never serialize this"}],
+        "private_provenance":"never serialize this"
+    });
+    let mut same = direct.clone();
+    same["relationship"] = json!("same_reference");
+    same["timing_url"] = same["estimate_url"].clone();
+    same["links"] = json!([]);
+    let mut invalid = Vec::new();
+    for key in ["source", "relationship", "estimate_url", "timing_url"] {
+        let mut row = direct.clone();
+        row[key] = json!("https://private.invalid/hidden");
+        invalid.push(row);
+    }
+    for key in ["source", "child_url", "parent_url"] {
+        let mut row = direct.clone();
+        row["links"][0][key] = json!("https://private.invalid/hidden");
+        invalid.push(row);
+    }
+    for url in [
+        "http://x.com/i/status/1234",
+        "https://user:secret@x.com/i/status/1234",
+        "javascript:alert(1)",
+    ] {
+        let mut row = direct.clone();
+        row["links"][0]["child_url"] = json!(url);
+        invalid.push(row);
+    }
+    let mut missing_source = direct.clone();
+    missing_source["links"][0]["source"] = Value::Null;
+    invalid.push(missing_source);
+    let mut bad_time = direct.clone();
+    bad_time["deadline"] = json!(-1.);
+    invalid.push(bad_time);
+    let mut future_link = direct.clone();
+    future_link["links"][0]["at"] = json!(1791075601.);
+    invalid.push(future_link);
+    let mut mixed = direct.clone();
+    mixed["links"].as_array_mut().unwrap().push(json!({
+        "child_url":"https://private.invalid/hidden", "parent_url":"https://x.com/i/status/1234",
+        "at":1791070200., "source":"private_signal"
+    }));
+    value["forecasts"][0]["sources"] = json!([{
+        "id":"codex_reset", "probabilities":vec![0.93;72], "source_points":[[24.,0.45],[48.,0.70]],
+        "origin":1791072000., "source_coverage_hours":48.,
+        "comment":{"probability":0.93,"url":"https://x.com/i/status/1234","at":1791068400.,
+            "included":true,"state":"included","deadline":1791075600.,
+            "timing_sources":["nextreset"],"adjustment_24h":0.48,"adjustment_48h":0.23,
+            "timing_evidence":[mixed,same]}
+    }]);
+    value["forecasts"][0]["sources"][0]["comment"]["timing_evidence"]
+        .as_array_mut()
+        .unwrap()
+        .extend(invalid);
+    fs::write(&path, value.to_string()).unwrap();
+    let parsed = parse_forecast(&path).unwrap();
+    let comment = parsed.forecasts[0].sources[0].comment.as_ref().unwrap();
+    assert_eq!(comment.probability, 0.93);
+    assert_eq!(comment.timing_evidence.len(), 2);
+    let evidence = &comment.timing_evidence[0];
+    assert_eq!(evidence.source, "nextreset");
+    assert_eq!(evidence.relationship, "direct_reply");
+    assert_eq!(evidence.links.len(), 1);
+    assert_eq!(evidence.links[0].source.as_deref(), Some("tibo_posts"));
+    assert_eq!(evidence.links[0].at, 1791070200.);
+    assert_eq!(comment.timing_evidence[1].relationship, "same_reference");
+    let serialized = serde_json::to_string(&parsed).unwrap();
+    for private in [
+        "private.invalid",
+        "private_signal",
+        "private_provenance",
+        "secret",
+        "javascript:",
+    ] {
+        assert!(!serialized.contains(private), "leaked {private}");
+    }
+}
+#[test]
+fn calendar_sentiment_compact_view_is_optional_and_filters_research_details() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("report.json");
+    let mut value = json!({
+        "schema_version":"reset-observer/1", "generated_at":"2026-10-17T00:00:00Z",
+        "started_at":"2026-10-03T00:00:00Z", "state":"scoring",
+        "policy":{"reporting_grace_seconds":10800,"minimum_rank_windows":30,"minimum_rank_events":5},
+        "summary":{"forecast_snapshots":0,"frozen_trials":0,"scored_nonoverlapping_trials":0,
+            "settlements":{},"next_maturity":null,"settlement_revisions":0},
+        "latest":[],"curves":[],"scorecards":[],"comparisons":[],"outcomes":[],"outcome_providers":[]
+    });
+    fs::write(&path, value.to_string()).unwrap();
+    assert!(parse_report(&path).unwrap().calendar_sentiment.is_none());
+    // The research shape in older reports remains readable without suggesting
+    // that missing compact counts mean no stored trials.
+    value["calendar_sentiment"] = json!({"production_weight":0.,"scored_days":1,
+        "trials":[{"private":"hidden"}],"latest":[]});
+    fs::write(&path, value.to_string()).unwrap();
+    assert!(parse_report(&path).unwrap().calendar_sentiment.is_none());
+    let sample = json!({"source":"didcodex_poll","date":"2026-10-16",
+        "window_start":1792123200., "window_end":1792209600., "observed_at":1792188000.,
+        "recent_votes":512,"total_clicks":2048,"weighted_reset_share":0.72,"reset_share":0.75,
+        "latest_vote_at":1792187940.,"state":"ready_for_evaluation",
+        "private_provenance":"never serialize this"});
+    let mut samples = vec![sample.clone()];
+    for (key, invalid) in [
+        ("source", json!("private_signal")),
+        ("date", json!("2026-99-99")),
+        ("date", json!("private arbitrary label")),
+        ("state", json!("unreviewed")),
+        ("window_start", json!(-1.)),
+        ("window_end", json!(1792123200.)),
+        ("observed_at", json!(1992188000.)),
+        ("latest_vote_at", json!(1992188000.)),
+        ("recent_votes", json!(2049)),
+        ("reset_share", json!(1.1)),
+        ("weighted_reset_share", json!(-0.1)),
+    ] {
+        let mut invalid_sample = sample.clone();
+        invalid_sample[key] = invalid;
+        samples.push(invalid_sample);
+    }
+    value["calendar_sentiment"] = json!({"production_weight":0.,"frozen_days":3,"frozen_trials":5,
+        "scored_days":1,"scored_trials":2,"latest":samples,"trials":[{"private":"hidden"}]});
+    fs::write(&path, value.to_string()).unwrap();
+    let parsed = parse_report(&path).unwrap();
+    let calendar = parsed.calendar_sentiment.as_ref().unwrap();
+    assert_eq!(calendar.latest.len(), 1);
+    assert_eq!(calendar.latest[0].recent_votes, 512);
+    assert_eq!(calendar.latest[0].weighted_reset_share, Some(0.72));
+    assert_eq!(calendar.production_weight, 0.);
+    assert_eq!((calendar.frozen_days, calendar.frozen_trials), (3, 5));
+    let serialized = serde_json::to_string(&parsed).unwrap();
+    for private in [
+        "private_signal",
+        "private_provenance",
+        "hidden",
+        "arbitrary",
+    ] {
+        assert!(!serialized.contains(private), "leaked {private}");
+    }
+    for (field, invalid) in [
+        ("production_weight", json!(0.2)),
+        ("scored_days", json!(4)),
+        ("scored_trials", json!(6)),
+        ("frozen_days", json!(6)),
+        ("frozen_trials", json!(-1)),
+    ] {
+        let mut invalid_section = value.clone();
+        invalid_section["calendar_sentiment"][field] = invalid;
+        fs::write(&path, invalid_section.to_string()).unwrap();
+        assert!(
+            parse_report(&path).unwrap().calendar_sentiment.is_none(),
+            "{field}"
+        );
+    }
 }
 #[test]
 fn announcement_context_retains_deadline_without_changing_probability() {

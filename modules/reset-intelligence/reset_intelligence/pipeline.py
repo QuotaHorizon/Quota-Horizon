@@ -282,8 +282,8 @@ def consumer_export(results: list[dict]) -> dict:
                                         "weight": c.get("weight"), "family": c["family"],
                                         "role": c.get("role", "background"), "signal_baseline": c.get("signal_baseline"),
                                         "response_state": c["metadata"].get("response_state"),
-                                        "comment": {k: c["metadata"]["comment"].get(k) for k in
-                                            ("probability", "url", "at", "included", "state", "deadline", "timing_sources", "adjustment_24h", "adjustment_48h")}
+                                        "comment": {k: c["metadata"]["comment"].get(k, [] if k == "timing_evidence" else None) for k in
+                                            ("probability", "url", "at", "included", "state", "deadline", "timing_sources", "timing_evidence", "adjustment_24h", "adjustment_48h")}
                                             if c["metadata"].get("comment") else None,
                                         "baseline_weight": c.get("baseline_weight"),
                                         "baseline_points": c["metadata"].get("baseline_points"),

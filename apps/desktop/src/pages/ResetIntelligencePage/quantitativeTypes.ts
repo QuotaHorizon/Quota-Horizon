@@ -1,8 +1,14 @@
 /** Product view of the two versioned module contracts. Probabilities use [0, 1]. */
 export type ResetTarget = "broad_quota_relief" | "automatic_reset";
+export interface CommentTimingEvidence {
+  source: string; deadline: number; relationship: "same_reference" | "direct_reply";
+  estimate_url: string; timing_url: string;
+  links: { child_url: string; parent_url: string; at: number; source: string | null }[];
+}
 export interface CommentEstimate {
   probability: number; url: string; at: number; included: boolean; state: string;
   deadline: number | null; timing_sources: string[]; adjustment_24h: number; adjustment_48h: number;
+  timing_evidence?: CommentTimingEvidence[];
 }
 export interface QuantChanges {
   basis?: string | null; since: string; until: string; new_statement_ids: string[];
@@ -46,6 +52,13 @@ export interface QuantScorecard extends ForecastIdentity {
   observed_event_scores?: QuantScorecard["scores"] | null;
   alerts: { threshold: number; episodes: number; false_alerts: number; precision: number | null; event_recall: number | null; median_lead_hours: number | null };
 }
+export interface CalendarSentiment {
+  production_weight: 0; frozen_days: number; frozen_trials: number; scored_days: number; scored_trials: number;
+  latest: { source: "didcodex_poll"; date: string; window_start: number; window_end: number; observed_at: number;
+    recent_votes: number; total_clicks: number; weighted_reset_share: number | null; reset_share: number | null;
+    latest_vote_at: number | null;
+    state: "ready_for_evaluation" | "insufficient_recent_votes" | "upcoming" | "closed" | "stale" }[];
+}
 export interface QuantReport {
   schema_version: "reset-observer/1"; generated_at: string; started_at: string; state: string;
   policy: { reporting_grace_seconds: number; minimum_rank_windows: number; minimum_rank_events: number };
@@ -61,6 +74,7 @@ export interface QuantReport {
     announced_at: number | null; known_at: number; references: string[]; primary_references: number; completion_reports: number }[];
   outcome_providers: { provider: string; last_attempt: string; generated_at: string | null; healthy: boolean;
     state?: "healthy" | "collector_overdue" | "request_or_decode_failure" | "stale_source_content" | "incomplete_source_evidence" | null }[];
+  calendar_sentiment?: CalendarSentiment | null;
 }
 export interface QuantitativeView {
   connected: boolean; checkedAt: string; forecastIssue: string | null; evaluationIssue: string | null;

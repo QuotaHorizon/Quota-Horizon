@@ -140,8 +140,26 @@ struct CommentEstimate {
     state: String,
     deadline: Option<f64>,
     timing_sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    timing_evidence: Vec<CommentTimingEvidence>,
     adjustment_24h: f64,
     adjustment_48h: f64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommentTimingEvidence {
+    source: String,
+    deadline: f64,
+    relationship: String,
+    estimate_url: String,
+    timing_url: String,
+    links: Vec<CommentReplyLink>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommentReplyLink {
+    child_url: String,
+    parent_url: String,
+    at: f64,
+    source: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CommunityInput {
@@ -314,11 +332,51 @@ struct Policy {
     minimum_rank_events: usize,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct CalendarSentiment {
+    production_weight: f64,
+    frozen_days: usize,
+    frozen_trials: usize,
+    scored_days: usize,
+    scored_trials: usize,
+    latest: Vec<CalendarSentimentSample>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CalendarSentimentSample {
+    source: String,
+    date: String,
+    window_start: f64,
+    window_end: f64,
+    observed_at: f64,
+    recent_votes: usize,
+    total_clicks: usize,
+    weighted_reset_share: Option<f64>,
+    reset_share: Option<f64>,
+    latest_vote_at: Option<f64>,
+    state: String,
+}
+fn optional_calendar_sentiment<'de, D>(
+    deserializer: D,
+) -> Result<Option<CalendarSentiment>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Earlier reports contain the research-only shape. Missing compact fields
+    // or an invalid optional section must not discard the whole scored report.
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Report {
     schema_version: String,
     generated_at: String,
     started_at: String,
     state: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_calendar_sentiment"
+    )]
+    calendar_sentiment: Option<CalendarSentiment>,
     policy: Policy,
     summary: Summary,
     latest: Vec<Latest>,
@@ -489,6 +547,31 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
         for s in &mut f.sources {
             if let Some(c) = &mut s.comment {
                 c.timing_sources.retain(|id| source(id));
+                for evidence in &mut c.timing_evidence {
+                    evidence.links.retain(|link| {
+                        public_reference(&link.child_url)
+                            && public_reference(&link.parent_url)
+                            && epoch(link.at)
+                            && link.at < evidence.deadline
+                            && link.source.as_deref().is_some_and(|id| {
+                                source(id) || matches!(id, "tibo_posts" | "statements")
+                            })
+                    });
+                    evidence.links.truncate(16);
+                }
+                c.timing_evidence.retain(|evidence| {
+                    source(&evidence.source)
+                        && epoch(evidence.deadline)
+                        && evidence.deadline > c.at
+                        && public_reference(&evidence.estimate_url)
+                        && public_reference(&evidence.timing_url)
+                        && match evidence.relationship.as_str() {
+                            "same_reference" => evidence.links.is_empty(),
+                            "direct_reply" => !evidence.links.is_empty(),
+                            _ => false,
+                        }
+                });
+                c.timing_evidence.truncate(16);
                 if !probability(c.probability)
                     || !public_reference(&c.url)
                     || !epoch(c.at)
@@ -705,6 +788,44 @@ fn parse_report(path: &Path) -> Result<Report, String> {
         || !timestamp(&r.started_at)
     {
         return Err("invalid".into());
+    }
+    if let Some(calendar) = &mut r.calendar_sentiment {
+        let generated = DateTime::parse_from_rfc3339(&r.generated_at)
+            .map(|t| t.timestamp() as f64)
+            .unwrap_or(0.);
+        calendar.latest.retain(|sample| {
+            sample.source == "didcodex_poll"
+                && chrono::NaiveDate::parse_from_str(&sample.date, "%Y-%m-%d").is_ok()
+                && sample.date.len() == 10
+                && epoch(sample.window_start)
+                && epoch(sample.window_end)
+                && sample.window_start < sample.window_end
+                && epoch(sample.observed_at)
+                && sample.observed_at <= generated + 60.
+                && sample.recent_votes <= sample.total_clicks
+                && sample.weighted_reset_share.is_none_or(probability)
+                && sample.reset_share.is_none_or(probability)
+                && sample
+                    .latest_vote_at
+                    .is_none_or(|at| epoch(at) && at <= sample.observed_at)
+                && matches!(
+                    sample.state.as_str(),
+                    "ready_for_evaluation"
+                        | "insufficient_recent_votes"
+                        | "upcoming"
+                        | "closed"
+                        | "stale"
+                )
+        });
+        calendar.latest.truncate(128);
+        if calendar.production_weight != 0.
+            || calendar.scored_days > calendar.frozen_days
+            || calendar.frozen_days > calendar.frozen_trials
+            || calendar.scored_trials > calendar.frozen_trials
+            || calendar.scored_days > calendar.scored_trials
+        {
+            r.calendar_sentiment = None;
+        }
     }
     if let Some(progress) = &r.summary.scoring_by_horizon {
         let mut horizons = std::collections::BTreeSet::new();

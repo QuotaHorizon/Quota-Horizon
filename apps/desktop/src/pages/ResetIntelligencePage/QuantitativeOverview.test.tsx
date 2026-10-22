@@ -59,7 +59,7 @@ describe("independent quantitative integration", () => {
     const t=timeline(), f=forecastFor(t.quantitative)!;
     f.sources=[{id:"codex_reset",probabilities:Array(72).fill(.83),source_points:[[24,.45],[48,.70]],
       origin:now/1000,source_coverage_hours:48,weight:1,
-      comment:{probability:.83,url:"https://x.com/i/status/1234",at:now/1000-3600,included:true,state:"included",deadline:now/1000+3600,timing_sources:["nextreset"],adjustment_24h:.38,adjustment_48h:.13}}];
+      comment:{probability:.83,url:"https://x.com/i/status/1234",at:now/1000-3600,included:true,state:"included",deadline:now/1000+3600,timing_sources:["nextreset"],timing_evidence:[{source:"nextreset",deadline:now/1000+3600,relationship:"direct_reply",estimate_url:"https://x.com/i/status/1234",timing_url:"https://x.com/i/status/5678",links:[{source:"tibo_posts",child_url:"https://x.com/i/status/5678",parent_url:"https://x.com/i/status/1234",at:now/1000-1800}]}],adjustment_24h:.38,adjustment_48h:.13}}];
     const row=sourceRows(t.quantitative!).find(s=>s.source==="codex_reset" && s.target===f.target)!;
     expect(row.probabilities_at_publication[24]).toBe(.45);
     expect(row.comment?.probability).toBe(.83);
@@ -67,6 +67,9 @@ describe("independent quantitative integration", () => {
     expect(zh).toContain("承诺判断 83.0% · 已计入");
     const en=renderToStaticMarkup(<ResetBriefing timeline={t} now={now} language="en" />);
     expect(en).toContain("Commitment estimate 83.0% · Included");
+    expect(zh).toContain("关联回复与时间");
+    expect(en).toContain("Linked reply and timing");
+    expect(en).toContain('href="https://x.com/i/status/5678"');
   });
   it("keeps an upstream announcement readable without changing the independent probability", () => {
     const t=timeline(), f=forecastFor(t.quantitative)!;

@@ -1240,6 +1240,48 @@ class ImportAndReportTests(TemporaryStore):
         self.assertNotIn("raw_click_share", html)
         self.assertEqual(json.dumps(report, sort_keys=True), before)
 
+    def test_calendar_html_groups_checkpoints_and_separates_activity_from_completion(self):
+        report = self.calendar_html_report(settlement={
+            "label": 0, "score_eligible": True, "candidate_losses": {"raw_click_share": {"brier": .16}},
+        })
+        first = report["calendar_sentiment"]["trials"][0]
+        first.update(source="didcodex_poll", round_id="didcodex:2026-10-13", origin=T,
+                     hours=24, sampling={"mode": "first_eligible"},
+                     activity_classification={"upstream_outcome": "reset", "label": 1,
+                                              "mismatch": "activity_reset_without_within_day_completion"})
+        later = json.loads(json.dumps(first))
+        later.update(origin=T+6*3600+30, hours=18-30/3600,
+                     sampling={"mode": "fixed_checkpoint", "local_hour": 6})
+        report["calendar_sentiment"].update(trials=[first, later], frozen_days=1, frozen_trials=2,
+                                            scored_days=1, scored_trials=2)
+        before = json.dumps(report, sort_keys=True)
+        html = html_report(report)
+        self.assertIn("已冻结 1 个活动日窗、2 个观察点", html)
+        self.assertIn("已记分 1 个活动日、2 个观察点", html)
+        self.assertIn("同日观察点相关", html)
+        self.assertIn("首次达标</td>", html)
+        self.assertIn("06:00 观察点</td>", html)
+        self.assertIn(iso(T+6*3600+30)+" → "+iso(T+24*3600), html)
+        self.assertIn("上游活动归类</th>", html)
+        self.assertIn("重置</td><td>窗口内未发现完成", html)
+        self.assertIn("活动归类与窗口完成不同", html)
+        self.assertIn("表中 Brier 对应窗口完成", html)
+        self.assertNotIn("每一天只冻结一次", html)
+        self.assertEqual(json.dumps(report, sort_keys=True), before)
+
+    def test_calendar_html_unknown_activity_or_completion_stays_unknown(self):
+        report = self.calendar_html_report(settlement={"label": None, "reason": "incomplete_outcome_coverage"})
+        trial = report["calendar_sentiment"]["trials"][0]
+        trial["activity_classification"] = {"upstream_outcome": None, "label": None, "mismatch": None}
+        html = html_report(report)
+        section = html.split("<h2>Did Codex Reset", 1)[-1].split("<h2>近期事件核验", 1)[0]
+        self.assertIn("待上游归类</td><td>待核验", section)
+        self.assertNotIn("窗口内未发现完成", section)
+        self.assertNotIn("活动归类与窗口完成不同", section)
+        for value, expected in [("improvement", "改进"), ("both", "重置与改进")]:
+            trial["activity_classification"]["upstream_outcome"] = value
+            self.assertIn(expected+"</td><td>待核验", html_report(report))
+
     def test_private_provenance_does_not_leave_report(self):
         initialize(self.store, T, self.policy)
         self.store.add_forecast(

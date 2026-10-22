@@ -614,16 +614,38 @@ def html_report(report):
                     state += "；结果覆盖不足"
             else:
                 state = "等待结算记录" if not settlement else "结果待核验，未记分"
+            sampling = trial.get("sampling", {})
+            sample_label = (f'{sampling["local_hour"]:02}:00 观察点'
+                            if sampling.get("mode") == "fixed_checkpoint" and sampling.get("local_hour") is not None
+                            else "首次达标")
+            origin = trial.get("origin")
+            end = origin+trial["hours"]*3600 if origin is not None and trial.get("hours") is not None else None
+            window_label = iso(origin)+" → "+iso(end) if end is not None else "—"
+            activity = trial.get("activity_classification", {})
+            activity_label = {"reset": "重置", "improvement": "改进", "both": "重置与改进"}.get(
+                activity.get("upstream_outcome"), "待上游归类")
+            completion_label = {0: "窗口内未发现完成", 1: "已报告完成"}.get(settlement.get("label"), "待核验")
+            if activity.get("mismatch"):
+                state += "；活动归类与窗口完成不同"
             for name, p in {**trial["candidates"], **{c["source"]+":"+c["version"]: c["probability"] for c in trial["comparisons"]}}.items():
                 loss = settlement.get("candidate_losses", {}).get(name, {}) if trial_scored or event_scored else {}
                 label = {"raw_click_share": "时效加权点击候选",
                          "repeat_sensitive_share": "重复参与敏感性候选"}.get(name, name)
                 evaluations.append("<tr>"+"".join(f"<td>{escape(str(v))}</td>" for v in
-                    (trial["features"]["date"], label, pct(p), f'{loss["brier"]:.4f}' if loss else "—", state))+"</tr>")
-        preference_html += (f'<p>已冻结 {len(preference.get("trials", []))} 个活动日窗，已记分 {preference.get("scored_days", 0)} 个。'
-                            '候选与同一时刻的 Horizon、来源预测按相同剩余日窗口核验；每一天只冻结一次。</p>')
+                    (trial["features"]["date"], sample_label, window_label, activity_label, completion_label,
+                     label, pct(p), f'{loss["brier"]:.4f}' if loss else "—", state))+"</tr>")
+        trials = preference.get("trials", [])
+        frozen_days = preference.get("frozen_days", len({(t.get("source"), t.get("round_id", t["features"]["date"])) for t in trials}))
+        scored_trials = preference.get("scored_trials", sum(bool(t.get("settlement") and t["settlement"].get("score_eligible")) for t in trials))
+        preference_html += (f'<p>已冻结 {frozen_days} 个活动日窗、{preference.get("frozen_trials", len(trials))} 个观察点；'
+                            f'已记分 {preference.get("scored_days", 0)} 个活动日、{scored_trials} 个观察点。'
+                            '同日观察点相关，按活动日分组评估。首次达标后，在太平洋时间 06:00、12:00、18:00 后的合格观测冻结；'
+                            '错过时段不补录。候选与同期 Horizon、来源预测核验相同剩余日窗口。</p>'
+                            '<p>活动归类读取上游的重置 / 改进结果；窗口完成记录冻结后至当日结束的实际完成证据。'
+                            '两者分别保留，表中 Brier 对应窗口完成。</p>')
         if evaluations:
-            preference_html += ('<div class="panel"><table><thead><tr><th>活动日</th><th>候选 / 对照</th><th>冻结值</th>'
+            preference_html += ('<div class="panel"><table><thead><tr><th>活动日</th><th>采样 · 太平洋时间</th>'
+                '<th>实际核验窗口 · UTC</th><th>上游活动归类</th><th>窗口完成</th><th>候选 / 对照</th><th>冻结值</th>'
                 '<th>Brier</th><th>状态</th></tr></thead><tbody>'+"".join(evaluations)+'</tbody></table></div>')
     data = json.dumps(report["curves"], ensure_ascii=False).replace("<", "\\u003c")
     return (
