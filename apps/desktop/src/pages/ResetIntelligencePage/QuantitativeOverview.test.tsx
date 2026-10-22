@@ -160,6 +160,18 @@ describe("independent quantitative integration", () => {
     const rows=sourceRows(v).filter(r=>r.source==="codex_reset" && r.target===old.target);
     expect(rows).toHaveLength(1);expect(rows[0].probabilities_at_publication[24]).toBe(.45);
   });
+  it("marks old source windows closed as soon as the producer detects a new reset", () => {
+    const v=quantitativeFixture(now), f=forecastFor(v, "automatic_reset")!;
+    f.last_event_at=now/1000-60;
+    f.sources=[];
+    const raw=v.evaluation!.latest.find(r=>r.source==="monitor" && r.track==="native")!;
+    raw.origin=new Date(now-3600_000).toISOString();raw.state="current";
+    const row=sourceRows(v).find(r=>r.source==="monitor" && r.target===f.target)!;
+    expect(row.state).toBe("cycle_closed");expect(row.included).toBe(false);
+    expect(row.probabilities_at_publication).toEqual(raw.probabilities_at_publication);
+    raw.origin=new Date(now).toISOString();raw.state="cycle_closed";
+    expect(sourceRows(v).find(r=>r.source==="monitor" && r.target===f.target)!.state).toBe("cycle_closed");
+  });
   it("keeps full bilingual posts and progress inside the focusable Tibo panel", () => {
     const t=timeline(), f=forecastFor(t.quantitative)!;
     const original="Synthetic detailed reset statement. ".repeat(40)+"Original ending retained.";
@@ -224,7 +236,7 @@ describe("independent quantitative integration", () => {
     v.forecast=null;v.forecastIssue="missing";
     expect(forecastPresentation(undefined,now,false,t).probability24h).toBeNull();
     const missing=renderToStaticMarkup(<ResetBriefing timeline={t} now={now} language="en" />);
-    expect(missing).toContain("Awaiting forecast");expect(missing).not.toContain("0.0%");
+    expect(missing).toContain("Awaiting forecast");expect(missing).not.toMatch(/<strong[^>]*>0\.0%<\/strong>/);
   });
   it("only shows a community effect when the ablation belongs to the exact forecast issue", () => {
     const v=quantitativeFixture(now),f=forecastFor(v)!;

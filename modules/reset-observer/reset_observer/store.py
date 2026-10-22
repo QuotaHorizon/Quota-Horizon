@@ -123,9 +123,16 @@ class Store:
                             (f.id, f.source, f.version, f.target, f.track, f.origin, f.available_at, f.expires_at, packed(f.__dict__)))
 
     def forecasts(self, now, latest=False):
-        query = """SELECT f.payload FROM forecasts f JOIN (SELECT id,ROW_NUMBER() OVER
-          (PARTITION BY source,target,track ORDER BY origin DESC,available_at DESC,id DESC) rank
-          FROM forecasts WHERE available_at<=?) latest ON f.id=latest.id WHERE latest.rank=1""" if latest else \
+        # Discover series through the covering index, then seek its latest known
+        # publication. Ranking every historical payload makes this read grow
+        # with the archive even though only one row per series is needed.
+        query = """SELECT f.payload FROM
+          (SELECT DISTINCT source,target,track FROM forecasts) series
+          JOIN forecasts f ON f.id=(SELECT id FROM forecasts
+            WHERE source=series.source AND target=series.target AND track=series.track
+              AND available_at<=?
+            ORDER BY origin DESC,available_at DESC,id DESC LIMIT 1)
+          ORDER BY f.source,f.target,f.track""" if latest else \
             "SELECT payload FROM forecasts WHERE available_at<=? ORDER BY available_at,origin,id"
         return [Forecast(**json.loads(r[0])) for r in self.db.execute(query, (now,))]
 

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from reset_observer.contracts import Policy
-from reset_observer.evidence import collect, fetch, parse
+from reset_observer.evidence import FEEDS, collect, fetch, parse
 from reset_observer.runtime import (
     producer_due,
     refresh_path,
@@ -242,6 +242,8 @@ class OutcomeRefreshTests(unittest.TestCase):
 
         with (
             patch("reset_observer.runtime.time.time", return_value=now),
+            patch("reset_observer.runtime.FEEDS", {p: FEEDS[p] for p in self.providers}),
+            patch("reset_observer.evidence.FEEDS", {p: FEEDS[p] for p in self.providers}),
             patch("reset_observer.runtime.bundled_revision", return_value=None),
             patch(
                 "reset_observer.runtime.subprocess.run",
@@ -492,7 +494,7 @@ class RefreshTests(unittest.TestCase):
     ):
         with tempfile.TemporaryDirectory() as d:
             store = Store(Path(d) / "state.sqlite")
-            for source in ("completion_feed", "public_catalogue", "quota_events"):
+            for source in FEEDS:
                 store.observation(source, 100, 100, True, [], {})
             store.observation("quota_events", 101, None, False, None, None, "http_429")
 
@@ -508,7 +510,7 @@ class RefreshTests(unittest.TestCase):
                 collect(store, Policy(), refresh=True)
                 self.assertEqual(
                     {c.args[0] for c in f.call_args_list},
-                    {"completion_feed", "public_catalogue"},
+                    set(FEEDS) - {"quota_events"},
                 )
             store.close()
 

@@ -6,13 +6,15 @@ import json
 import math
 
 from .contracts import digest, iso
-from .evidence import FEEDS
+from .evidence import FEEDS, POSITIVE_ONLY_FEEDS
 
 
 def coverage_details(store, start, end, known_by, policy):
     providers = []
     gap = policy.maximum_coverage_gap_seconds
     for provider in FEEDS:
+        if provider in POSITIVE_ONLY_FEEDS:
+            continue
         rows = [dict(r) for r in store.db.execute(
             "SELECT observed_at,generated_at,healthy,error FROM observations WHERE provider=? AND observed_at BETWEEN ? AND ? ORDER BY observed_at,id",
             (provider, start - gap, min(end + gap, known_by)))]

@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from reset_observer.contracts import AUTOMATIC, RELIEF, Policy, digest, packed
 from reset_observer.preferences import (
     CHECKPOINT_VERSION, activity_endpoint, capture, checkpoint, current_features,
-    freeze, report, settle,
+    freeze, hourly_trend, report, settle,
 )
 from reset_observer.store import Store
 from reset_observer.reporting import build_report, html_report
@@ -363,3 +363,73 @@ class CalendarPreferenceTests(unittest.TestCase):
         for value, label in [("both", 1), ("improvement", 0), (None, None), ("unknown", None)]:
             with self.subTest(outcome=value):
                 self.assertEqual(activity_endpoint({"upstream_outcome": value}, None)["label"], label)
+
+    def test_trend_counts_real_increment_batches_in_six_hours_without_duplicate_edges(self):
+        samples = []
+        reset = feature = 0
+        for index in range(13):
+            if index:
+                reset += 20 if index <= 10 else 10
+                feature += 5 if index <= 10 else 40
+            samples.append({**poll(reset, feature), "observed_at": T-21600+index*1800})
+        trend = hourly_trend(samples, T)
+        self.assertEqual(len(trend["bins"]), 6)
+        self.assertEqual(sum(b["new_clicks"] for b in trend["bins"]), reset+feature)
+        self.assertEqual([b["new_clicks"] for b in trend["bins"]], [50]*5+[100])
+        self.assertTrue(all(b["coverage_fraction"] == 1 for b in trend["bins"]))
+        self.assertAlmostEqual(trend["change"]["reset_share_delta"], -.6)
+        self.assertEqual(trend["change"]["click_rate_ratio"], 2)
+
+    def test_trend_never_allocates_a_batch_crossing_an_hour_edge(self):
+        # The 100-click batch is known only to straddle the boundary.
+        samples = [{**poll(r, 0), "observed_at": at} for at, r in (
+            (T-7200, 0), (T-5400, 50), (T-3601, 100),
+            (T-3599, 200), (T-1800, 250), (T, 300))]
+        trend = hourly_trend(samples, T)
+        self.assertEqual([b["new_clicks"] for b in trend["bins"][-2:]], [100, 100])
+        self.assertEqual(sum(b["new_clicks"] for b in trend["bins"]), 200)
+        self.assertTrue(all(b["state"] == "available" for b in trend["bins"][-2:]))
+        self.assertAlmostEqual(trend["change"]["click_rate_ratio"], 1)
+
+    def test_trend_requires_fifty_new_clicks_and_continuous_hour_coverage(self):
+        for n, state in ((49, "insufficient_recent_votes"), (50, "available")):
+            with self.subTest(votes=n):
+                samples = [{**poll(r, 0), "observed_at": at} for at, r in (
+                    (T-3600, 10000), (T-1800, 10000), (T, 10000+n))]
+                result = hourly_trend(samples, T)
+                self.assertEqual(result["bins"][-1]["state"], state)
+                self.assertEqual(result["bins"][-1]["reset_share"], 1 if n == 50 else None)
+                self.assertIsNone(result["change"]["reset_share_delta"])
+        for times, counts in (
+            ([T-3600, T-1801, T-1800, T], [100, 200, 10, 70]),  # Counter correction.
+            ([T-3600, T-1801, T], [100, 200, 500]),  # Long collection gap.
+            ([T-600, T], [100, 200]),  # Newly started observer.
+        ):
+            with self.subTest(times=times):
+                samples = [{**poll(r, 0), "observed_at": at} for at, r in zip(times, counts)]
+                result = hourly_trend(samples, T)
+                self.assertEqual(result["bins"][-1]["state"], "incomplete_coverage")
+                self.assertIsNone(result["bins"][-1]["reset_share"])
+                self.assertIsNone(result["bins"][-1]["clicks_per_hour"])
+
+    def test_index_key_discovery_does_not_leak_future_received_or_observed_samples(self):
+        self.put(T-60, poll())
+        self.put(T, poll(17100, 5000), received=T+60)
+        self.put(T+60, poll(17200, 5000, id="future-only"))
+        current = current_features(self.store, T)
+        self.assertEqual(len(current), 1)
+        self.assertEqual(current[0]["recent_votes"], 0)
+        self.assertEqual(sum(b["new_clicks"] for b in current[0]["trend"]["bins"]), 0)
+
+    def test_activity_provenance_is_separate_from_completion_and_label_inference(self):
+        activity = {"scheduled": [{"at": T, "url": "https://x.com/i/status/123", "scope": "global"}],
+                    "completed": [], "improvements": []}
+        sample = {"upstream_outcome": None, "activity": activity, "observed_at": T,
+                  "received_at": T+10, "question_url": "https://didcodexreset.com/zh-hk/oct28.html"}
+        endpoint = activity_endpoint(sample, {"label": 0})
+        self.assertIsNone(endpoint["label"])
+        self.assertIsNone(endpoint["mismatch"])
+        self.assertEqual(endpoint["activity"], activity)
+        self.assertEqual(endpoint["received_at"], T+10)
+        self.assertEqual(endpoint["classification_basis"], "upstream_outcome")
+        self.assertEqual(endpoint["source_url"], sample["question_url"])

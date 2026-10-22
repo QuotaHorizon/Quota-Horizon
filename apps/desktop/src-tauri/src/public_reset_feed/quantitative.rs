@@ -17,6 +17,8 @@ pub struct Forecast {
     issued_at: String,
     valid_until: Option<String>,
     model_version: String,
+    #[serde(default)]
+    evaluation_version: Option<String>,
     combination_method: Option<String>,
     training_state: Option<String>,
     evaluation_windows: usize,
@@ -353,6 +355,98 @@ struct CalendarSentimentSample {
     reset_share: Option<f64>,
     latest_vote_at: Option<f64>,
     state: String,
+    #[serde(default, deserialize_with = "optional_calendar_trend")]
+    trend: Option<CalendarTrend>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CalendarTrend {
+    window_hours: usize,
+    bin_hours: usize,
+    minimum_bin_votes: usize,
+    minimum_coverage: f64,
+    bins: Vec<CalendarTrendBin>,
+    change: CalendarTrendChange,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CalendarTrendBin {
+    start: f64,
+    end: f64,
+    new_clicks: usize,
+    reset_clicks: usize,
+    feature_clicks: usize,
+    coverage_fraction: f64,
+    reset_share: Option<f64>,
+    clicks_per_hour: Option<f64>,
+    state: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CalendarTrendChange {
+    state: String,
+    reset_share_delta: Option<f64>,
+    click_rate_ratio: Option<f64>,
+}
+fn optional_calendar_trend<'de, D>(deserializer: D) -> Result<Option<CalendarTrend>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
+}
+impl CalendarTrend {
+    fn valid(&self, generated: f64) -> bool {
+        self.window_hours == 6
+            && self.bin_hours == 1
+            && self.minimum_bin_votes == 50
+            && self.minimum_coverage == 0.9
+            && self.bins.len() == 6
+            && self.bins.iter().all(|b| {
+                epoch(b.start)
+                    && epoch(b.end)
+                    && (b.end - b.start - 3600.).abs() < 1.
+                    && b.end <= generated + 60.
+                    && b.start >= generated - 7. * 3600.
+                    && b.reset_clicks.checked_add(b.feature_clicks) == Some(b.new_clicks)
+                    && probability(b.coverage_fraction)
+                    && b.reset_share.is_none_or(probability)
+                    && b.clicks_per_hour.is_none_or(|v| v.is_finite() && v >= 0.)
+                    && match b.state.as_str() {
+                        "available" => {
+                            b.new_clicks >= 50
+                                && b.coverage_fraction >= 0.9
+                                && b.reset_share.is_some()
+                                && b.clicks_per_hour.is_some()
+                        }
+                        "insufficient_recent_votes" | "incomplete_coverage" => {
+                            b.reset_share.is_none()
+                        }
+                        _ => false,
+                    }
+            })
+            && self
+                .bins
+                .windows(2)
+                .all(|b| (b[0].end - b[1].start).abs() < 1.)
+            && self
+                .change
+                .reset_share_delta
+                .is_none_or(|v| v.is_finite() && (-1. ..=1.).contains(&v))
+            && self
+                .change
+                .click_rate_ratio
+                .is_none_or(|v| v.is_finite() && v >= 0.)
+            && match self.change.state.as_str() {
+                "available" => {
+                    self.bins[4..].iter().all(|b| b.state == "available")
+                        && self.change.reset_share_delta.is_some()
+                        && self.change.click_rate_ratio.is_some()
+                }
+                "awaiting_comparable_hours" => {
+                    self.change.reset_share_delta.is_none()
+                        && self.change.click_rate_ratio.is_none()
+                }
+                _ => false,
+            }
+    }
 }
 fn optional_calendar_sentiment<'de, D>(
     deserializer: D,
@@ -405,6 +499,85 @@ pub(crate) struct View {
 struct ConnectionConfig {
     forecast_path: PathBuf,
     evaluation_path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ExportFileState {
+    Present {
+        modified: Option<std::time::SystemTime>,
+        bytes: u64,
+    },
+    Unavailable(std::io::ErrorKind),
+}
+
+impl ExportFileState {
+    fn at(path: &Path) -> Self {
+        match fs::metadata(path) {
+            Ok(metadata) => Self::Present {
+                modified: metadata.modified().ok(),
+                bytes: metadata.len(),
+            },
+            Err(error) => Self::Unavailable(error.kind()),
+        }
+    }
+}
+
+/// Watch publication metadata independently of public-source HTTP requests.
+/// Only a changed connection file is read; forecast/report contents and their
+/// databases remain untouched until the existing consumer handles the event.
+pub(crate) struct OutputWatcher {
+    directory: PathBuf,
+    connection: Option<ExportFileState>,
+    paths: Vec<PathBuf>,
+    previous: Option<(ExportFileState, Vec<ExportFileState>)>,
+}
+
+impl OutputWatcher {
+    pub(crate) fn new(directory: &Path) -> Self {
+        let mut watcher = Self {
+            directory: directory.into(),
+            connection: None,
+            paths: Vec::new(),
+            previous: None,
+        };
+        watcher.changed();
+        watcher
+    }
+
+    pub(crate) fn changed(&mut self) -> bool {
+        let connection_path = self.directory.join("reset-radar-connection.json");
+        let connection = ExportFileState::at(&connection_path);
+        if self.connection.as_ref() != Some(&connection) {
+            self.paths = match &connection {
+                ExportFileState::Unavailable(std::io::ErrorKind::NotFound) => vec![
+                    self.directory.join("reset-intelligence/consumer.json"),
+                    self.directory.join("reset-observer/report.json"),
+                ],
+                ExportFileState::Present { .. } => read_json::<ConnectionConfig>(&connection_path)
+                    .ok()
+                    .filter(|paths| {
+                        paths.forecast_path.is_absolute() && paths.evaluation_path.is_absolute()
+                    })
+                    .map(|paths| vec![paths.forecast_path, paths.evaluation_path])
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            self.connection = Some(connection.clone());
+        }
+        let current = (
+            connection,
+            self.paths
+                .iter()
+                .map(|path| ExportFileState::at(path))
+                .collect(),
+        );
+        let changed = self
+            .previous
+            .as_ref()
+            .is_some_and(|previous| previous != &current);
+        self.previous = Some(current);
+        changed
+    }
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
@@ -508,6 +681,14 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
             || !timestamp(&f.issued_at)
             || f.valid_until.as_ref().is_some_and(|s| !timestamp(s))
             || !matches!(f.status.as_str(), "current" | "stale" | "unavailable")
+            || f.evaluation_version.as_ref().is_some_and(|v| {
+                !v.starts_with(&format!("{}:", f.model_version))
+                    || v.len() <= f.model_version.len() + 1
+                    || v.len() > 256
+                    || !v
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"-_:".contains(&b))
+            })
             || (f.status == "current" && (f.curve.len() != 72 || f.valid_until.is_none()))
             || f.curve.len() > 72
             || f.curve.iter().enumerate().any(|(i, p)| {
@@ -818,6 +999,15 @@ fn parse_report(path: &Path) -> Result<Report, String> {
                 )
         });
         calendar.latest.truncate(128);
+        for sample in &mut calendar.latest {
+            if sample
+                .trend
+                .as_ref()
+                .is_some_and(|trend| !trend.valid(generated))
+            {
+                sample.trend = None;
+            }
+        }
         if calendar.production_weight != 0.
             || calendar.scored_days > calendar.frozen_days
             || calendar.frozen_days > calendar.frozen_trials
@@ -871,7 +1061,11 @@ fn parse_report(path: &Path) -> Result<Report, String> {
         o.references.retain(|s| public_reference(s));
         if !matches!(
             o.reason.as_deref(),
-            Some("conditional_pledge" | "population_unspecified")
+            Some(
+                "conditional_pledge"
+                    | "population_unspecified"
+                    | "insufficient_primary_confirmation"
+            )
         ) {
             o.reason = None;
         }

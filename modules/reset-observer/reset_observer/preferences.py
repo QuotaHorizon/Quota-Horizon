@@ -22,6 +22,7 @@ MAX_GAP_SECONDS = 1800
 CHECKPOINT_VERSION = "calendar-preference-checkpoints-1"
 CHECKPOINT_HOURS = (6, 12, 18)
 PACIFIC = "America/Los_Angeles"
+MINIMUM_TREND_COVERAGE = .9
 
 
 def capture(store, source, observed_at, received_at, poll):
@@ -48,13 +49,13 @@ def recent_samples(store, source, round_id, now):
     return [json.loads(r[0]) for r in rows]
 
 
-def features(samples, now):
-    latest = samples[-1]
+def increments(samples, now):
+    """Only count batches between observed endpoints, restarting after uncertainty."""
     reset = feature = 0
     weighted_reset = weighted_feature = 0.
     last_vote = None
     corrections = gaps = 0
-    first_at = latest["observed_at"]
+    first_at = samples[-1]["observed_at"] if samples else now
     for before, after in zip(samples, samples[1:]):
         a, b = ({x["p"]: x["votes"] for x in p["bins"]} for p in (before, after))
         left, right = before["observed_at"], after["observed_at"]
@@ -76,6 +77,44 @@ def features(samples, now):
         weighted_feature += weight*df
         if dr+df:
             last_vote = right
+    return {"reset": reset, "feature": feature, "weighted_reset": weighted_reset,
+            "weighted_feature": weighted_feature, "first_at": first_at,
+            "last_vote": last_vote, "corrections": corrections, "gaps": gaps}
+
+
+def hourly_trend(samples, now):
+    bins = []
+    for index in range(6):
+        start, end = now-(6-index)*3600, now-(5-index)*3600
+        # A batch crossing an edge has no individual ballot timestamps. Leave
+        # it unallocated instead of interpolating or assigning it to one hour.
+        within = [s for s in samples if start <= s["observed_at"] <= end]
+        delta = increments(within, end)
+        exposure = max(0., within[-1]["observed_at"]-delta["first_at"]) if within else 0.
+        coverage = min(1., exposure/3600)
+        votes = delta["reset"]+delta["feature"]
+        state = ("incomplete_coverage" if coverage < MINIMUM_TREND_COVERAGE
+                 else "insufficient_recent_votes" if votes < MINIMUM_VOTES else "available")
+        bins.append({"start": start, "end": end, "new_clicks": votes,
+                     "reset_clicks": delta["reset"], "feature_clicks": delta["feature"],
+                     "coverage_fraction": coverage,
+                     "reset_share": delta["reset"]/votes if state == "available" else None,
+                     "clicks_per_hour": votes*3600/exposure if state == "available" else None,
+                     "state": state})
+    previous, current = bins[-2:]
+    comparable = previous["state"] == current["state"] == "available"
+    return {"window_hours": 6, "bin_hours": 1, "minimum_bin_votes": MINIMUM_VOTES,
+            "minimum_coverage": MINIMUM_TREND_COVERAGE, "bins": bins,
+            "change": {"state": "available" if comparable else "awaiting_comparable_hours",
+                       "reset_share_delta": current["reset_share"]-previous["reset_share"] if comparable else None,
+                       "click_rate_ratio": current["clicks_per_hour"]/previous["clicks_per_hour"] if comparable else None}}
+
+
+def features(samples, now):
+    latest = samples[-1]
+    delta = increments(samples, now)
+    reset, feature = delta["reset"], delta["feature"]
+    weighted_reset, weighted_feature = delta["weighted_reset"], delta["weighted_feature"]
     n = reset+feature
     weighted_n = weighted_reset+weighted_feature
     # This is a sensitivity model using 100 perfectly correlated clicks per
@@ -103,16 +142,19 @@ def features(samples, now):
         "repeat_sensitive_candidate": (weighted_reset/100+.5)/(repeat_units+1) if n >= MINIMUM_VOTES else None,
         "unique_participants": None, "max_votes_per_ip_24h": 100,
         "minimum_ip_units_under_published_limit": math.ceil(n/100),
-        "sampling_since": first_at, "latest_vote_at": last_vote,
-        "corrections": corrections, "observation_gaps": gaps,
+        "sampling_since": delta["first_at"], "latest_vote_at": delta["last_vote"],
+        "corrections": delta["corrections"], "observation_gaps": delta["gaps"],
         "upstream_outcome": latest["upstream_outcome"],
+        "activity": latest.get("activity"),
+        "trend": hourly_trend(samples, now) if latest["start"] <= now < latest["expires"] else None,
         "production_weight": 0., "admission": "independent_evaluation",
     }
 
 
 def current_features(store, now):
-    keys = store.db.execute("""SELECT source,round_id FROM preference_samples
-        WHERE received_at<=? GROUP BY source,round_id""", (now,)).fetchall()
+    # The covering index answers this without visiting every payload row.
+    # recent_samples applies both clocks; future-only keys produce no features.
+    keys = store.db.execute("SELECT DISTINCT source,round_id FROM preference_samples").fetchall()
     output = []
     for source, round_id in keys:
         samples = recent_samples(store, source, round_id, now)
@@ -235,7 +277,11 @@ def activity_endpoint(sample, settlement):
                     else "within_day_completion_without_activity_reset")
     return {"endpoint": "activity_classification", "scope": "whole_Pacific_activity_day",
             "upstream_outcome": outcome, "label": label,
+            "activity": sample.get("activity") if sample else None,
+            "classification_basis": "upstream_outcome",
+            "source_url": sample.get("question_url") if sample else None,
             "observed_at": sample.get("observed_at") if sample else None,
+            "received_at": sample.get("received_at") if sample else None,
             "state": "reported" if label is not None else "awaiting_upstream_classification",
             "comparison_endpoint": "within_day_completion", "completion_label": completion_label,
             "mismatch": mismatch, "used_for_completion_settlement": False}

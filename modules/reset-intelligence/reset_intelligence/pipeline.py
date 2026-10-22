@@ -12,6 +12,7 @@ from .quant import ModelConfig, Survival
 from .increments import combine, counterfactuals
 from .response import announcement_context
 from .signals import apply_comment_estimates
+from .lifecycle import live_cycle
 from .sources import normalization_outdated
 
 HOURS = list(range(1, 73))
@@ -96,11 +97,15 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
         result["status"] = "stale"
         return result
     result["status"] = "current"
-    result["last_event_at"] = events[-1].at
+    cycle = live_cycle(observations, events[-1].at, now)
+    last_event_at = cycle["at"]
+    result["last_event_at"] = last_event_at
+    result["cycle"] = cycle
+    event_times = sorted({*(e.at for e in events), last_event_at})
     result["event_audit"] = {"time_basis": "public_notice_or_observed_event",
                              "excluded_targeted_events": [e.id for e in ledger.events if e.population == "targeted"],
                              "classification_corrections": [asdict(e) for e in events if e.classification_basis != "source_label"]}
-    baseline = Survival([e.at for e in events], now, config)
+    baseline = Survival([e.at for e in events], now, config, renewal_at=last_event_at)
     base = [baseline.p(h) for h in HOURS]
     components = [{"id": "survival_baseline", "family": "baseline", "dependency": "public_event_history",
                    "probabilities": base, "metadata": baseline.summary(), "private": False}]
@@ -121,9 +126,9 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                 reason.append("source_normalization_outdated")
             if normalization_outdated(c):
                 reason.append("source_normalization_outdated")
-            if c.last_reset_at is not None and c.last_reset_at < events[-1].at - 3600:
+            if c.last_reset_at is not None and c.last_reset_at < last_event_at - 3600:
                 reason.append("missed_latest_event")
-            if events[-1].at > c.origin:
+            if last_event_at > c.origin:
                 reason.append("forecast_precedes_latest_event")
             aligned = align_curve(c, now, HOURS, baseline) if not reason else None
             if aligned is None:
@@ -149,14 +154,17 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                 if aligned_base:
                     signal_baseline = aligned_base[0]
                     # A reviewed neutral response can still be informative.
-                    active = c.metadata.get("revision_reviewed") or any(abs(p-b) > 1e-6 for p,b in zip(values, signal_baseline))
+                    active = c.metadata.get("revision_reviewed") or (
+                        not c.metadata.get("rounding_only", False)
+                        and any(abs(p-b) > 1e-6 for p,b in zip(values, signal_baseline))
+                    )
                     role = "information" if active else "background"
             components.append({"id": c.source, "family": "radars", "dependency": c.dependency,
                                "role": role, "signal_baseline": signal_baseline,
                                "probabilities": values, "metadata": {**c.metadata, **alignment},
                                "source_points": c.points, "private": c.private})
-    apply_comment_estimates(components, result["facts"], now, events[-1].at, HOURS)
-    result["response"] = announcement_context(components, result["facts"], now, events[-1].at)
+    apply_comment_estimates(components, result["facts"], now, last_event_at, HOURS)
+    result["response"] = announcement_context(components, result["facts"], now, last_event_at)
     for obs in observations.values():
         for poll in obs.polls:
             if poll["target"] != target:
@@ -181,11 +189,11 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                     health["issues"].append("insufficient_recent_votes")
                     continue
             if poll["kind"] == "count_distribution":
-                reason = count_rejection(poll, now, [e.at for e in events])
-                converted = count_curve(poll, now, HOURS, [e.at for e in events])
+                reason = count_rejection(poll, now, event_times)
+                converted = count_curve(poll, now, HOURS, event_times)
             else:
-                reason = ballot_rejection(poll, now, events[-1].at)
-                converted = ballot_curve(poll, now, HOURS, baseline, events[-1].at, config)
+                reason = ballot_rejection(poll, now, last_event_at)
+                converted = ballot_curve(poll, now, HOURS, baseline, last_event_at, config)
             if converted is None:
                 health["issues"].append(reason or "no_usable_current_poll")
                 continue
@@ -257,6 +265,7 @@ def consumer_export(results: list[dict]) -> dict:
     for result in results:
         item = {"target": result["target"], "status": result["status"],
                 "issued_at": iso(result["issued_at"]), "model_version": result["model_version"],
+                "evaluation_version": result["model_version"] + ":" + result["config_hash"],
                 "last_event_at": result.get("last_event_at"),
                 "response": {k: result["response"].get(k) for k in ("at", "url", "reviewed", "changed", "kind", "deadline")}
                             if result.get("response") else None,

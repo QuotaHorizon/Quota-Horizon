@@ -23,6 +23,24 @@ def matching(event, target):
     return target != AUTOMATIC or event["kind"] in ("automatic", "unknown")
 
 
+def cycle_exclusion(forecast, origin, events, policy):
+    # A source's explicit completed-reset observation closes no-event
+    # conditioning promptly. Formal outcome settlement still needs confirmation.
+    latest = max((e["to"] for e in events if matching(e, forecast.target)
+                  and e.get("known_at", origin) <= origin and e.get("to") is not None
+                  and e["to"] <= origin and (e["status"] == "confirmed" or (
+                      e["status"] == "pending" and e["reason"] == "insufficient_primary_confirmation"
+                      and any(c["provider"] == "codex_reset_status" and c["stage"] == "completed"
+                              for c in e.get("claims", []))))), default=None)
+    if latest is not None:
+        if latest > forecast.origin:
+            return "event_since_forecast"
+        last_reset = forecast.metadata.get("last_reset_at")
+        if last_reset is not None and last_reset < latest - policy.completion_time_tolerance_seconds:
+            return "source_missed_known_event"
+    return None
+
+
 def trial_probability(forecast, origin, hours, events, policy):
     if forecast.issues:
         return None, "source_quality_exclusion"
@@ -33,14 +51,9 @@ def trial_probability(forecast, origin, hours, events, policy):
     if forecast.expires_at <= origin:
         return None, "stale_forecast"
     # Check information actually known at the trial origin, never a later label.
-    latest = max((e["to"] for e in events if e["status"] == "confirmed" and matching(e, forecast.target)
-                  and e["to"] <= origin), default=None)
-    if latest is not None:
-        if latest > forecast.origin:
-            return None, "event_since_forecast"
-        last_reset = forecast.metadata.get("last_reset_at")
-        if last_reset is not None and last_reset < latest - policy.completion_time_tolerance_seconds:
-            return None, "source_missed_known_event"
+    reason = cycle_exclusion(forecast, origin, events, policy)
+    if reason:
+        return None, reason
     p = forecast.align(origin, hours)
     return (p, None) if p is not None else (None, "outside_original_support")
 

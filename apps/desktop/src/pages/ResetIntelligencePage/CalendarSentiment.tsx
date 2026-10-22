@@ -2,6 +2,7 @@ import type { Language } from "../../i18n";
 import { publicEvidenceTime } from "./presentation";
 import { percent } from "./quantitativeModel";
 import type { QuantReport } from "./quantitativeTypes";
+import { CalendarTrend } from "./CalendarTrend";
 import styles from "./quantitative.module.less";
 
 /** Calendar-day preferences retain their own window and independent evaluation. */
@@ -37,6 +38,7 @@ export function CalendarSentiment({ report, language, now }: {
         <span>{zh ? "原始倾向 " : "Raw preference "}{percent(current.reset_share)}</span>
       </div>
     </div> : null}
+    {current && <CalendarTrend trend={current.trend} language={language} />}
     <p className={styles.coverage}>
       {!current ? (zh ? "当前活动日等待新数据" : "Awaiting data for the current activity day")
         : stale ? (zh ? "采集待更新 · 上次记录" : "Collection update due · saved observation")

@@ -289,6 +289,7 @@ fn outcome_provider_states_are_optional_and_allowlisted() {
         None,
         Some("population_unspecified"),
         Some("conditional_pledge"),
+        Some("insufficient_primary_confirmation"),
         Some("private_diagnostic_content"),
     ] {
         report["outcomes"][0]["reason"] = json!(reason);
@@ -480,6 +481,42 @@ fn calendar_sentiment_compact_view_is_optional_and_filters_research_details() {
     assert_eq!(calendar.latest[0].weighted_reset_share, Some(0.72));
     assert_eq!(calendar.production_weight, 0.);
     assert_eq!((calendar.frozen_days, calendar.frozen_trials), (3, 5));
+    let generated = DateTime::parse_from_rfc3339("2026-10-17T00:00:00Z")
+        .unwrap()
+        .timestamp() as f64;
+    let bins: Vec<_> = (0..6)
+        .map(|i| {
+            json!({
+                "start": generated - (6-i) as f64 * 3600., "end": generated - (5-i) as f64 * 3600.,
+                "new_clicks":100,"reset_clicks":70,"feature_clicks":30,"coverage_fraction":0.98,
+                "reset_share":0.7,"clicks_per_hour":102.04,"state":"available"
+            })
+        })
+        .collect();
+    let mut with_trend = value.clone();
+    with_trend["calendar_sentiment"]["latest"][0]["trend"] = json!({
+        "window_hours":6,"bin_hours":1,"minimum_bin_votes":50,"minimum_coverage":0.9,
+        "bins":bins,"change":{"state":"available","reset_share_delta":0.,"click_rate_ratio":1.}
+    });
+    fs::write(&path, with_trend.to_string()).unwrap();
+    let trend_report = parse_report(&path).unwrap();
+    assert!(trend_report.calendar_sentiment.unwrap().latest[0]
+        .trend
+        .is_some());
+    for (field, invalid) in [
+        ("new_clicks", json!(49)),
+        ("coverage_fraction", json!(0.89)),
+        ("end", json!(generated + 3600.)),
+    ] {
+        let mut bad = with_trend.clone();
+        bad["calendar_sentiment"]["latest"][0]["trend"]["bins"][5][field] = invalid;
+        fs::write(&path, bad.to_string()).unwrap();
+        // A malformed optional curve must not discard the valid community
+        // observation, existing scores, or the rest of the evaluation report.
+        let calendar = parse_report(&path).unwrap().calendar_sentiment.unwrap();
+        assert_eq!(calendar.latest.len(), 1);
+        assert!(calendar.latest[0].trend.is_none(), "{field}");
+    }
     let serialized = serde_json::to_string(&parsed).unwrap();
     for private in [
         "private_signal",
@@ -503,6 +540,37 @@ fn calendar_sentiment_compact_view_is_optional_and_filters_research_details() {
             parse_report(&path).unwrap().calendar_sentiment.is_none(),
             "{field}"
         );
+    }
+}
+#[test]
+fn consumer_preserves_exact_evaluation_identity_and_legacy_reports() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("consumer.json");
+    let mut value = fixture();
+    fs::write(&path, value.to_string()).unwrap();
+    assert!(parse_forecast(&path).unwrap().forecasts[0]
+        .evaluation_version
+        .is_none());
+    let model = value["forecasts"][0]["model_version"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    value["forecasts"][0]["evaluation_version"] = json!(format!("{model}:abc123"));
+    fs::write(&path, value.to_string()).unwrap();
+    assert_eq!(
+        parse_forecast(&path).unwrap().forecasts[0]
+            .evaluation_version
+            .as_deref(),
+        Some(format!("{model}:abc123").as_str())
+    );
+    for invalid in [
+        "wrong-model:abc123".to_owned(),
+        format!("{model}:"),
+        format!("{model}:invalid hash"),
+    ] {
+        value["forecasts"][0]["evaluation_version"] = json!(invalid);
+        fs::write(&path, value.to_string()).unwrap();
+        assert!(parse_forecast(&path).is_err());
     }
 }
 #[test]

@@ -21,7 +21,11 @@ FEEDS = {
     "quota_events": "https://quotaresets.com/api/v1/events.json",
     "completion_feed": "https://codex-reset.pro/api/reset-feed",
     "public_catalogue": "https://codex-resets.com/api/v1/resets?limit=100",
+    "codex_reset_status": "https://codex-reset.com/api/forecast",
 }
+# A live status endpoint reports occurrences, not a complete event inventory.
+# Its silence cannot certify a negative outcome window.
+POSITIVE_ONLY_FEEDS = {"codex_reset_status"}
 INTERPRETATION_VERSION = "event-scoped-claims-v5"
 
 
@@ -174,11 +178,32 @@ def parse(provider, raw, now):
                                 at, at if stage == "completed" else None, now, r["text"],
                                 "official_relay" if r["source"].get("author") in ("thsottiaux", "sama", "OpenAI") else "catalogue"))
         healthy = not raw["pagination"]["has_more"] and -60 <= now - generated <= 3600
+    elif provider == "codex_reset_status":
+        generated = stamp(raw["updated_at"])
+        alert = raw.get("latest_alert") or {}
+        if (alert.get("kind") == "reset" and alert.get("observed_at")
+                and alert.get("confirmation_source") == "operator_observed"):
+            completed = stamp(alert["observed_at"])
+            if completed > min(generated, now):
+                raise ValueError("future completion observation")
+            # The alert's URL points to the earlier promise, not a completion
+            # notice by that author. Keep the operator as the sole reference.
+            reference = FEEDS[provider] + "#observed-reset-" + str(int(completed))
+            stage = {"confirmed": "completed", "cancelled": "cancelled",
+                     "retracted": "retracted", "disputed": "disputed"}.get(alert.get("state"))
+            if stage == "completed" and abs(stamp(raw["last_reset_at"]) - completed) > 60:
+                stage = "disputed"
+            if stage:
+                claims.append(Claim(provider, str(int(completed)), [reference], [reference],
+                    "automatic", stage, "broad", completed,
+                    completed if stage == "completed" else None, now,
+                    alert.get("observation_message", ""), "community_report", "operator_observed"))
+        healthy = -60 <= now - generated <= 3600
     else:
         raise ValueError("unsupported outcome provider")
     if generated > now + 60:
         raise ValueError("future provider clock")
-    return generated, healthy and bool(claims), [c.to_dict() for c in claims if c.announced_at <= now + 60]
+    return generated, healthy and (bool(claims) or provider in POSITIVE_ONLY_FEEDS), [c.to_dict() for c in claims if c.announced_at <= now + 60]
 
 
 def fetch(provider):
@@ -226,7 +251,7 @@ def collect(store, policy, refresh=False):
     latest = {o["provider"]: o for o in store.observations(now)}
     due = [p for p in FEEDS if now - last.get(p, 0) >= (5 if refresh and not latest.get(p, {}).get("error") else retry_delay(store, p, now, policy))]
     result = []
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=len(FEEDS)) as pool:
         for future in as_completed([pool.submit(fetch, p) for p in due]):
             values = future.result()
             store.observation(*values)

@@ -19,6 +19,7 @@ export interface QuantChanges {
 export interface QuantForecast {
   target: ResetTarget; status: "current" | "stale" | "unavailable";
   issued_at: string; valid_until: string | null; model_version: string;
+  evaluation_version?: string | null;
   combination_method?: string | null;
   training_state: string | null; evaluation_windows: number; event_count: number;
   last_event_at?: number | null;
@@ -52,11 +53,19 @@ export interface QuantScorecard extends ForecastIdentity {
   observed_event_scores?: QuantScorecard["scores"] | null;
   alerts: { threshold: number; episodes: number; false_alerts: number; precision: number | null; event_recall: number | null; median_lead_hours: number | null };
 }
+export interface CalendarTrend {
+  window_hours: 6; bin_hours: 1; minimum_bin_votes: 50; minimum_coverage: number;
+  bins: { start: number; end: number; new_clicks: number; reset_clicks: number; feature_clicks: number;
+    coverage_fraction: number; reset_share: number | null; clicks_per_hour: number | null;
+    state: "available" | "insufficient_recent_votes" | "incomplete_coverage" }[];
+  change: { state: "available" | "awaiting_comparable_hours"; reset_share_delta: number | null; click_rate_ratio: number | null };
+}
 export interface CalendarSentiment {
   production_weight: 0; frozen_days: number; frozen_trials: number; scored_days: number; scored_trials: number;
   latest: { source: "didcodex_poll"; date: string; window_start: number; window_end: number; observed_at: number;
     recent_votes: number; total_clicks: number; weighted_reset_share: number | null; reset_share: number | null;
     latest_vote_at: number | null;
+    trend?: CalendarTrend | null;
     state: "ready_for_evaluation" | "insufficient_recent_votes" | "upcoming" | "closed" | "stale" }[];
 }
 export interface QuantReport {

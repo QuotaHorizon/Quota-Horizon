@@ -24,7 +24,7 @@ export function ProbabilityCurve({ view, language }: { view: QuantitativeView; l
       {[24,48,72].map(h => <g key={h}><line x1={x(h)} x2={x(h)} y1="26" y2="167" strokeDasharray="3 5" /><text x={x(h)} y="191" textAnchor="middle">{h}h</text></g>)}
       {series.map(s => <g key={s.name} style={{ "--series-color": s.color } as CSSProperties}>
         <path className={styles.line} strokeDasharray={s.dashed ? "5 4" : undefined} d={s.values.map((p, i) => `${i ? "L" : "M"}${x(i+1)},${y(p)}`).join(" ")} />
-        {[24,48].map(h => s.values[h-1] == null ? null : <circle key={h} className={styles.dot} cx={x(h)} cy={y(s.values[h-1])} r="3"><title>{s.name} · {h}h · {percent(s.values[h-1])}</title></circle>)}
+        {[24,48].map(h => s.values[h-1] == null ? null : <circle key={h} className={styles.dot} cx={x(h)} cy={y(s.values[h-1])} r="3"><title>{`${s.name} · ${h}h · ${percent(s.values[h-1])}`}</title></circle>)}
       </g>)}
     </svg>
     <div className={styles.legend}>{series.filter(s => s.values.length).map(s => <span key={s.name}><i style={{ background: s.color }} />{s.name}</span>)}</div>
@@ -51,7 +51,7 @@ export function QuantitativeTrend({ view, language, now }: { view: QuantitativeV
       {[0,.5,1].map(p => <g key={p}><line x1="40" x2={right} y1={y(p)} y2={y(p)} /><text x="32" y={y(p)+4} textAnchor="end">{p*100}%</text></g>)}
       {series.map(s => <g key={`${s.source}-${s.target}-${s.hours}-${s.version}`} data-series={`${s.source}-${s.target}-${s.hours}`} style={{ "--series-color": color(s.source,s.target) } as CSSProperties}>
         {seriesPaths(s.points,start,now,x,y).map((d, i) => <path key={i} d={d} className={styles.line} strokeWidth={s.track === "model" ? 2.7 : 1.6} strokeDasharray={s.hours === 48 ? "6 4" : undefined} />)}
-        {s.points.filter(p => p.p != null && Date.parse(p.at) >= start && Date.parse(p.at) <= now).map(p => <circle key={p.at} className={styles.dot} cx={x(Date.parse(p.at))} cy={y(p.p!)} r="2.8"><title>{name(s.source,s.target)} · {s.hours}h · {percent(p.p)} · {publicEvidenceTime(p.at,language)}</title></circle>)}
+        {s.points.filter(p => p.p != null && Date.parse(p.at) >= start && Date.parse(p.at) <= now).map(p => <circle key={p.at} className={styles.dot} cx={x(Date.parse(p.at))} cy={y(p.p!)} r="2.8"><title>{`${name(s.source,s.target)} · ${s.hours}h · ${percent(p.p)} · ${publicEvidenceTime(p.at,language)}`}</title></circle>)}
       </g>)}
       <text x="40" y="202">{tick(start)}</text><text x={(40+right)/2} y="202" textAnchor="middle">{tick((start+now)/2)}</text><text x={right} y="202" textAnchor="end">{tick(now)}</text>
     </svg></div>

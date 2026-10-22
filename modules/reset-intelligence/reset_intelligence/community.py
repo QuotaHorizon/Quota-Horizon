@@ -240,7 +240,8 @@ def ballot_rejection(poll: dict, now: float, last_event: float) -> str | None:
         return "empty_poll"
     if not poll["start"] <= now < poll["expires"]:
         return "poll_outside_original_window"
-    if poll.get("anchor_reset", poll["start"]) < last_event - 3600:
+    if (poll["kind"] == "probability_votes" and poll["start"] < last_event
+            or poll.get("anchor_reset", poll["start"]) < last_event - 3600):
         return "poll_precedes_latest_event"
     if poll["kind"] == "interval_votes":
         bins = poll["bins"]

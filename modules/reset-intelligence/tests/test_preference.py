@@ -59,6 +59,45 @@ class PreferenceAdapterTests(unittest.TestCase):
         self.assertEqual(saved, raw)
         self.assertEqual(len(obs.polls), 1)
 
+    def test_structured_scheduling_remains_an_announcement_not_a_completed_result(self):
+        raw = example()
+        raw["calendar"]["days"][0]["scheduled"] = {"links": [{
+            "postId": "2113162277688070445", "announcedAt": "2026-10-03T12:00:00Z",
+            "href": "/zh-hk/history/1792652122000.html", "resetType": "global"}]}
+        observation = parse(SPEC, raw, NOW)
+        p = observation.polls[0]
+        self.assertIsNone(p["upstream_outcome"])
+        self.assertFalse(observation.events)
+        self.assertEqual(p["activity"]["completed"], [])
+        record = p["activity"]["scheduled"][0]
+        self.assertEqual(record["url"], "https://x.com/i/status/2113162277688070445")
+        self.assertEqual(record["scope"], "global")
+        self.assertEqual(record["at"], stamp("2026-10-03T12:00:00Z"))
+        self.assertEqual(record["source_url"], "https://didcodexreset.com/zh-hk/history/1792652122000.html")
+
+    def test_completed_and_improvement_metadata_preserve_the_upstream_classification(self):
+        raw = example()
+        day = raw["calendar"]["days"][0]
+        day.update(outcome="reset", completed={"links": [{
+            "postId": "123", "announcedAt": "2026-10-03T12:00:00Z",
+            "href": "/history/123.html", "resetType": "global"}]},
+            improvement={"url": "https://x.com/thsottiaux/status/456",
+                         "urls": ["https://x.com/thsottiaux/status/456", "https://x.com/thsottiaux/status/123"]})
+        p = parse(SPEC, raw, NOW).polls[0]
+        self.assertEqual(p["upstream_outcome"], "reset")  # Do not manufacture a "both" label.
+        self.assertEqual(len(p["activity"]["completed"]), 1)
+        self.assertEqual(p["activity"]["improvements"], ["https://x.com/i/status/456", "https://x.com/i/status/123"])
+
+    def test_invalid_optional_activity_records_do_not_discard_valid_clicks(self):
+        raw = example()
+        raw["calendar"]["days"][0].update(scheduled={"links": [None, {"postId": "bad"}, {
+            "postId": "123", "announcedAt": "2026-10-03T12:00:00Z",
+            "href": "https://unrelated.example/", "resetType": "global"}]},
+            completed=None, improvement={"url": "javascript:invalid", "urls": [None]})
+        p = parse(SPEC, raw, NOW).polls[0]
+        self.assertEqual(p["activity"], {"scheduled": [], "completed": [], "improvements": []})
+        self.assertEqual(p["total"], 22000)
+
 
 class MinimumSampleTests(unittest.TestCase):
     setUp = test_engine.LedgerTests.setUp

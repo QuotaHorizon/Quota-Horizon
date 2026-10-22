@@ -21,7 +21,7 @@ export function evaluationStale(v: QuantitativeView, now: number) {
   const time = Date.parse(v.evaluation?.generated_at ?? "");
   return !!v.evaluationIssue || !Number.isFinite(time) || now - time > 180_000 || time > now + 60_000;
 }
-export function sameForecastVersion(version: string, f: QuantForecast) { return version.startsWith(`${f.model_version}:`); }
+export function sameForecastVersion(version: string, f: QuantForecast) { return f.evaluation_version ? version === f.evaluation_version : version.startsWith(`${f.model_version}:`); }
 /** Only a contemporaneous ablation can quantify the community contribution.
  * The public consumer deliberately does not expose constituent private inputs. */
 export function communityEffect(report: QuantReport | null, f: QuantForecast | undefined, hours: number) {
@@ -92,7 +92,9 @@ export function sourceRows(view: QuantitativeView) {
       state: f.status, probabilities_at_publication: values });
   }
   return [...latest.values()].map(row => ({
-    ...row, role: forecastFor(view, row.target)?.sources.find(s => s.id === row.source)?.role,
+    ...row,
+    state: Date.parse(row.origin) < (forecastFor(view, row.target)?.last_event_at ?? 0)*1000 ? "cycle_closed" : row.state,
+    role: forecastFor(view, row.target)?.sources.find(s => s.id === row.source)?.role,
     response_state: forecastFor(view, row.target)?.sources.find(s => s.id === row.source)?.response_state,
     comment: forecastFor(view, row.target)?.sources.find(s => s.id === row.source)?.comment,
     included: !!forecastFor(view, row.target)?.sources.some(s => s.id === row.source && (s.weight ?? 1) > 0),

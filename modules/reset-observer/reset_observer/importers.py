@@ -93,7 +93,7 @@ def import_model(store, payload, now, variants=None):
                   generated_at=payload["issued_at"], available_at=now, expires_at=payload["valid_until"])
     issues = [] if payload["status"] == "current" else ["producer_not_current"]
     metadata = {"inputs_hash": payload["inputs_hash"], "training_state": payload["training"]["state"],
-                "upstream_issued_at": payload["issued_at"]}
+                "upstream_issued_at": payload["issued_at"], "last_reset_at": payload.get("last_event_at")}
     records = [Forecast(source="horizon", track="model", points=[[p["hours"], p["probability"]] for p in payload["curve"]],
                         issues=issues, metadata=metadata, **common)]
     for c in payload["components"]:

@@ -33,7 +33,7 @@ SOURCE_INTERVALS.update(lunar=300, observatory=300, dreaife=300)
 
 # Only these adapters changed normalization in this upgrade. The catalog binds
 # old public rows; explicit metadata binds newly parsed custom source IDs.
-ADAPTER_CONTRACTS = {"lunar": 1, "observatory": 1, "monitor": 1}
+ADAPTER_CONTRACTS = {"codex_reset": 1, "lunar": 1, "observatory": 1, "monitor": 1}
 
 
 def normalization_outdated(curve, adapter=None):
@@ -45,6 +45,27 @@ def normalization_outdated(curve, adapter=None):
         curve.metadata.get("adapter") != adapter
         or curve.metadata.get("adapter_contract") != ADAPTER_CONTRACTS[adapter]
     )
+
+
+def codex_rounding_only(data):
+    """An explicitly unchanged rounded model is not a news revision.
+
+    Do not apply a generic small-delta cutoff: even a small declared adjustment
+    or a negative revision remains information. The complete upstream values
+    and unrounded paired baseline are retained separately.
+    """
+    context, ps = data.get("context") or {}, data["probabilities"]
+    if (context.get("effect") != "informational_only" or context.get("multiplier") != 1
+            or ps.get("tease_tier") is not None
+            or any(ps.get(f"tease_floor_{h}h") is not None for h in (24, 48))):
+        return False
+    for h in (24, 48):
+        full, model = ps[f"rounded_{h}h"], ps.get(f"model_{h}h")
+        if (isinstance(model, bool) or not isinstance(model, (int, float))
+                or model != full or not float(full).is_integer()
+                or abs(probability(full, 100) - probability(ps[f"raw_{h}h"])) > .005 + 1e-12):
+            return False
+    return True
 
 
 def statement_relevance(text):
@@ -133,6 +154,7 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
                   (48, probability(ps["rounded_48h"], 100))], 3600, d["last_reset_at"],
                   metadata={"source_model": str(d["model"]["version"]) + ":published-v2",
                             "upstream_model": d["model"]["version"], "estimate_kind": "published_complete",
+                            "rounding_only": codex_rounding_only(d),
                             "baseline_points": [(24, probability(ps["raw_24h"])), (48, probability(ps["raw_48h"]))]})
         c.evidence = [f"https://x.com/i/status/{i}" for i in d.get("context", {}).get("evidence_ids", []) if str(i).isdigit()]
         # An evidence inventory is not a review of every listed post. Preserve
@@ -176,9 +198,11 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
         c.metadata["reviewed_references"] = [canonical_url(s["sourceUrl"]) for s in d["forecast"].get("semanticSignals", []) if s.get("sourceUrl")]
         c.metadata["response_version"] = 2
     elif adapter == "nextreset":
+        last = d["history"]["last"]
         c = curve(AUTOMATIC, d["asOf"], [(w["hours"], w["probability"]) for w in d["windows"]], 900,
-              d["history"]["last"]["date"], expires=d["expiresAt"],
-              issues=[] if d["checks"]["history"]["ok"] else ["unhealthy_outcome_history"],
+              last["date"], expires=d["expiresAt"],
+              issues=([] if d["checks"]["history"]["ok"] else ["unhealthy_outcome_history"])
+                     + (["non_automatic_reset_anchor"] if last.get("type", "automatic") != "automatic" else []),
               metadata={"source_model": d["version"], "upstream_health": d["degraded"],
                         "decomposition_version": 1,
                         "baseline_points": [(w["hours"], probability(w["baseline"])) for w in d["windows"]]
@@ -401,7 +425,18 @@ def collect(store, specs: list[dict] | None = None, minimum_interval: float | No
                     break
                 failures += 1
             return min(900, 60 * 2 ** max(0, failures - 1))
-        return 0 if spec["id"] in outdated else normal
+        if spec["id"] in outdated:
+            return 0
+        if minimum_interval is None and spec.get("adapter") == "lunar":
+            obs = observations.get(spec["id"])
+            if obs and obs.curves:
+                # Generation may already be minutes old on first receipt.
+                # Refresh before its deadline instead of waiting another full
+                # upstream interval. Repeated cached responses still wait at
+                # least one minute, and failures retain the backoff above.
+                remaining = min(c.expires_at for c in obs.curves) - last.get("observed_at", obs.observed_at)
+                return min(normal, max(60, remaining - 60))
+        return normal
 
     due = [s for s in specs if time.time() - latest.get(s["id"], {}).get("observed_at", 0) >= interval(s)]
     outcomes = []

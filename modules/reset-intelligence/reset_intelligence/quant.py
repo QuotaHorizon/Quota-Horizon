@@ -66,14 +66,16 @@ class Survival:
     that same censored interval a second time.
     """
     def __init__(self, event_times: list[float], now: float, config: ModelConfig | None = None,
-                 constant: bool = False):
+                 constant: bool = False, renewal_at: float | None = None):
         self.config = config or ModelConfig()
         self.boundaries = (0.,) if constant else self.config.boundaries
         times = sorted(set(t for t in event_times if t <= now))
         if len(times) < 3:
             raise ValueError("at least three past events are required")
         self.intervals = len(times) - 1
-        self.age = (now - times[-1]) / 3600
+        if renewal_at is not None and not times[-1] <= renewal_at <= now:
+            raise ValueError("renewal boundary must follow the historical events and precede now")
+        self.age = (now - (renewal_at if renewal_at is not None else times[-1])) / 3600
         self.alpha = np.full(len(self.boundaries), self.config.prior_exposure * self.config.prior_rate)
         self.beta = np.full(len(self.boundaries), self.config.prior_exposure, dtype=float)
         self.effective_events = 0.

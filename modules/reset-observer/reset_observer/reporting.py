@@ -13,6 +13,7 @@ from . import VERSION, POLICY_VERSION, SETTLEMENT_VERSION
 from .contracts import HORIZONS, Forecast, digest, iso, stamp
 from .statistics import alert_metrics, paired, scores
 from .diagnostics import dependence, provider_health, window_diagnostics
+from .benchmark import cycle_exclusion
 
 IMPLEMENTATION_HASH = digest(
     {
@@ -147,6 +148,46 @@ def publication_curves(store, now):
     ]
 
 
+def paired_comparisons(scored, policy, safe):
+    """Compare only series sharing a scored window and outcome.
+
+    Model versions often occupy disjoint dates. Index their actual windows so
+    those versions do not generate empty comparison records. Sorting the pairs
+    retains the source/version ordering of the complete pairwise matrix.
+    """
+    windows = defaultdict(set)
+    for key, rows in scored.items():
+        for row in rows:
+            windows[(row["origin"], row["hours"], row["target"], row["label"])].add(key)
+    candidates = set()
+    for members in windows.values():
+        keys = sorted(members)
+        for i, left in enumerate(keys):
+            for right in keys[i + 1 :]:
+                if left[2] != right[2] or left[4] != right[4]:
+                    continue
+                if left[3] == "shadow" and right[3] == "shadow":
+                    continue
+                candidates.add((left, right))
+    comparisons = []
+    for left, right in sorted(candidates):
+        comparison = paired(scored[left], scored[right], policy)
+        # paired() resolves duplicate right-hand windows using their last row.
+        # Keep that authority even if an earlier duplicate supplied a match.
+        if not comparison["n"]:
+            continue
+        comparisons.append(
+            {
+                "left": {"source": safe(left[0]), "version": left[1], "track": left[3]},
+                "right": {"source": safe(right[0]), "version": right[1], "track": right[3]},
+                "target": left[2],
+                "hours": left[4],
+                **comparison,
+            }
+        )
+    return comparisons
+
+
 def build_report(store, now, policy, evidence):
     forecasts = store.forecasts(now, latest=True)
     private = {f.source for f in forecasts if f.private}
@@ -211,38 +252,7 @@ def build_report(store, now, policy, evidence):
         rows.append(row)
     # Every pair uses the intersection of identical origin/deadline/target windows.
     # All results are descriptive until enough independent time blocks accumulate.
-    comparisons = []
-    keys = sorted(scored)
-    for i, left in enumerate(keys):
-        for right in keys[i + 1 :]:
-            if (
-                left[2] != right[2]
-                or left[4] != right[4]
-                or not scored[left]
-                or not scored[right]
-            ):
-                continue
-            # Keep a pairwise source matrix plus explicitly declared model ablations.
-            if left[3] == "shadow" and right[3] == "shadow":
-                continue
-            comparison = paired(scored[left], scored[right], policy)
-            comparisons.append(
-                {
-                    "left": {
-                        "source": safe(left[0]),
-                        "version": left[1],
-                        "track": left[3],
-                    },
-                    "right": {
-                        "source": safe(right[0]),
-                        "version": right[1],
-                        "track": right[3],
-                    },
-                    "target": left[2],
-                    "hours": left[4],
-                    **comparison,
-                }
-            )
+    comparisons = paired_comparisons(scored, policy, safe)
     latest_rows = []
     for key, f in sorted(latest.items()):
         latest_rows.append(
@@ -258,6 +268,8 @@ def build_report(store, now, policy, evidence):
                 "capture_delay_seconds": max(0.0, f.available_at - f.generated_at),
                 "state": "excluded"
                 if f.issues
+                else "cycle_closed"
+                if cycle_exclusion(f, now, evidence["events"], policy)
                 else "stale"
                 if f.expires_at <= now
                 else "current",
@@ -412,7 +424,7 @@ def html_report(report):
         "community": "社区概率",
         "shadow": "实验对照",
     }
-    states = {"current": "有效", "stale": "待更新", "excluded": "暂不记分"}
+    states = {"current": "有效", "stale": "待更新", "excluded": "暂不记分", "cycle_closed": "等待重置后更新"}
     target_name = {"broad_quota_relief": "重置或发卡", "automatic_reset": "自动重置"}
     summary = report["summary"]
     snapshots = []
