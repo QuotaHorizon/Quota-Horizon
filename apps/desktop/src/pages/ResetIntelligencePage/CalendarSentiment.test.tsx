@@ -18,6 +18,16 @@ function report(): QuantReport {
 }
 
 describe("calendar-day community sentiment", () => {
+  it("shows the applied innovation weight separately from the raw preference research candidate", () => {
+    const html = renderToStaticMarkup(<CalendarSentiment report={report()} language="zh" now={now} input={{
+      id: "didcodex_poll", weight: .24, votes: 2529, effective_votes: null, coverage_hours: 17,
+      probability_24h: .65, probability_48h: .8, mapping_kind: "sentiment_innovation",
+    }} />);
+    expect(html).toContain("近期倾向变化已计入");
+    expect(html).toContain("综合判断权重 24.0%");
+    expect(html).toContain("原始倾向 84.1%");
+    expect(html).not.toContain("权重 0.0%");
+  });
   it.each(["zh", "en"] as const)("shows click preferences and independent day counts in %s", language => {
     const html = renderToStaticMarkup(<CalendarSentiment report={report()} language={language} now={now} />);
     expect(html).toContain("Did Codex Reset");

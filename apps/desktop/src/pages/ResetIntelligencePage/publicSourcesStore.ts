@@ -38,6 +38,13 @@ export function createPublicSourcesStore(api: PublicSourcesApi) {
     const checkedAt = (value: PublicResetTimeline) => Math.max(0, ...value.sources.map((source) => Date.parse(source.lastAttemptAt ?? "") || 0));
     if (!state.timeline || (timeline.revisionCount >= state.timeline.revisionCount && checkedAt(timeline) >= checkedAt(state.timeline)
       && (timeline.changes?.readVersion ?? 0) >= (state.timeline.changes?.readVersion ?? 0))) {
+      const view = timeline.quantitative;
+      const issuedAt = view?.forecast?.forecasts.find(f => f.target === "broad_quota_relief")?.issued_at;
+      if (view && issuedAt && Number.isFinite(Date.parse(issuedAt))) {
+        const prior = state.timeline?.quantitative?.presentation;
+        timeline = { ...timeline, quantitative: { ...view, presentation: prior?.issuedAt === issuedAt
+          ? prior : { issuedAt, receivedAt: Date.now(), presentedAt: null, visible: null } } };
+      }
       publish({ timeline, failed: false });
     }
   };
@@ -108,6 +115,13 @@ export function createPublicSourcesStore(api: PublicSourcesApi) {
         listeners.delete(listener);
         if (!listeners.size) { unsubscribe?.(); unsubscribe = undefined; }
       };
+    },
+    markPresented(receivedAt: number, at: number, visible: boolean) {
+      const timeline = state.timeline, view = timeline?.quantitative, p = view?.presentation;
+      if (!timeline || !view || !p || p.receivedAt !== receivedAt || p.presentedAt != null
+        || !Number.isFinite(at) || at < receivedAt) return;
+      publish({ timeline: { ...timeline, quantitative: { ...view,
+        presentation: { ...p, presentedAt: at, visible } } } });
     },
     refresh, reload, markRead, markReceipts,
   };

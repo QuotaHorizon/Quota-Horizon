@@ -269,6 +269,7 @@ fn outcome_provider_states_are_optional_and_allowlisted() {
     for state in [
         None,
         Some("healthy"),
+        Some("positive_evidence"),
         Some("collector_overdue"),
         Some("request_or_decode_failure"),
         Some("stale_source_content"),
@@ -816,6 +817,204 @@ fn applied_weights_and_sample_coverage_cross_only_the_public_boundary() {
     value["forecasts"][0]["community_inputs"][0]["effective_votes"] = json!(71.);
     fs::write(&path, value.to_string()).unwrap();
     assert!(parse_forecast(&path).is_err());
+}
+
+#[test]
+fn calendar_innovation_preserves_clicks_without_claiming_people() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("consumer.json");
+    let mut value = fixture();
+    let input = json!({"id":"didcodex_poll","weight":0.08,"votes":80,"total_votes":2000,
+        "recent_votes":80,"effective_votes":null,"coverage_hours":8.,
+        "probability_24h":0.65,"probability_48h":0.8,"observation_window_hours":6.,
+        "mapping_kind":"sentiment_innovation","mapping_version":"calendar-innovation-1",
+        "reference_share":0.6,"recent_share":0.75,"log_odds_change":0.2,
+        "repeat_sensitivity_units":0.7,"window_start":1791158400.,"window_end":1791244800.,
+        "private_source":"never expose"});
+    value["forecasts"][0]["community_inputs"] = json!([input]);
+    fs::write(&path, value.to_string()).unwrap();
+    let parsed = parse_forecast(&path).unwrap();
+    let c = &parsed.forecasts[0].community_inputs[0];
+    assert_eq!(c.mapping_kind.as_deref(), Some("sentiment_innovation"));
+    assert_eq!(c.recent_votes, Some(80));
+    assert_eq!(c.effective_votes, None);
+    assert_eq!(c.repeat_sensitivity_units, Some(0.7));
+    assert!(!serde_json::to_string(&parsed)
+        .unwrap()
+        .contains("private_source"));
+    for (key, invalid) in [
+        ("effective_votes", json!(0.7)),
+        ("recent_votes", json!(49)),
+        ("mapping_kind", json!("private_mapping")),
+        ("mapping_version", json!("unreviewed")),
+        ("reference_share", json!(1.1)),
+        ("repeat_sensitivity_units", json!(-1.)),
+        ("window_end", json!(0.)),
+        ("log_odds_change", Value::Null),
+    ] {
+        let mut bad = value.clone();
+        bad["forecasts"][0]["community_inputs"][0][key] = invalid;
+        fs::write(&path, bad.to_string()).unwrap();
+        assert!(parse_forecast(&path).is_err(), "{key}");
+    }
+}
+
+#[test]
+fn forecast_cycle_retains_completion_identity_without_turning_publication_into_occurrence() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("consumer.json");
+    let mut value = fixture();
+    let issued = DateTime::parse_from_rfc3339(value["forecasts"][0]["issued_at"].as_str().unwrap())
+        .unwrap()
+        .timestamp() as f64;
+    let confirmation = json!({"time_basis":"completion_confirmation","occurred_at":null,
+        "confirmation_at":issued-100.,"invalidation_at":issued-100.,"identity":"a".repeat(64),
+        "references":["https://x.com/i/status/123","https://private.invalid/event"],"observations":["hidden"]});
+    value["forecasts"][0]["cycle"] = confirmation;
+    fs::write(&path, value.to_string()).unwrap();
+    let parsed = parse_forecast(&path).unwrap();
+    let cycle = parsed.forecasts[0].cycle.as_ref().unwrap();
+    assert_eq!(cycle.occurred_at, None);
+    assert_eq!(cycle.confirmation_at, Some(issued - 100.));
+    assert_eq!(cycle.references, vec!["https://x.com/i/status/123"]);
+    assert!(!serde_json::to_string(&parsed)
+        .unwrap()
+        .contains("private.invalid"));
+    for (key, invalid) in [
+        ("occurred_at", json!(issued - 100.)),
+        ("time_basis", json!("announcement_proxy")),
+        ("confirmation_at", json!(issued + 3600.)),
+        ("invalidation_at", Value::Null),
+        ("identity", json!("private-id")),
+    ] {
+        let mut bad = value.clone();
+        bad["forecasts"][0]["cycle"][key] = invalid;
+        fs::write(&path, bad.to_string()).unwrap();
+        assert!(
+            parse_forecast(&path).unwrap().forecasts[0].cycle.is_none(),
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn rolling_preference_qualifies_six_hours_and_keeps_hourly_volume_separate() {
+    let generated = 1792195200.;
+    let bins: Vec<_> = (0..6)
+        .map(|i| {
+            json!({
+                "start":generated-(6-i) as f64*3600.,"end":generated-(5-i) as f64*3600.,
+                "new_clicks":4,"reset_clicks":3,"feature_clicks":1,"coverage_fraction":0.5,
+                "sample_votes":80,"sample_coverage_fraction":0.6,"reset_share":0.7,
+                "clicks_per_hour":null,"state":"available"
+            })
+        })
+        .collect();
+    let value = json!({"window_hours":6,"bin_hours":1,"minimum_bin_votes":50,"minimum_coverage":0.9,
+        "estimate_window_hours":6,"estimate_kind":"rolling_weighted_preference","bins":bins,
+        "change":{"state":"available","reset_share_delta":0.,"click_rate_ratio":null}});
+    let trend: CalendarTrend = serde_json::from_value(value.clone()).unwrap();
+    assert!(trend.valid(generated));
+    let mut sparse = value.clone();
+    for bin in sparse["bins"].as_array_mut().unwrap() {
+        bin["sample_votes"] = json!(49);
+        bin["reset_share"] = Value::Null;
+        bin["state"] = json!("insufficient_recent_votes");
+        bin["coverage_fraction"] = json!(1.);
+        bin["clicks_per_hour"] = json!(4.);
+    }
+    sparse["change"] =
+        json!({"state":"awaiting_comparable_hours","reset_share_delta":null,"click_rate_ratio":1.});
+    assert!(serde_json::from_value::<CalendarTrend>(sparse)
+        .unwrap()
+        .valid(generated));
+    for (key, invalid) in [
+        ("sample_votes", json!(49)),
+        ("sample_coverage_fraction", json!(1.1)),
+        ("sample_votes", Value::Null),
+        ("end", json!(generated + 3600.)),
+        ("reset_share", Value::Null),
+    ] {
+        let mut bad = value.clone();
+        bad["bins"][5][key] = invalid;
+        assert!(
+            !serde_json::from_value::<CalendarTrend>(bad)
+                .unwrap()
+                .valid(generated),
+            "{key}"
+        );
+    }
+    let mut unknown = value;
+    unknown["estimate_kind"] = json!("unknown_model");
+    assert!(!serde_json::from_value::<CalendarTrend>(unknown)
+        .unwrap()
+        .valid(generated));
+}
+
+#[test]
+fn reaction_export_is_optional_bounded_and_excludes_private_or_unmeasured_clocks() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("report.json");
+    let mut value = json!({"schema_version":"reset-observer/1","generated_at":"2026-10-17T00:00:00Z",
+        "started_at":"2026-10-03T00:00:00Z","state":"scoring",
+        "policy":{"reporting_grace_seconds":10800,"minimum_rank_windows":30,"minimum_rank_events":5},
+        "summary":{"forecast_snapshots":0,"frozen_trials":0,"scored_nonoverlapping_trials":0,
+            "settlements":{},"next_maturity":null,"settlement_revisions":0},
+        "latest":[],"curves":[],"scorecards":[],"comparisons":[],"outcomes":[],
+        "outcome_providers":[{"provider":"completion_page","last_attempt":"2026-10-17T00:00:00Z",
+            "generated_at":null,"healthy":false,"state":"positive_evidence","source_family":"codex_reset_fm","coverage_role":"positive_only"}]});
+    fs::write(&path, value.to_string()).unwrap();
+    assert!(parse_report(&path).unwrap().reaction.is_none());
+    let series = json!({"source":"horizon","version":"model-1","target":"broad_quota_relief","track":"model",
+        "state":"updated","published_at":1792195100.,"source_received_at":1792195105.,"observer_received_at":1792195110.,
+        "publication_to_capture_seconds":5.,"completion_to_update_seconds":100.,"known_to_update_seconds":90.,
+        "old_cycle_residual_seconds":100.,"residual_censored":false,"before_probability_24h":0.8,"after_probability_24h":0.2,
+        "ui_received_at":1792195115.,"ui_delay_seconds":5.,"private_provenance":"hidden"});
+    let mut private = series.clone();
+    private["source"] = json!("private_market");
+    let mut invalid = series.clone();
+    invalid["completion_to_update_seconds"] = json!(-1.);
+    let evidence = json!({"provider":"completion_page","source_family":"codex_reset_fm","published_at":1792195000.,
+        "first_received_at":1792195010.,"published_to_capture_seconds":10.,"raw_url":"hidden"});
+    value["reaction"] = json!({"version":"reset-reaction-1","initialized_at":1792195190.,"history_since":1791590400.,
+        "generated_at":1792195200.,"events":[{"id":"a".repeat(64),"kind":"automatic","status":"confirmed",
+        "time_basis":"public_completion_notice","completed_from":1792195000.,"completed_to":1792195000.,
+        "first_received_at":1792195010.,"evidence":[evidence],"series":[series,private,invalid]}]});
+    fs::write(&path, value.to_string()).unwrap();
+    let parsed = parse_report(&path).unwrap();
+    let reaction = parsed.reaction.as_ref().unwrap();
+    assert_eq!(reaction.events.len(), 1);
+    assert_eq!(reaction.events[0].series.len(), 1);
+    assert_eq!(
+        reaction.events[0].series[0].completion_to_update_seconds,
+        Some(100.)
+    );
+    assert_eq!(reaction.events[0].series[0].ui_received_at, None);
+    assert_eq!(reaction.events[0].series[0].ui_delay_seconds, None);
+    assert_eq!(
+        parsed.outcome_providers[0].coverage_role.as_deref(),
+        Some("positive_only")
+    );
+    assert_eq!(
+        parsed.outcome_providers[0].state.as_deref(),
+        Some("positive_evidence")
+    );
+    assert!(!parsed.outcome_providers[0].healthy);
+    let serialized = serde_json::to_string(&parsed).unwrap();
+    for hidden in ["private_market", "private_provenance", "raw_url", "hidden"] {
+        assert!(!serialized.contains(hidden));
+    }
+    for (key, invalid) in [
+        ("version", json!("future-format")),
+        ("generated_at", json!(1992195200.)),
+        ("history_since", json!(-1.)),
+        ("events", json!({"private":"shape"})),
+    ] {
+        let mut bad = value.clone();
+        bad["reaction"][key] = invalid;
+        fs::write(&path, bad.to_string()).unwrap();
+        assert!(parse_report(&path).unwrap().reaction.is_none(), "{key}");
+    }
 }
 
 #[test]

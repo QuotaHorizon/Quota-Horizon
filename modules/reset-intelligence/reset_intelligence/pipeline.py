@@ -12,8 +12,9 @@ from .quant import ModelConfig, Survival
 from .increments import combine, counterfactuals
 from .response import announcement_context
 from .signals import apply_comment_estimates
-from .lifecycle import live_cycle
+from .lifecycle import cycle_issues, live_cycle
 from .sources import normalization_outdated
+from .sentiment import calendar_overlay
 
 HOURS = list(range(1, 73))
 
@@ -62,7 +63,8 @@ def complete_tail(values: list[float | None], hours: list[int], baseline: Surviv
 
 def forecast(store, now: float, target: str, config: ModelConfig | None = None,
              config_hash: str | None = None, source_ids: set[str] | None = None,
-             private_source_ids: set[str] | None = None) -> dict:
+             private_source_ids: set[str] | None = None, informed_floor: list[float] | None = None,
+             counterfactual_floors: dict | None = None) -> dict:
     if target not in TARGETS:
         raise ValueError("unknown target")
     config = config or ModelConfig()
@@ -97,14 +99,24 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
         result["status"] = "stale"
         return result
     result["status"] = "current"
-    cycle = live_cycle(observations, events[-1].at, now)
+    cycle = live_cycle(observations, events[-1].at, now, events, target)
     last_event_at = cycle["at"]
     result["last_event_at"] = last_event_at
     result["cycle"] = cycle
-    event_times = sorted({*(e.at for e in events), last_event_at})
+    event_times = sorted({*(e.at for e in events if e.at <= last_event_at), last_event_at})
     result["event_audit"] = {"time_basis": "public_notice_or_observed_event",
                              "excluded_targeted_events": [e.id for e in ledger.events if e.population == "targeted"],
-                             "classification_corrections": [asdict(e) for e in events if e.classification_basis != "source_label"]}
+                             "classification_corrections": [asdict(e) for e in events if e.classification_basis != "source_label"],
+                             "after_live_boundary": [e.id for e in events if e.at > last_event_at]}
+    historical_times = sorted({e.at for e in events if e.at <= last_event_at})
+    if len(historical_times) < 3:
+        # A live occurrence can predate catalogue publication proxies. Keep
+        # those records for audit, without training on post-boundary history or
+        # turning an insufficient baseline into a failed refresh.
+        result["status"] = "unavailable"
+        result["reason"] = "event_history_before_live_boundary_insufficient"
+        result["event_audit"]["usable_distinct_times"] = len(historical_times)
+        return result
     baseline = Survival([e.at for e in events], now, config, renewal_at=last_event_at)
     base = [baseline.p(h) for h in HOURS]
     components = [{"id": "survival_baseline", "family": "baseline", "dependency": "public_event_history",
@@ -126,10 +138,7 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                 reason.append("source_normalization_outdated")
             if normalization_outdated(c):
                 reason.append("source_normalization_outdated")
-            if c.last_reset_at is not None and c.last_reset_at < last_event_at - 3600:
-                reason.append("missed_latest_event")
-            if last_event_at > c.origin:
-                reason.append("forecast_precedes_latest_event")
+            reason.extend(cycle_issues(c, cycle))
             aligned = align_curve(c, now, HOURS, baseline) if not reason else None
             if aligned is None:
                 health["issues"].extend(reason or ["expired_or_horizon_not_started"])
@@ -165,17 +174,12 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                                "source_points": c.points, "private": c.private})
     apply_comment_estimates(components, result["facts"], now, last_event_at, HOURS)
     result["response"] = announcement_context(components, result["facts"], now, last_event_at)
+    informed = combine(components, config, informed_floor=informed_floor)["radar_probability"]
     for obs in observations.values():
         for poll in obs.polls:
             if poll["target"] != target:
                 continue
             health = next(h for h in result["source_health"] if h["id"] == obs.source)
-            if poll["kind"] == "calendar_preference":
-                # Preferences are collected and independently evaluated on their
-                # actual calendar days before any fitted probability mapping.
-                if "preference_under_evaluation" not in health["issues"]:
-                    health["issues"].append("preference_under_evaluation")
-                continue
             if now - obs.observed_at > 1800 or obs.issues:
                 health["issues"].append("poll_observation_stale_or_excluded")
                 continue
@@ -188,7 +192,10 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                 if poll["total"] < config.minimum_recent_votes:
                     health["issues"].append("insufficient_recent_votes")
                     continue
-            if poll["kind"] == "count_distribution":
+            if poll["kind"] == "calendar_preference":
+                converted, reason = calendar_overlay(poll, sampling, now, cycle.get("occurred_at", last_event_at),
+                                                     informed, HOURS, config, cycle.get("confirmation_at"))
+            elif poll["kind"] == "count_distribution":
                 reason = count_rejection(poll, now, event_times)
                 converted = count_curve(poll, now, HOURS, event_times)
             else:
@@ -209,7 +216,7 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
             components.append({"id": obs.source, "family": "community", "dependency": poll["population"],
                                "probabilities": values, "metadata": converted, "private": poll.get("private", False)})
 
-    mixed = combine(components, config)
+    mixed = combine(components, config, informed_floor=informed_floor)
     result["combination_method"] = "baseline_plus_revisions"
     result["features"] = {str(h): {"baseline": mixed["baseline"][i], "radars": mixed["radar_probability"][i],
                                     "community": mixed["community"][i]} for i,h in enumerate(HOURS)}
@@ -223,7 +230,10 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                           "candidate_state": "increment_model_requires_forward_validation", "apply_learned_weights": False}
     result["components"] = components
     result["community_weight"] = mixed["community_weight"]
-    result["counterfactuals"] = counterfactuals(components, config)
+    result["counterfactuals"] = counterfactuals(components, config, informed_floor=informed_floor,
+                                               counterfactual_floors=counterfactual_floors)
+    if informed_floor is not None:
+        result["informed_floor"] = informed_floor
     for c in components:
         c["weight"] = mixed["weights"][c["id"]]
         c["baseline_weight"] = mixed["baseline_weights"].get(c["id"], 0.)
@@ -243,8 +253,15 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
 
 def forecast_all(store, now: float, config: ModelConfig | None = None, config_hash: str | None = None,
                  source_ids: set[str] | None = None, private_source_ids: set[str] | None = None) -> list[dict]:
-    results = [forecast(store, now, t, config, config_hash, source_ids, private_source_ids) for t in TARGETS]
-    broad, automatic = results
+    # The broad event contains an automatic reset. Establish its compatible
+    # information background before measuring a community innovation against it.
+    automatic = forecast(store, now, TARGETS[1], config, config_hash, source_ids, private_source_ids)
+    floor = [p["probability"] for p in automatic["curve"]] if automatic["status"] == "current" else None
+    broad = forecast(store, now, TARGETS[0], config, config_hash, source_ids, private_source_ids,
+                     floor, automatic.get("counterfactuals"))
+    if floor is not None and broad["status"] == "current":
+        broad["valid_until"] = min(broad["valid_until"], automatic["valid_until"])
+    results = [broad, automatic]
     if all(r["status"] == "current" for r in results):
         for a, b in zip(broad["curve"], automatic["curve"]):
             # A forecast of the containing event inherits the narrower event's
@@ -267,6 +284,9 @@ def consumer_export(results: list[dict]) -> dict:
                 "issued_at": iso(result["issued_at"]), "model_version": result["model_version"],
                 "evaluation_version": result["model_version"] + ":" + result["config_hash"],
                 "last_event_at": result.get("last_event_at"),
+                "cycle": {k: result["cycle"].get(k) for k in
+                          ("time_basis", "occurred_at", "confirmation_at", "invalidation_at", "references", "identity")}
+                         if result.get("cycle") else None,
                 "response": {k: result["response"].get(k) for k in ("at", "url", "reviewed", "changed", "kind", "deadline")}
                             if result.get("response") else None,
                 "statements_checked_at": max((h["last_success"] for h in result["source_health"] if h["id"] in ("statements", "tibo_posts") and h.get("last_success")), default=None),
@@ -312,6 +332,10 @@ def consumer_export(results: list[dict]) -> dict:
                     "total_votes": m.get("total_votes"), "recent_votes": m.get("recent_votes"),
                     "observation_window_hours": m.get("observation_window_hours"),
                     "latest_vote_at": m.get("latest_vote_at"), "freshness_weight": m.get("freshness_weight"),
+                    "mapping_kind": m.get("mapping_kind"), "mapping_version": m.get("mapping_version"),
+                    "reference_share": m.get("reference_share"), "recent_share": m.get("recent_share"),
+                    "log_odds_change": m.get("log_odds_change"), "repeat_sensitivity_units": m.get("repeat_sensitivity_units"),
+                    "window_start": m.get("window_start"), "window_end": m.get("window_end"),
                     "coverage_hours": m.get("coverage_hours"), "probability_24h": c["probabilities"][23],
                     "probability_48h": c["probabilities"][47]})
         # Only an aggregate availability count crosses the public boundary;

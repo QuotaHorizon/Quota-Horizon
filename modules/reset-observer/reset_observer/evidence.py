@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.client import IncompleteRead
+from html.parser import HTMLParser
 import json
 import re
 import time
@@ -22,11 +23,156 @@ FEEDS = {
     "completion_feed": "https://codex-reset.pro/api/reset-feed",
     "public_catalogue": "https://codex-resets.com/api/v1/resets?limit=100",
     "codex_reset_status": "https://codex-reset.com/api/forecast",
+    "completion_page": "https://codex-reset.pro/",
+    "didcodex_status": "https://didcodexreset.com/api/status.json",
 }
 # A live status endpoint reports occurrences, not a complete event inventory.
 # Its silence cannot certify a negative outcome window.
-POSITIVE_ONLY_FEEDS = {"codex_reset_status"}
-INTERPRETATION_VERSION = "event-scoped-claims-v5"
+POSITIVE_ONLY_FEEDS = {"codex_reset_status", "completion_page"}
+# Preserve its historical monitoring observations, but stop polling the retired
+# API. The replacement page has no monitoring clock and cannot certify absence.
+RETIRED_FEEDS = {"completion_feed"}
+ACTIVE_FEEDS = {key: value for key, value in FEEDS.items() if key not in RETIRED_FEEDS}
+SOURCE_FAMILIES = {"completion_feed": "codex_reset_fm", "completion_page": "codex_reset_fm"}
+INTERPRETATION_VERSION = "structured-completion-links-v6"
+
+
+class CompletionPage(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.active = False
+        self.parts = []
+
+    def handle_starttag(self, tag, attributes):
+        attributes = dict(attributes)
+        if tag == "script" and attributes.get("id") == "reset-feed-data" and attributes.get("type") == "application/json":
+            self.active = True
+
+    def handle_endtag(self, tag):
+        if tag == "script":
+            self.active = False
+
+    def handle_data(self, value):
+        if self.active:
+            self.parts.append(value)
+
+    @classmethod
+    def decode(cls, body):
+        parser = cls()
+        parser.feed(body)
+        raw = json.loads("".join(parser.parts))
+        if not isinstance(raw.get("events"), list):
+            raise ValueError("missing structured completion events")
+        return raw
+
+
+def completion_page_claims(raw, now):
+    claims, times = [], []
+    for event in raw["events"]:
+        kind = {"usage_reset": "automatic", "reset_card": "banked"}.get(event.get("type"))
+        if event.get("tool") != "codex" or kind is None:
+            continue
+        stage = {"scheduled": "announced", "completed": "completed", "started": "started",
+                 "rolling_out": "started", "cancelled": "cancelled", "retracted": "retracted"}.get(event.get("stage"), "announced")
+        posts = event.get("posts", [])
+        keys = sorted({url_key(post["url"]) for post in posts if post.get("url")})
+        announced = stamp(event["announcedAt"])
+        times.extend(stamp(event[key]) for key in ("announcedAt", "completedAt", "updatedAt") if event.get(key))
+        completions = [post for post in posts if post.get("stage") == "completed" and post.get("at") and post.get("url")]
+        # A completed event can be maintained by the site without an author
+        # completion post. Its earlier promise is an association, not evidence
+        # that the author announced completion at that time.
+        if stage == "completed" and completions:
+            for post in completions:
+                at = stamp(post["at"])
+                post_stage = reported_stage(stage, post.get("text", ""))
+                scope = population(event.get("scope", ""))
+                if population(post.get("text", "")) == "targeted":
+                    scope = "targeted"
+                claims.append(Claim("completion_page", str(event["id"]) + ":" + str(post["id"]),
+                    keys, [url_key(post["url"])], kind, post_stage,
+                    scope, announced, at if post_stage == "completed" else None, now, post.get("text", ""),
+                    "official_relay" if post.get("handle") in ("thsottiaux", "sama", "OpenAI") else "community_report",
+                    "public_completion_notice", at))
+        else:
+            reference = FEEDS["completion_page"] + "#event-" + str(event["id"])
+            completed = stamp(event["completedAt"]) if stage == "completed" and event.get("completedAt") else None
+            if stage == "completed" and completed is None:
+                stage = "announced"
+            claims.append(Claim("completion_page", str(event["id"]), [reference, *keys], [reference],
+                kind, stage, population(event.get("scope", "")), announced, completed, now,
+                event.get("summary", ""), "community_report", "catalogue_completion"))
+    # This is an event-content clock, not a successful monitoring clock.
+    return max(times, default=now), False, claims
+
+
+def didcodex_claims(raw, now):
+    generated = stamp(raw["generatedAt"])
+    checked = stamp(raw["lastSuccessfulCheckAt"])
+    if raw.get("schemaVersion") != 1 or not isinstance(raw.get("heatmap", {}).get("days"), list):
+        raise ValueError("incomplete status inventory")
+    timeline = raw["resetTimeline"]
+    suppressed = set(timeline.get("suppressedPostIds", []))
+    records = {}
+    for day in raw["heatmap"]["days"]:
+        for row in day["sources"]:
+            source = {"postId": row.get("postId"), "url": row.get("url")}
+            records[str(row["postId"])] = {**row, "source": source}
+    for row in raw["events"]:
+        records[str(row["source"]["postId"])] = row
+    links = {str(item["completionPostId"]): item for item in timeline["fulfilledSchedules"]}
+    claims = []
+    for record, row in records.items():
+        if record in suppressed:
+            continue
+        kind = {"global": "automatic", "banked": "banked"}.get(row.get("resetType"))
+        stage = {"reset_completed": "completed", "reset_scheduled": "announced", "reset_started": "started"}.get(row.get("kind"))
+        if kind is None or stage is None:
+            continue
+        source = row["source"]
+        ref = url_key(source["url"]) if source.get("url") else FEEDS["didcodex_status"] + "#" + record
+        at = stamp(row["announcedAt"])
+        plans = (row.get("scope") or {}).get("plans", [])
+        scope = "broad" if "all" in plans else population(row.get("text", ""))
+        keys, scope_refs = [ref], []
+        link = links.get(record)
+        if link and link["schedule"].get("resetType") == row.get("resetType"):
+            schedule = link["schedule"]
+            associated = url_key(schedule["source"]["url"])
+            keys.append(associated)
+            if scope == "unspecified" and "all" in (schedule.get("scope") or {}).get("plans", []):
+                scope, scope_refs = "broad", [associated]
+        completed = stamp(row.get("completedAt") or row.get("effectiveAt") or row["announcedAt"]) if stage == "completed" else None
+        # Structured completion and explicit same-event scope survive terse
+        # replies such as "Done"; contradictory future wording still wins.
+        stage = reported_stage(stage, row.get("text", ""))
+        if stage != "completed":
+            completed = None
+        author = source.get("handle")
+        official = author in ("thsottiaux", "sama", "OpenAI") or any(
+            (source.get("url") or "").startswith("https://x.com/" + handle + "/status/")
+            for handle in ("thsottiaux", "sama", "OpenAI"))
+        claims.append(Claim("didcodex_status", record, keys, [ref], kind, stage, scope, at,
+            completed, now, row.get("text", ""), "official_relay" if official else "catalogue",
+            "public_completion_notice" if source.get("url") else "catalogue_completion",
+            at if source.get("url") else None, scope_refs))
+    for item in timeline["manualCompletions"]:
+        completed = stamp(item["completedAt"])
+        schedules = item.get("schedules", [])
+        kinds = {{"global": "automatic", "banked": "banked"}.get(row.get("resetType")) for row in schedules}
+        kinds.discard(None)
+        if len(kinds) != 1:
+            continue
+        scope = "broad" if any("all" in (row.get("scope") or {}).get("plans", []) for row in schedules) else "unspecified"
+        associated = sorted({url_key(row["source"]["url"]) for row in schedules if row.get("source", {}).get("url")})
+        reference = FEEDS["didcodex_status"] + "#" + str(item["id"])
+        claims.append(Claim("didcodex_status", str(item["id"]), [reference, *associated], [reference],
+            next(iter(kinds)), "completed", scope, min((stamp(row["announcedAt"]) for row in schedules), default=completed),
+            completed, now, item.get("note", ""), "community_report", "operator_observed", None, associated))
+    healthy = raw["monitor"].get("status") == "ok" and -60 <= now - checked <= 3600 and -60 <= now - generated <= 3600
+    if checked > now + 60:
+        raise ValueError("future monitor clock")
+    return generated, healthy, claims
 
 
 def population(text):
@@ -199,10 +345,16 @@ def parse(provider, raw, now):
                     completed if stage == "completed" else None, now,
                     alert.get("observation_message", ""), "community_report", "operator_observed"))
         healthy = -60 <= now - generated <= 3600
+    elif provider == "completion_page":
+        generated, healthy, claims = completion_page_claims(raw, now)
+    elif provider == "didcodex_status":
+        generated, healthy, claims = didcodex_claims(raw, now)
     else:
         raise ValueError("unsupported outcome provider")
     if generated > now + 60:
         raise ValueError("future provider clock")
+    if any(c.completed_at is not None and c.completed_at > now + 60 for c in claims):
+        raise ValueError("future completion clock")
     return generated, healthy and (bool(claims) or provider in POSITIVE_ONLY_FEEDS), [c.to_dict() for c in claims if c.announced_at <= now + 60]
 
 
@@ -215,7 +367,7 @@ def fetch(provider):
             body = response.read(4 * 1024 * 1024 + 1)
             if len(body) > 4 * 1024 * 1024:
                 raise ValueError("outcome response limit")
-            raw = json.loads(body)
+            raw = CompletionPage.decode(body.decode("utf-8")) if provider == "completion_page" else json.loads(body)
         now = time.time()
         generated, healthy, claims = parse(provider, raw, now)
         return provider, now, generated, healthy, claims, raw, None
@@ -249,7 +401,7 @@ def collect(store, policy, refresh=False):
     now = time.time()
     last = {o["provider"]: o["observed_at"] for o in store.observations(now)}
     latest = {o["provider"]: o for o in store.observations(now)}
-    due = [p for p in FEEDS if now - last.get(p, 0) >= (5 if refresh and not latest.get(p, {}).get("error") else retry_delay(store, p, now, policy))]
+    due = [p for p in ACTIVE_FEEDS if now - last.get(p, 0) >= (5 if refresh and not latest.get(p, {}).get("error") else retry_delay(store, p, now, policy))]
     result = []
     with ThreadPoolExecutor(max_workers=len(FEEDS)) as pool:
         for future in as_completed([pool.submit(fetch, p) for p in due]):
@@ -294,8 +446,20 @@ def reconcile(store, now, policy):
         kinds.discard("unknown")
         times = [c["completed_at"] for c in completed]
         populations = {c["population"] for c in completed or group}
+        # An upstream catalogue can classify a reset-day promise as a completed
+        # reset at that very post's timestamp. A current structured schedule for
+        # the same post is contrary evidence, unless a separate completion
+        # reference resolves it. Keep that conflict explicit rather than using
+        # a headline's activity classification as an actual completion.
+        schedule_keys = {key for c in group if c["provider"] in ("didcodex_status", "completion_page")
+                         and c["stage"] in ("announced", "conditional") for key in c["keys"]}
+        conflicting_refs = {reference for c in completed
+                            if c["completed_at"] <= c["announced_at"] + 60
+                            for reference in c["references"] if reference in schedule_keys}
+        stage_conflict = bool(conflicting_refs) and all(
+            set(c["references"]).issubset(conflicting_refs) for c in completed)
         status, reason = "pending", "no_completion_report"
-        if any(c["stage"] in ("retracted", "cancelled", "disputed") for c in group):
+        if stage_conflict or any(c["stage"] in ("retracted", "cancelled", "disputed") for c in group):
             status, reason = "disputed", "conflicting_or_retracted_report"
         elif not completed and any(c["stage"] == "conditional" for c in group):
             reason = "conditional_pledge"
@@ -312,7 +476,8 @@ def reconcile(store, now, policy):
                 status, reason = "pending", "population_unspecified"
             elif any(c["authority"] == "official_relay" for c in completed):
                 status, reason = "confirmed", "public_completion_notice"
-            elif len({r for c in completed for r in c["references"]}) >= 2:
+            elif (len({r for c in completed for r in c["references"]}) >= 2
+                  and len({SOURCE_FAMILIES.get(c["provider"], c["provider"]) for c in completed}) >= 2):
                 status, reason = "confirmed", "corroborated_public_report"
             else:
                 reason = "insufficient_primary_confirmation"
@@ -323,7 +488,8 @@ def reconcile(store, now, policy):
                        "known_at": max(c["observed_at"] for c in completed or group),
                        "references": refs, "relay_providers": sorted({c["provider"] for c in group}),
                        "primary_references": len(refs), "completion_reports": len(completed),
-                       "time_basis": "public_completion_notice", "claims": group})
+                       "time_basis": ("operator_observed" if completed and all(c.get("time_basis") in ("operator_observed", "catalogue_completion") for c in completed)
+                                      else "public_completion_notice"), "claims": group})
     events.sort(key=lambda e: (e["to"] or e["announced_at"], e["id"]))
     return {"events": events, "estimand": "publicly_reported_broad_completion_or_grant"}
 

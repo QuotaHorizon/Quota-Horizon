@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { quantitativeFixture } from "../../preview/quantitativeFixture";
 import { ResetBriefing } from "./ResetBriefing";
 import { forecastPresentation } from "./resetBriefingModel";
-import { activeForecastAnnouncement, combinedStatements, communityEffect, evaluationStale, forecastFor, forecastStale, seriesPaths, sourceRows } from "./quantitativeModel";
+import { activeForecastAnnouncement, combinedStatements, communityEffect, controllingPoint, evaluationStale, forecastFor, forecastStale, seriesPaths, sourceRows } from "./quantitativeModel";
 import { ResetNoticeChip } from "../../components/CapacityPopover/ResetNoticeChip";
 import { TiboBriefing } from "./TiboBriefing";
 import { QuantitativeTrend } from "./QuantitativeTrend";
@@ -12,10 +12,26 @@ import type { PublicResetTimeline } from "./types";
 const now = Date.parse("2026-10-04T02:10:00Z");
 const timeline = (): PublicResetTimeline => ({sources:[],entries:[],revisionCount:0,evidenceFamilyCount:0,quantitative:quantitativeFixture(now)});
 describe("independent quantitative integration", () => {
+  it("attributes inherited automatic news before the broader community supplement", () => {
+    const t = timeline(), broad = forecastFor(t.quantitative)!, auto = forecastFor(t.quantitative, "automatic_reset")!;
+    broad.combination_method = "baseline_plus_revisions";
+    auto.curve = auto.curve.map(p => ({ ...p, baseline: .2, radar_adjustment: .6, community_adjustment: 0,
+      coherence_adjustment: 0, probability: .8 }));
+    broad.curve = broad.curve.map(p => ({ ...p, baseline: .17, radar_adjustment: 0, community_adjustment: .02,
+      coherence_adjustment: .63, probability: .82 }));
+    const point = controllingPoint(broad, auto, 24)!;
+    expect(point.baseline).toBe(.2);
+    expect(point.radar_adjustment).toBe(.6);
+    expect(point.community_adjustment).toBeCloseTo(.02);
+    expect(point.coherence_adjustment).toBe(0);
+    expect(point.baseline + point.radar_adjustment! + point.community_adjustment! + point.coherence_adjustment!).toBeCloseTo(.82);
+    expect(renderToStaticMarkup(<ResetBriefing timeline={t} now={now} language="zh" />)).toContain("+60.0 点");
+  });
   it.each(["zh", "en"] as const)("preserves outcome provider failure states and legacy reports in %s", language => {
     const view = quantitativeFixture(now, true);
     const cases = [
       ["healthy", true, "可用", "Available"],
+      ["positive_evidence", false, "完成证据", "Completion evidence"],
       ["collector_overdue", true, "采集已逾期", "Collection overdue"],
       ["request_or_decode_failure", false, "读取失败", "Read failed"],
       ["stale_source_content", false, "来源内容已过期", "Source content stale"],
@@ -104,6 +120,18 @@ describe("independent quantitative integration", () => {
     expect(html).toContain("重置已经处理完成。尽情享受！");
     f.last_event_at=at;
     expect(forecastPresentation(undefined,now,false,t).awaitingResetForecast).toBe(false);
+  });
+  it("keeps a later announcement of the same observed reset from closing its new cycle", () => {
+    const t = timeline(), f = forecastFor(t.quantitative)!;
+    const occurred = now / 1000 - 3600;
+    f.last_event_at = occurred;
+    f.cycle = { time_basis: "observed_reset", occurred_at: occurred, confirmation_at: now / 1000 - 60,
+      invalidation_at: occurred, references: ["https://x.com/i/status/1234"], identity: "event:1234" };
+    f.statements = [{ id: "1234", at: now / 1000 - 60, url: "https://x.com/thsottiaux/status/1234",
+      original: "Completed earlier.", translation_zh: null, stage: "completed", event_type: "usage_reset", context: null }];
+    expect(forecastPresentation(undefined, now, false, t).awaitingResetForecast).toBe(false);
+    f.statements[0] = { ...f.statements[0], id: "5678", url: "https://x.com/thsottiaux/status/5678" };
+    expect(forecastPresentation(undefined, now, false, t).awaitingResetForecast).toBe(true);
   });
   it("keeps completion and reply context when the second collector has only a partial post", () => {
     const t=timeline(), f=forecastFor(t.quantitative)!;

@@ -8,6 +8,7 @@ shared evidence group we average revisions, rather than add repeated reports.
 from __future__ import annotations
 
 import numpy as np
+from .sentiment import shift_curve
 
 
 def project_cdf(values):
@@ -44,7 +45,7 @@ def grouped_weights(members):
     return weights, audit
 
 
-def combine(components, config, exclude=frozenset(), community_weight=None, remove_signals=False):
+def combine(components, config, exclude=frozenset(), community_weight=None, remove_signals=False, informed_floor=None):
     items = [c for c in components if c["id"] not in exclude]
     local = next(c for c in components if c["id"] == "survival_baseline")
     radars = [c for c in items if c["family"] == "radars"]
@@ -67,7 +68,14 @@ def combine(components, config, exclude=frozenset(), community_weight=None, remo
     # bounds/time-order repair instead of silently attributing it to news.
     informed_raw = base + delta
     informed = project_cdf(informed_raw)
+    if informed_floor is not None:
+        informed = np.maximum(informed, informed_floor)
     community = [c for c in items if c["family"] == "community" and c["metadata"].get("quality", 1.) > 0]
+    # Rebase innovations for every ablation. Reusing an overlay calculated on
+    # the full news forecast would leak removed information into its control.
+    community = [{**c, "probabilities": shift_curve(informed, range(1, len(informed)+1),
+                  c["metadata"]["coverage_hours"], c["metadata"]["log_odds_change"])}
+                 if c["metadata"].get("mapping_kind") == "sentiment_innovation" else c for c in community]
     precision = [{**c, "metadata": {**c["metadata"], "quality": min(1-1e-6, c["metadata"].get("quality", 0.)) / max(1e-6, 1-c["metadata"].get("quality", 0.))}} for c in community]
     community_weights, community_groups = grouped_weights(precision)
     community_curve = sum(np.asarray(c["probabilities"]) * community_weights[c["id"]] for c in community) if community else informed.copy()
@@ -85,6 +93,9 @@ def combine(components, config, exclude=frozenset(), community_weight=None, remo
         alpha = community_weight
     residual = alpha * (community_curve - informed)
     combined = informed + residual
+    if informed_floor is not None:
+        combined = np.maximum(combined, informed_floor)
+        residual = combined - informed
     weights = {c["id"]: revision_weights.get(c["id"], 0.) if c["family"] == "radars" else alpha*community_weights.get(c["id"], 0.) for c in components}
     if np.any(np.diff(combined) < -1e-8) or np.any(combined < -1e-8) or np.any(combined > 1+1e-8):
         raise ValueError("invalid increment combination")
@@ -97,19 +108,30 @@ def combine(components, config, exclude=frozenset(), community_weight=None, remo
             "groups": {"background": anchor_groups, "revisions": revision_groups, "community": community_groups}}
 
 
-def counterfactuals(components, config):
+def counterfactuals(components, config, informed_floor=None, counterfactual_floors=None):
+    def mix(name, items, config, *args, **kwargs):
+        floor = (counterfactual_floors or {}).get(name, informed_floor)
+        return combine(items, config, *args, informed_floor=floor, **kwargs)
     community = {c["id"] for c in components if c["family"] == "community"}
-    variants = {"without_community": combine(components, config, community)["probabilities"],
-                "without_information": combine(components, config, remove_signals=True)["probabilities"],
+    variants = {"without_community": mix("without_community", components, config, community)["probabilities"],
+                "without_information": mix("without_information", components, config, remove_signals=True)["probabilities"],
                 "equal_components": np.mean([c["probabilities"] for c in components], axis=0).tolist()}
     if any(c["metadata"].get("pre_comment_probabilities") for c in components):
         before = [{**c, "probabilities": c["metadata"].get("pre_comment_probabilities", c["probabilities"]),
                    "role": c["metadata"].get("pre_comment_role", c.get("role"))} for c in components]
-        variants["without_comment_estimates"] = combine(before, config)["probabilities"]
+        variants["without_comment_estimates"] = mix("without_comment_estimates", before, config)["probabilities"]
     for weight in (.25, .5, .75):
         if community:
-            variants[f"community_weight_{round(weight*100)}pct"] = combine(components, config, community_weight=weight)["probabilities"]
+            name = f"community_weight_{round(weight*100)}pct"
+            variants[name] = mix(name, components, config, community_weight=weight)["probabilities"]
     for c in components:
         if c["id"] != "survival_baseline":
-            variants["without:"+c["id"]] = combine(components, config, {c["id"]})["probabilities"]
+            name = "without:"+c["id"]
+            variants[name] = mix(name, components, config, {c["id"]})["probabilities"]
+    for name in counterfactual_floors or {}:
+        if name not in variants:
+            variants[name] = mix(name, components, config)["probabilities"]
+    if informed_floor is not None:
+        variants["equal_components"] = np.maximum(variants["equal_components"],
+            (counterfactual_floors or {}).get("equal_components", informed_floor)).tolist()
     return variants

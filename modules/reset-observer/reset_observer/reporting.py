@@ -68,7 +68,7 @@ def publication_curves(store, now):
     # can be large, and neither older history nor other tracks belong here.
     rows = store.db.execute(
         """SELECT source,version,target,track,origin,available_at,expires_at,
-        json_extract(payload,'$.private','$.issues','$.points','$.generated_at') AS fields
+        json_extract(qh_json(payload),'$.private','$.issues','$.points','$.generated_at') AS fields
         FROM forecasts
         WHERE available_at BETWEEN ? AND ? AND track IN ('native','model')
         ORDER BY available_at,origin,id""",
@@ -330,6 +330,7 @@ def build_report(store, now, policy, evidence):
         + policy.reporting_grace_seconds,
     )
     from .preferences import report as preference_report
+    from .reaction import report as reaction_report
     return {
         "schema_version": "reset-observer/1",
         "module_version": VERSION,
@@ -369,6 +370,7 @@ def build_report(store, now, policy, evidence):
         "latest": latest_rows,
         "indicators": indicators,
         "calendar_sentiment": preference_report(store, now),
+        "reaction": reaction_report(store, now, evidence, policy),
         "outcome_providers": providers,
         "outcomes": outcomes,
         "scorecards": rows,
@@ -401,6 +403,39 @@ def build_report(store, now, policy, evidence):
         "curve_basis": "received_publication_values",
         "curves": publication_curves(store, now),
     }
+
+
+def reaction_html(reaction):
+    if not reaction or not reaction.get("events"):
+        return ""
+    sections = []
+    states = {"updated": "已更新周期", "awaiting_update": "仍在旧周期",
+              "anchor_unknown": "周期时刻未公布", "no_prior_observation": "缺少此前记录"}
+    def clock(value):
+        return iso(value) if value is not None else "未记录"
+    def duration(value):
+        return f"{value:.0f} 秒" if value is not None else "未记录"
+    for event in reaction["events"]:
+        rows = []
+        for row in event["series"]:
+            residual = duration(row.get("old_cycle_residual_seconds"))
+            if row.get("residual_censored"):
+                residual = "至少 " + residual
+            values = (row["source"], "自动重置" if row["target"] == "automatic_reset" else "重置或发卡",
+                      states.get(row["state"], "未记录"), clock(row.get("published_at")),
+                      clock(row.get("source_received_at")), duration(row.get("completion_to_update_seconds")), residual)
+            rows.append("<tr>" + "".join(f"<td>{escape(str(value))}</td>" for value in values) + "</tr>")
+        if not rows:
+            rows.append('<tr><td colspan="7">等待来源周期更新记录</td></tr>')
+        kind = "发卡" if event["kind"] == "banked" else "重置"
+        state = "完成有据" if event["status"] == "confirmed" else "等待交叉确认"
+        sections.append(f'<details><summary>{kind} · {escape(clock(event["completed_to"]))} · {state}</summary>'
+            f'<p>最早采集到完成证据：{escape(clock(event.get("first_received_at")))}。时间均为 UTC。</p>'
+            '<div class="panel"><table><thead><tr><th>来源</th><th>目标</th><th>周期状态</th>'
+            '<th>更新发布时间</th><th>采集时间</th><th>完成后更新耗时</th><th>旧周期残留</th></tr></thead>'
+            '<tbody>' + "".join(rows) + '</tbody></table></div></details>')
+    return ('<h2>事件后的更新速度</h2><p>按明确的周期变化计时；概率下降本身不代表已识别重置。'
+            '未保存的采集时刻留空，桌面显示耗时由桌面端单独测量。</p>' + "".join(sections))
 
 
 def html_report(report):
@@ -681,6 +716,7 @@ h1{font-size:32px;margin:0}h2{font-size:21px;margin:28px 0 14px}p{color:#aebeb5}
         + "</tbody></table></div>"
         + diagnostic_html
         + preference_html
+        + reaction_html(report.get("reaction"))
         + """<h2>近期事件核验</h2><p>评估目标是公开可核验的广泛重置或发卡完成。预告、发放中、局部补偿分别保留；完成时间有分歧时延后记分。</p><div class="panel"><table><thead><tr><th>时间 · UTC</th><th>类别</th><th>核验状态</th><th>完成证据</th></tr></thead><tbody>
 """
         + "".join(outcome_rows)

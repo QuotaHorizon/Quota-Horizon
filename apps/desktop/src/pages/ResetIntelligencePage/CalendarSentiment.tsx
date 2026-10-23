@@ -1,13 +1,14 @@
 import type { Language } from "../../i18n";
 import { publicEvidenceTime } from "./presentation";
 import { percent } from "./quantitativeModel";
-import type { QuantReport } from "./quantitativeTypes";
+import type { QuantReport, QuantForecast } from "./quantitativeTypes";
 import { CalendarTrend } from "./CalendarTrend";
 import styles from "./quantitative.module.less";
 
 /** Calendar-day preferences retain their own window and independent evaluation. */
-export function CalendarSentiment({ report, language, now }: {
+export function CalendarSentiment({ report, language, now, input }: {
   report: QuantReport | null; language: Language; now: number;
+  input?: NonNullable<QuantForecast["community_inputs"]>[number];
 }) {
   const data = report?.calendar_sentiment;
   if (!data) return null;
@@ -43,8 +44,9 @@ export function CalendarSentiment({ report, language, now }: {
       {!current ? (zh ? "当前活动日等待新数据" : "Awaiting data for the current activity day")
         : stale ? (zh ? "采集待更新 · 上次记录" : "Collection update due · saved observation")
         : insufficient ? (zh ? "样本待达标 · 近 6h 需新增至少 50 次点击" : "Awaiting at least 50 new clicks in 6h")
+        : input?.mapping_kind === "sentiment_innovation" ? (zh ? "近期倾向变化已计入" : "Recent sentiment change included")
         : (zh ? "活动日候选 · 独立评估中" : "Calendar-day candidate · independent evaluation")}
-      <span>{zh ? "综合判断权重 " : "Weight in the combined forecast "}{percent(data.production_weight)}</span>
+      <span>{zh ? "综合判断权重 " : "Weight in the combined forecast "}{percent(input?.weight ?? data.production_weight)}</span>
       {(data.frozen_days > 0 || data.scored_days > 0) && <span>
         {zh ? `已冻结 ${number(data.frozen_days)} 日 / ${number(data.frozen_trials)} 个时点 · 已评估 ${number(data.scored_days)} 日 / ${number(data.scored_trials)} 个时点`
           : `Frozen: ${number(data.frozen_days)} days / ${number(data.frozen_trials)} checkpoints · Scored: ${number(data.scored_days)} days / ${number(data.scored_trials)} checkpoints`}

@@ -7,6 +7,22 @@ import sqlite3
 import zlib
 
 from .contracts import Forecast, digest, packed
+try:
+    from reset_intelligence.storage_codec import configure_storage
+except ModuleNotFoundError as error:
+    if error.name != "reset_intelligence":
+        raise
+    # The documented standalone observer command starts in this module's root.
+    # Resolve the sibling shared codec without changing sys.path or requiring an
+    # environment install; bundled distributions import the package above.
+    import importlib.util
+    codec_path = Path(__file__).resolve().parents[2] / "reset-intelligence" / "reset_intelligence" / "storage_codec.py"
+    spec = importlib.util.spec_from_file_location("_quota_horizon_storage_codec", codec_path)
+    if spec is None or spec.loader is None:
+        raise ImportError("shared reset storage codec is unavailable") from error
+    codec = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(codec)
+    configure_storage = codec.configure_storage
 
 
 class Store:
@@ -20,6 +36,7 @@ class Store:
             self.db.execute("PRAGMA journal_mode=WAL")
         self.db.row_factory = sqlite3.Row
         if read_only:
+            self.json_storage = configure_storage(self.db, read_only=True)
             return
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -59,10 +76,19 @@ class Store:
         CREATE TABLE IF NOT EXISTS preference_trials(id TEXT PRIMARY KEY,frozen_at REAL NOT NULL,payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS preference_settlements(trial TEXT NOT NULL,at REAL NOT NULL,signature TEXT NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS preference_settlements_trial ON preference_settlements(trial,at);
+        CREATE TABLE IF NOT EXISTS reaction_forecasts(
+          id TEXT PRIMARY KEY,source TEXT NOT NULL,target TEXT NOT NULL,track TEXT NOT NULL,
+          available_at REAL NOT NULL,payload TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS reaction_forecasts_time ON reaction_forecasts(available_at);
+        CREATE INDEX IF NOT EXISTS reaction_forecasts_series ON reaction_forecasts(source,target,track,available_at);
         """)
+        self.json_storage = configure_storage(self.db)
 
     def close(self):
         self.db.close()
+
+    def pack_json(self, value, volatile_fields=()):
+        return self.json_storage.pack_json(value, volatile_fields)
 
     def runtime_event(self, now, payload):
         with self.db:
@@ -87,7 +113,7 @@ class Store:
             if raw is not None:
                 self.db.execute("INSERT OR IGNORE INTO payloads VALUES (?,?)", (h, zlib.compress(packed(raw).encode())))
             self.db.execute("INSERT INTO observations(provider,observed_at,generated_at,healthy,claims,payload_hash,error) VALUES (?,?,?,?,?,?,?)",
-                            (provider, now, generated, int(healthy), packed(claims) if claims is not None else None, h, error))
+                            (provider, now, generated, int(healthy), self.pack_json(claims) if claims is not None else None, h, error))
             self.record_claims(claims or [], now)
 
     def record_claims(self, claims, now):
@@ -118,9 +144,12 @@ class Store:
 
     def add_forecast(self, f: Forecast):
         f.validate()
+        key = f.id
+        if self.db.execute("SELECT 1 FROM forecasts WHERE id=?", (key,)).fetchone():
+            return
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO forecasts VALUES (?,?,?,?,?,?,?,?,?)",
-                            (f.id, f.source, f.version, f.target, f.track, f.origin, f.available_at, f.expires_at, packed(f.__dict__)))
+                            (key, f.source, f.version, f.target, f.track, f.origin, f.available_at, f.expires_at, self.pack_json(f.__dict__)))
 
     def forecasts(self, now, latest=False):
         # Discover series through the covering index, then seek its latest known
@@ -145,7 +174,7 @@ class Store:
 
     def indicator(self, source, now, payload):
         with self.db:
-            self.db.execute("INSERT OR IGNORE INTO indicators VALUES (?,?,?,?)", (digest([source, payload]), source, now, packed(payload)))
+            self.db.execute("INSERT OR IGNORE INTO indicators VALUES (?,?,?,?)", (digest([source, payload]), source, now, self.pack_json(payload)))
 
     def truth(self, now, payload):
         h = digest(payload)

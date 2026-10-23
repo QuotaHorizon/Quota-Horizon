@@ -27,13 +27,13 @@ class DiagnosticsTests(TemporaryStore):
         c = claim(observed_at=T)
         for at in (T, T+900):
             self.store.observation("quota_events", at, T-7200, False, [dict(c, observed_at=at)], {})
-            self.store.observation("completion_feed", at, at, True, [dict(c, observed_at=at)], {})
+            self.store.observation("didcodex_status", at, at, True, [dict(c, observed_at=at)], {})
         self.store.observation("public_catalogue", T+900, None, False, None, None, "TimeoutError")
         rows = {r["provider"]: r for r in provider_health(self.store, T+901, self.policy)}
         self.assertEqual(rows["quota_events"]["state"], "stale_source_content")
         self.assertEqual(rows["public_catalogue"]["state"], "request_or_decode_failure")
-        self.assertEqual(rows["completion_feed"]["state"], "healthy")
-        self.assertTrue(rows["completion_feed"]["content_unchanged"])
+        self.assertEqual(rows["didcodex_status"]["state"], "healthy")
+        self.assertTrue(rows["didcodex_status"]["content_unchanged"])
 
     def test_retry_backoff_recovers_and_respects_rate_limit(self):
         for i, delay in enumerate((60,120,240,480,900,900)):

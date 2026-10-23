@@ -32,4 +32,15 @@ describe("observed hourly sentiment", () => {
   it("accepts old reports without hourly data", () => {
     expect(renderToStaticMarkup(<CalendarTrend language="en" />)).toBe("");
   });
+  it("keeps qualified rolling sentiment visible through quiet hours", () => {
+    const trend = fixture();
+    trend.estimate_window_hours = 6; trend.estimate_kind = "rolling_weighted_preference";
+    for (const b of trend.bins) { b.new_clicks = 10; b.sample_votes = 60; b.sample_coverage_fraction = .7; }
+    const html = renderToStaticMarkup(<CalendarTrend trend={trend} language="en" />);
+    expect(html.match(/<path /g)).toHaveLength(5);
+    expect(html).toContain("rolling 6h weighted preference");
+    expect(html).toContain("6h 60 new clicks");
+    trend.bins[4].sample_votes = 49;
+    expect(renderToStaticMarkup(<CalendarTrend trend={trend} language="en" />).match(/<path /g)).toHaveLength(3);
+  });
 });

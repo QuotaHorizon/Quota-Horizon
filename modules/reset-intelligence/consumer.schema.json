@@ -212,7 +212,137 @@
         "community_inputs": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "state": {
+                "const": "included"
+              },
+              "weight": {
+                "$ref": "#/$defs/probability"
+              },
+              "votes": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "effective_votes": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "total_votes": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "recent_votes": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "observation_window_hours": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "latest_vote_at": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "repeat_sensitivity_units": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "window_start": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "window_end": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "coverage_hours": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "freshness_weight": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 1
+              },
+              "reference_share": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 1
+              },
+              "recent_share": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 1
+              },
+              "mapping_kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mapping_version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "log_odds_change": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "probability_24h": {
+                "$ref": "#/$defs/probability"
+              },
+              "probability_48h": {
+                "$ref": "#/$defs/probability"
+              }
+            }
           }
         },
         "community_coverage": {
@@ -301,6 +431,64 @@
             "null"
           ],
           "minimum": 0
+        },
+        "evaluation_version": {
+          "type": "string"
+        },
+        "cycle": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "time_basis",
+            "occurred_at",
+            "confirmation_at",
+            "invalidation_at",
+            "references",
+            "identity"
+          ],
+          "properties": {
+            "time_basis": {
+              "enum": [
+                "observed_reset",
+                "completion_confirmation",
+                "historical_background"
+              ]
+            },
+            "occurred_at": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "confirmation_at": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "invalidation_at": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "references": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              }
+            },
+            "identity": {
+              "type": "string"
+            }
+          }
         }
       }
     },

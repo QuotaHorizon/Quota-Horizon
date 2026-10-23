@@ -6,7 +6,9 @@ fn refresh_feedback_does_not_claim_cache_or_pending_collection_completed() {
     assert!(refresh_receipt(Ok("refreshed")).is_ok());
     assert!(refresh_receipt(Ok("partial")).is_ok());
     assert!(refresh_receipt(Ok("cached")).unwrap_err().contains("缓存"));
-    assert!(refresh_receipt(Err("refresh_failed")).unwrap_err().contains("数据更新失败"));
+    assert!(refresh_receipt(Err("refresh_failed"))
+        .unwrap_err()
+        .contains("数据更新失败"));
     for state in ["refreshing", "starting", "running"] {
         assert!(refresh_receipt(Ok(state)).unwrap_err().contains("未完成"));
     }

@@ -377,7 +377,10 @@ class CalendarPreferenceTests(unittest.TestCase):
         self.assertEqual(sum(b["new_clicks"] for b in trend["bins"]), reset+feature)
         self.assertEqual([b["new_clicks"] for b in trend["bins"]], [50]*5+[100])
         self.assertTrue(all(b["coverage_fraction"] == 1 for b in trend["bins"]))
-        self.assertAlmostEqual(trend["change"]["reset_share_delta"], -.6)
+        self.assertEqual(trend["estimate_window_hours"], 6)
+        self.assertLess(trend["change"]["reset_share_delta"], 0)
+        self.assertGreater(trend["change"]["reset_share_delta"], -.6)
+        self.assertEqual(trend["bins"][-1]["sample_votes"], 350)
         self.assertEqual(trend["change"]["click_rate_ratio"], 2)
 
     def test_trend_never_allocates_a_batch_crossing_an_hour_edge(self):
@@ -391,7 +394,7 @@ class CalendarPreferenceTests(unittest.TestCase):
         self.assertTrue(all(b["state"] == "available" for b in trend["bins"][-2:]))
         self.assertAlmostEqual(trend["change"]["click_rate_ratio"], 1)
 
-    def test_trend_requires_fifty_new_clicks_and_continuous_hour_coverage(self):
+    def test_trend_requires_fifty_recent_clicks_and_never_counts_unknown_batches(self):
         for n, state in ((49, "insufficient_recent_votes"), (50, "available")):
             with self.subTest(votes=n):
                 samples = [{**poll(r, 0), "observed_at": at} for at, r in (
@@ -400,17 +403,27 @@ class CalendarPreferenceTests(unittest.TestCase):
                 self.assertEqual(result["bins"][-1]["state"], state)
                 self.assertEqual(result["bins"][-1]["reset_share"], 1 if n == 50 else None)
                 self.assertIsNone(result["change"]["reset_share_delta"])
-        for times, counts in (
-            ([T-3600, T-1801, T-1800, T], [100, 200, 10, 70]),  # Counter correction.
-            ([T-3600, T-1801, T], [100, 200, 500]),  # Long collection gap.
-            ([T-600, T], [100, 200]),  # Newly started observer.
+        for times, counts, state, sample_votes in (
+            ([T-3600, T-1801, T-1800, T], [100, 200, 10, 70], "available", 60),
+            ([T-3600, T-1801, T], [100, 200, 500], "incomplete_coverage", 0),
+            ([T-600, T], [100, 200], "available", 100),
         ):
             with self.subTest(times=times):
                 samples = [{**poll(r, 0), "observed_at": at} for at, r in zip(times, counts)]
                 result = hourly_trend(samples, T)
-                self.assertEqual(result["bins"][-1]["state"], "incomplete_coverage")
-                self.assertIsNone(result["bins"][-1]["reset_share"])
+                self.assertEqual(result["bins"][-1]["state"], state)
+                self.assertEqual(result["bins"][-1]["sample_votes"], sample_votes)
+                self.assertEqual(result["bins"][-1]["reset_share"], 1 if state == "available" else None)
                 self.assertIsNone(result["bins"][-1]["clicks_per_hour"])
+
+    def test_quiet_hour_does_not_hide_qualified_six_hour_sentiment(self):
+        samples = [{**poll(index*5, 0), "observed_at": T-21600+index*1800} for index in range(13)]
+        trend = hourly_trend(samples, T)
+        self.assertEqual(trend["bins"][-1]["new_clicks"], 10)
+        self.assertEqual(trend["bins"][-1]["sample_votes"], 60)
+        self.assertEqual(trend["bins"][-1]["state"], "available")
+        self.assertEqual(trend["bins"][-1]["reset_share"], 1)
+        self.assertEqual(trend["change"]["click_rate_ratio"], 1)
 
     def test_index_key_discovery_does_not_leak_future_received_or_observed_samples(self):
         self.put(T-60, poll())

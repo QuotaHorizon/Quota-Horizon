@@ -123,21 +123,23 @@ function Community({ view, language, now }: { view: QuantitativeView; language: 
   const zh = language === "zh", f = forecastFor(view), c = f?.community;
   return <article className={`${styles.card} ${styles.community}`}>
     <div className={styles.heading}><h2>{zh ? "社区预期" : "Community outlook"}</h2><span>{zh ? "重置或发卡" : "Reset or new credit"}</span></div>
-    <div className={styles.communityNumbers}>{[24,48].map(h => <div key={h}><span>{h}h · {zh ? "近期投票转换概率" : "Recent ballot probability"}</span><strong>{percent(c?.probabilities[h-1])}</strong><small>{zh ? "对综合判断 " : "Effect on combined outlook "}<b>{points(communityEffect(view.evaluation,f,h))} {zh ? "点" : "pts"}</b></small></div>)}</div>
+    <div className={styles.communityNumbers}>{[24,48].map(h => <div key={h}><span>{h}h · {zh ? "社区信息对应预估" : "Community-informed estimate"}</span><strong>{percent(c?.probabilities[h-1])}</strong><small>{zh ? "对综合判断 " : "Effect on combined outlook "}<b>{points(communityEffect(view.evaluation,f,h))} {zh ? "点" : "pts"}</b></small></div>)}</div>
     <div className={styles.weight}><span>{zh ? "本次投票补充权重" : "Ballot residual weight"}</span><strong>{percent(c?.weight)}</strong><i><i style={{ width: `${(c?.weight ?? 0)*100}%` }} /></i></div>
     <div className={styles.communityInputs}>{view.forecast?.forecasts.map(f => <section key={f.target}>
       <h3>{f.target === "automatic_reset" ? (zh ? "自动重置" : "Automatic reset") : (zh ? "重置或发卡" : "Reset or new credit")}</h3>
       {(f.community_inputs ?? []).map(c => <div className={styles.communityInput} key={c.id}>
-        <div><b>{c.id === "date_poll" ? (zh ? "Codex Reset 日期投票" : "Codex Reset timing poll") : (zh ? "NextReset 概率投票" : "NextReset probability poll")}</b>
-          <span>{c.recent_votes != null ? (zh ? `近 ${c.observation_window_hours?.toFixed(1) ?? "6"}h 新增 ${c.recent_votes} 票 / 累计 ${c.total_votes ?? c.votes}` : `${c.recent_votes} new in ${c.observation_window_hours?.toFixed(1) ?? "6"}h / ${c.total_votes ?? c.votes} total`) : c.votes ?? "—"} {zh ? "票" : "votes"} · {zh ? "有效样本 " : "Effective sample "}{c.effective_votes?.toFixed(1) ?? "—"}</span>
+        <div><b>{c.id === "didcodex_poll" ? "Did Codex Reset" : c.id === "date_poll" ? (zh ? "Codex Reset 日期投票" : "Codex Reset timing poll") : (zh ? "NextReset 概率投票" : "NextReset probability poll")}</b>
+          <span>{c.recent_votes != null ? (zh ? `近 ${c.observation_window_hours?.toFixed(1) ?? "6"}h 新增 ${c.recent_votes} / 累计 ${c.total_votes ?? c.votes}` : `${c.recent_votes} new in ${c.observation_window_hours?.toFixed(1) ?? "6"}h / ${c.total_votes ?? c.votes} total`) : c.votes ?? "—"} {c.id === "didcodex_poll" ? (zh ? "次点击" : "clicks") : (zh ? "票" : "votes")}
+            {c.mapping_kind === "sentiment_innovation" ? (zh ? " · 已折减重复点击影响" : " · repeated-click sensitivity applied")
+              : `${zh ? " · 有效样本 " : " · Effective sample "}${c.effective_votes?.toFixed(1) ?? "—"}`}</span>
           {c.latest_vote_at != null && <small>{zh ? "最近检测到新增票：" : "Latest new ballots observed: "}{publicEvidenceTime(new Date(c.latest_vote_at * 1000).toISOString(), language)}</small>}
-          <small>{zh ? "原期限还剩 " : "Original window remaining: "}{c.coverage_hours?.toFixed(1) ?? "—"}h{c.coverage_hours != null && c.coverage_hours < 48 ? (zh ? " · 超出期限接历史基准" : " · baseline after deadline") : ""}</small></div>
+          <small>{zh ? "原期限还剩 " : "Original window remaining: "}{c.coverage_hours?.toFixed(1) ?? "—"}h{c.coverage_hours != null && c.coverage_hours < 48 ? c.mapping_kind === "sentiment_innovation" ? (zh ? " · 仅修正该时段" : " · adjustment scoped to this window") : (zh ? " · 超出期限接历史基准" : " · baseline after deadline") : ""}</small></div>
         <div><strong>{percent(c.weight)}</strong><small>{zh ? "实际权重" : "Applied weight"}</small><span>24h {percent(c.probability_24h)}<br />48h {percent(c.probability_48h)}</span></div>
       </div>)}
       {f.community_coverage && <p className={styles.coverage}>{zh ? `${f.community_coverage.included} 项有效 · ${f.community_coverage.unavailable} 项待新数据或质量达标` : `${f.community_coverage.included} eligible · ${f.community_coverage.unavailable} awaiting fresh or qualifying data`}
         {f.community_coverage.supplementary_checked > 0 && <span>{zh ? `补充社区指标：${f.community_coverage.supplementary_included}/${f.community_coverage.supplementary_checked} 项纳入，权重 ` : `Supplementary community indicators: ${f.community_coverage.supplementary_included}/${f.community_coverage.supplementary_checked} admitted, weight `}{percent(f.community_coverage.supplementary_weight)}</span>}</p>}
     </section>)}</div>
-    <CalendarSentiment report={view.evaluation} language={language} now={now} />
+    <CalendarSentiment report={view.evaluation} language={language} now={now} input={f?.community_inputs?.find(c => c.id === "didcodex_poll")} />
     <div className={styles.communityStatus}>{!c ? (zh ? "本次暂无可直接计入概率的近期投票。" : "No recent ballots currently qualify as a probability input.") : forecastStale(view,f,now) ? (zh ? "上次社区结果 · 等待模块更新" : "Saved community result · awaiting an update") : (zh ? "已参与本次综合判断" : "Included in this combined forecast")}</div>
   </article>;
 }

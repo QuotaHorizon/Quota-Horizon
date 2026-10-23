@@ -5,6 +5,7 @@ import { evaluationStale, percent, recentOutcomes, sourceNames } from "./quantit
 import { publicEvidenceTime } from "./presentation";
 import { evaluationRows, evaluationPage, evaluationVersion, scorecardKey } from "./evaluationModel";
 import { EvidenceLink } from "./ArchiveView";
+import { ReactionEvaluation } from "./ReactionEvaluation";
 import styles from "./quantitative.module.less";
 
 export function QuantitativeEvaluation({ view, language, now, onOpenSource }: {
@@ -32,9 +33,10 @@ export function QuantitativeEvaluation({ view, language, now, onOpenSource }: {
     <button onClick={() => { change(current + 1); setSelected(""); }} disabled={current + 1 === total}>{zh ? "下一页" : "Next"}</button>
   </nav>;
   const outcomeLabels: Record<string, string> = { confirmed: zh ? "完成有据" : "Completion evidenced", pending: zh ? "等待完成证据" : "Awaiting completion evidence", targeted: zh ? "局部补偿" : "Targeted compensation", disputed: zh ? "时间或范围有分歧" : "Timing or scope disputed" };
-  const providers: Record<string,string> = { completion_feed: "Reset Monitor", public_catalogue: "Codex Resets", quota_events: "QuotaResets", codex_reset_status: "Codex Reset" };
+  const providers: Record<string,string> = { completion_feed: "Codex Reset FM", completion_page: "Codex Reset FM", public_catalogue: "Codex Resets", quota_events: "QuotaResets", codex_reset_status: "Codex Reset", didcodex_status: "Did Codex Reset" };
   const providerStates: Record<string,string> = {
     healthy: zh ? "可用" : "Available",
+    positive_evidence: zh ? "完成证据" : "Completion evidence",
     collector_overdue: zh ? "采集已逾期" : "Collection overdue",
     request_or_decode_failure: zh ? "读取失败" : "Read failed",
     stale_source_content: zh ? "来源内容已过期" : "Source content stale",
@@ -93,8 +95,11 @@ export function QuantitativeEvaluation({ view, language, now, onOpenSource }: {
       </div>}
     </> : <p className={styles.caption}>{zh ? "此筛选下暂无成绩。" : "No scorecards for this selection."}</p>}
     <details className={styles.disclosure}><summary>{zh ? "来源对照与社区增量价值" : "Source comparisons and community value"}</summary><p>{zh ? "同一目标、同一窗口成对比较。损失差为左项减右项，负值表示左项在这些样本上更好；误差相关性用于检查重复信息。" : "Pairs use identical targets and windows. Loss difference is left minus right; negative values favor the left in these samples. Error correlation helps identify shared information."}</p>{rows.comparisons.length ? <><div className={styles.tableScroll}><table><thead><tr>{(zh ? ["成对比较", "范围 / 窗口", "样本", "Brier 差 / 95% 区间", "误差相关"] : ["Paired comparison", "Scope / horizon", "Samples", "Brier difference / 95% interval", "Error correlation"]).map(v => <th key={v}>{v}</th>)}</tr></thead><tbody>{pairsPage.items.map((c,i) => <tr key={i}><td>{name(c.left.source)} – {name(c.right.source)}<small>{track(c.left.track)} / {track(c.right.track)}</small><small>{evaluationVersion(c.left.version)} / {evaluationVersion(c.right.version)}</small></td><td>{scope(c.target)} · {c.hours}h</td><td>{c.n}</td><td>{number(c.loss_difference.mean)}<small>{c.loss_difference.ci95?.map(v=>v.toFixed(3)).join(" – ") ?? (zh ? "区间待积累" : "Interval pending")}</small></td><td>{number(c.error_correlation)}</td></tr>)}</tbody></table></div>{pages(pairsPage.page, pairsPage.pages, setComparisonPage)}</> : <p>{zh ? "等待同窗成绩；已预先保存“移除社区”、历史基准与等权组合，供后续对照。" : "Awaiting matched results. Community-removed, historical-baseline and equal-weight variants are already saved for comparison."}</p>}</details>
+    <ReactionEvaluation view={view} language={language} />
     <div className={styles.heading}><h3>{zh ? "实际事件核验" : "Actual event verification"}</h3><span>{zh ? "完成、局部发放与分歧分别记录" : "Completion, targeted grants and disputes retained"}</span></div>
     <div className={styles.outcomes}>{recentOutcomes(report).map(e => <div key={e.id}><i data-state={e.status} /><div><strong>{e.kind === "banked" ? (zh ? "发放重置卡" : "New reset credit") : (zh ? "自动重置" : "Automatic reset")}</strong><span>{e.reason === "conditional_pledge" ? (zh ? "条件承诺跟踪" : "Tracking a conditional commitment") : e.status === "pending" && e.completion_reports > 0 ? e.reason === "insufficient_primary_confirmation" ? (zh ? "已报告完成 · 等待交叉核验" : "Completion reported · awaiting corroboration") : (zh ? "已报告完成 · 覆盖范围待核验" : "Completion reported · scope under review") : outcomeLabels[e.status] ?? (zh ? "等待核验" : "Awaiting verification")}</span></div><time><small>{e.status === "confirmed" ? (zh ? "报告完成" : "Reported complete") : (zh ? "证据时间" : "Evidence time")}</small>{publicEvidenceTime(new Date((e.to ?? e.announced_at ?? e.known_at)*1000).toISOString(),language)}</time><div className={styles.evidenceLinks}>{e.references.slice(0,2).map((url,i) => <EvidenceLink key={url} url={url} label={zh ? `证据 ${i+1}` : `Evidence ${i+1}`} onOpen={onOpenSource} />)}</div></div>)}</div>
-    <footer className={styles.footer}><div>{report.outcome_providers.map(p => <span key={p.provider}>{providers[p.provider] ?? (zh ? "事件渠道" : "Outcome feed")} · {providerStates[p.state ?? ""] ?? (p.healthy ? (zh ? "可用" : "Available") : (zh ? "待更新" : "Update due"))}</span>)}</div><div><span>{zh ? "评估更新 " : "Evaluation updated "}{publicEvidenceTime(report.generated_at,language)}</span><span>{zh ? "前瞻记录开始 " : "Forward record began "}{publicEvidenceTime(report.started_at,language)}</span></div></footer>
+    <footer className={styles.footer}><div>{report.outcome_providers.map(p => <span key={p.provider}>{providers[p.provider] ?? (zh ? "事件渠道" : "Outcome feed")} · {p.coverage_role === "positive_only" && p.state === "incomplete_source_evidence"
+      ? (zh ? "完成证据" : "Completion evidence")
+      : providerStates[p.state ?? ""] ?? (p.healthy ? (zh ? "可用" : "Available") : (zh ? "待更新" : "Update due"))}</span>)}</div><div><span>{zh ? "评估更新 " : "Evaluation updated "}{publicEvidenceTime(report.generated_at,language)}</span><span>{zh ? "前瞻记录开始 " : "Forward record began "}{publicEvidenceTime(report.started_at,language)}</span></div></footer>
   </article>;
 }

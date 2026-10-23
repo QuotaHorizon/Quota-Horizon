@@ -67,6 +67,8 @@ class Claim:
     text: str
     authority: str = "catalogue"
     time_basis: str = "reported_completion"
+    published_at: float | None = None
+    scope_references: list[str] = field(default_factory=list)
 
     def to_dict(self):
         return asdict(self)

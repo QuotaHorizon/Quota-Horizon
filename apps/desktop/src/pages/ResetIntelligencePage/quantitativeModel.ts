@@ -10,8 +10,16 @@ export const forecastFor = (v: QuantitativeView | undefined, target: ResetTarget
 export const probabilityAt = (f: QuantForecast | undefined, hours: number) => f?.curve.find(p => p.hours === hours)?.probability ?? null;
 export function controllingPoint(f: QuantForecast | undefined, automatic: QuantForecast | undefined, hours: number) {
   const point = f?.curve.find(p => p.hours === hours), auto = automatic?.curve.find(p => p.hours === hours);
-  return f?.combination_method === "baseline_plus_revisions" && point && auto
-    && (point.coherence_adjustment ?? 0) > 0 && Math.abs(point.probability-auto.probability) < 1e-8 ? auto : point;
+  if (f?.combination_method !== "baseline_plus_revisions" || !point || !auto
+    || f.issued_at !== automatic?.issued_at || (point.coherence_adjustment ?? 0) <= 0) return point;
+  if (Math.abs(point.probability-auto.probability) < 1e-8) return auto;
+  if (Math.abs(point.probability-(point.community_adjustment ?? 0)-auto.probability) < 1e-8) {
+    // The broader outlook inherits the automatic forecast before its own
+    // ballot supplement. Keep that source revision visible in the breakdown.
+    return { ...auto, probability: point.probability, component_range: point.component_range,
+      community_adjustment: (auto.community_adjustment ?? 0) + point.probability-auto.probability };
+  }
+  return point;
 }
 export function forecastStale(v: QuantitativeView, f: QuantForecast | undefined, now: number) {
   return !!v.forecastIssue || !f || f.status !== "current" || !f.valid_until || Date.parse(f.valid_until) <= now
@@ -69,7 +77,9 @@ export function activeForecastAnnouncement(timeline: PublicResetTimeline, now: n
 export function precedesCompletion(f: QuantForecast | undefined, post: PublicPost | undefined) {
   if (!post || !f || (post.kind === "grant" && f.target === "automatic_reset")) return false;
   const at = Date.parse(post.publishedAt);
-  return at > (f.last_event_at != null ? f.last_event_at * 1000 : Date.parse(f.issued_at));
+  if (f.cycle?.references.some(url => url.match(/\/status\/(\d+)/u)?.[1] === post.id)) return false;
+  const boundary = f.cycle ? f.cycle.invalidation_at : f.last_event_at;
+  return at > (boundary != null ? boundary * 1000 : Date.parse(f.issued_at));
 }
 export const recentOutcomes = (report: QuantReport) => [...report.outcomes].sort((a, b) =>
   (b.to ?? b.announced_at ?? 0) - (a.to ?? a.announced_at ?? 0)).slice(0, 8);
@@ -93,7 +103,8 @@ export function sourceRows(view: QuantitativeView) {
   }
   return [...latest.values()].map(row => ({
     ...row,
-    state: Date.parse(row.origin) < (forecastFor(view, row.target)?.last_event_at ?? 0)*1000 ? "cycle_closed" : row.state,
+    state: Date.parse(row.origin) < ((forecastFor(view, row.target)?.cycle
+      ? forecastFor(view, row.target)?.cycle?.invalidation_at : forecastFor(view, row.target)?.last_event_at) ?? 0)*1000 ? "cycle_closed" : row.state,
     role: forecastFor(view, row.target)?.sources.find(s => s.id === row.source)?.role,
     response_state: forecastFor(view, row.target)?.sources.find(s => s.id === row.source)?.response_state,
     comment: forecastFor(view, row.target)?.sources.find(s => s.id === row.source)?.comment,

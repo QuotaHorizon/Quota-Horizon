@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from reset_observer.contracts import Policy
-from reset_observer.evidence import FEEDS, collect, fetch, parse
+from reset_observer.evidence import ACTIVE_FEEDS, FEEDS, collect, fetch, parse
 from reset_observer.runtime import (
     producer_due,
     refresh_path,
@@ -124,7 +124,7 @@ class EvidenceHealthTests(unittest.TestCase):
             try:
                 with (
                     patch(
-                        "reset_observer.evidence.FEEDS",
+                        "reset_observer.evidence.ACTIVE_FEEDS",
                         {
                             "quota_events": "https://quotaresets.com/test",
                             "completion_feed": "https://codex-reset.pro/test",
@@ -153,7 +153,7 @@ class EvidenceHealthTests(unittest.TestCase):
                 )
                 with (
                     patch(
-                        "reset_observer.evidence.FEEDS",
+                        "reset_observer.evidence.ACTIVE_FEEDS",
                         {"completion_feed": "https://codex-reset.pro/test"},
                     ),
                     patch(
@@ -186,7 +186,7 @@ class OutcomeRefreshTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             store = Store(Path(d) / "state.sqlite")
             try:
-                store.observation("completion_feed", 10000, 10000, True, [], None)
+                store.observation("didcodex_status", 10000, 10000, True, [], None)
                 policy = Policy()
                 boundary = 10000 + policy.maximum_coverage_gap_seconds
                 self.assertEqual(
@@ -197,7 +197,7 @@ class OutcomeRefreshTests(unittest.TestCase):
                     "failed",
                 )
                 store.observation(
-                    "completion_feed", 10001, None, True, None, None, "http_404"
+                    "didcodex_status", 10001, None, True, None, None, "http_404"
                 )
                 self.assertEqual(
                     outcome_status(store, policy, 10001, [])["state"], "failed"
@@ -242,8 +242,8 @@ class OutcomeRefreshTests(unittest.TestCase):
 
         with (
             patch("reset_observer.runtime.time.time", return_value=now),
-            patch("reset_observer.runtime.FEEDS", {p: FEEDS[p] for p in self.providers}),
-            patch("reset_observer.evidence.FEEDS", {p: FEEDS[p] for p in self.providers}),
+            patch("reset_observer.runtime.ACTIVE_FEEDS", {p: FEEDS[p] for p in self.providers}),
+            patch("reset_observer.evidence.ACTIVE_FEEDS", {p: FEEDS[p] for p in self.providers}),
             patch("reset_observer.runtime.bundled_revision", return_value=None),
             patch(
                 "reset_observer.runtime.subprocess.run",
@@ -510,7 +510,7 @@ class RefreshTests(unittest.TestCase):
                 collect(store, Policy(), refresh=True)
                 self.assertEqual(
                     {c.args[0] for c in f.call_args_list},
-                    set(FEEDS) - {"quota_events"},
+                    set(ACTIVE_FEEDS) - {"quota_events"},
                 )
             store.close()
 

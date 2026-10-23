@@ -39,13 +39,14 @@ def capture(store, source, observed_at, received_at, poll):
     key = digest([source, poll["id"], observed_at])
     with store.db:
         store.db.execute("INSERT OR IGNORE INTO preference_samples VALUES (?,?,?,?,?,?)",
-                         (key, source, poll["id"], observed_at, received_at, packed(record)))
+                         (key, source, poll["id"], observed_at, received_at,
+                          store.pack_json(record, volatile_fields=("observed_at", "received_at"))))
 
 
-def recent_samples(store, source, round_id, now):
+def recent_samples(store, source, round_id, now, lookback=WINDOW_SECONDS):
     rows = store.db.execute("""SELECT payload FROM preference_samples
         WHERE source=? AND round_id=? AND received_at<=? AND observed_at BETWEEN ? AND ?
-        ORDER BY observed_at,id""", (source, round_id, now, now-WINDOW_SECONDS, now))
+        ORDER BY observed_at,id""", (source, round_id, now, now-lookback, now))
     return [json.loads(r[0]) for r in rows]
 
 
@@ -93,26 +94,37 @@ def hourly_trend(samples, now):
         exposure = max(0., within[-1]["observed_at"]-delta["first_at"]) if within else 0.
         coverage = min(1., exposure/3600)
         votes = delta["reset"]+delta["feature"]
-        state = ("incomplete_coverage" if coverage < MINIMUM_TREND_COVERAGE
-                 else "insufficient_recent_votes" if votes < MINIMUM_VOTES else "available")
+        # Each plotted point uses the same trailing-six-hour qualification as
+        # production. A quiet single hour cannot hide a qualified recent sample.
+        rolling = [s for s in samples if end-WINDOW_SECONDS <= s["observed_at"] <= end]
+        estimate = increments(rolling, end)
+        sample_votes = estimate["reset"] + estimate["feature"]
+        weighted = estimate["weighted_reset"] + estimate["weighted_feature"]
+        sample_coverage = max(0., rolling[-1]["observed_at"]-estimate["first_at"])/WINDOW_SECONDS if rolling else 0.
+        current = bool(rolling) and end-rolling[-1]["observed_at"] <= MAX_GAP_SECONDS
+        state = ("incomplete_coverage" if not current or (estimate["gaps"] and sample_votes < MINIMUM_VOTES) else
+                 "insufficient_recent_votes" if sample_votes < MINIMUM_VOTES else "available")
         bins.append({"start": start, "end": end, "new_clicks": votes,
                      "reset_clicks": delta["reset"], "feature_clicks": delta["feature"],
                      "coverage_fraction": coverage,
-                     "reset_share": delta["reset"]/votes if state == "available" else None,
-                     "clicks_per_hour": votes*3600/exposure if state == "available" else None,
+                     "sample_votes": sample_votes, "sample_coverage_fraction": min(1., sample_coverage),
+                     "reset_share": estimate["weighted_reset"]/weighted if state == "available" and weighted else None,
+                     "clicks_per_hour": votes*3600/exposure if coverage >= MINIMUM_TREND_COVERAGE and exposure else None,
                      "state": state})
     previous, current = bins[-2:]
     comparable = previous["state"] == current["state"] == "available"
     return {"window_hours": 6, "bin_hours": 1, "minimum_bin_votes": MINIMUM_VOTES,
+            "estimate_window_hours": 6, "estimate_kind": "rolling_weighted_preference",
             "minimum_coverage": MINIMUM_TREND_COVERAGE, "bins": bins,
             "change": {"state": "available" if comparable else "awaiting_comparable_hours",
                        "reset_share_delta": current["reset_share"]-previous["reset_share"] if comparable else None,
-                       "click_rate_ratio": current["clicks_per_hour"]/previous["clicks_per_hour"] if comparable else None}}
+                       "click_rate_ratio": current["clicks_per_hour"]/previous["clicks_per_hour"]
+                       if current["clicks_per_hour"] is not None and previous["clicks_per_hour"] else None}}
 
 
 def features(samples, now):
     latest = samples[-1]
-    delta = increments(samples, now)
+    delta = increments([s for s in samples if now-WINDOW_SECONDS <= s["observed_at"] <= now], now)
     reset, feature = delta["reset"], delta["feature"]
     weighted_reset, weighted_feature = delta["weighted_reset"], delta["weighted_feature"]
     n = reset+feature
@@ -157,7 +169,7 @@ def current_features(store, now):
     keys = store.db.execute("SELECT DISTINCT source,round_id FROM preference_samples").fetchall()
     output = []
     for source, round_id in keys:
-        samples = recent_samples(store, source, round_id, now)
+        samples = recent_samples(store, source, round_id, now, lookback=2*WINDOW_SECONDS)
         if samples:
             output.append(features(samples, now))
     return output
@@ -186,7 +198,8 @@ def frozen_trial(store, f, now, policy, evidence, sampling):
     comparisons = []
     for source in store.forecasts(now, latest=True):
         baseline = source.source == "survival_baseline" and source.track == "shadow"
-        if source.target != RELIEF or source.private or (source.track not in ("model", "native") and not baseline):
+        community_control = source.source == "without_community" and source.track == "shadow"
+        if source.target != RELIEF or source.private or (source.track not in ("model", "native") and not baseline and not community_control):
             continue
         probability, _ = trial_probability(source, now, hours, evidence["events"], policy)
         if probability is not None:

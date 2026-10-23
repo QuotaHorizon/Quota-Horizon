@@ -15,7 +15,7 @@ import time
 
 from .benchmark import freeze_grid, initialize, settle_all
 from .contracts import Policy, digest, iso
-from .evidence import FEEDS, collect, reconcile, reinterpret_latest
+from .evidence import ACTIVE_FEEDS, FEEDS, collect, reconcile, reinterpret_latest
 from .diagnostics import runtime_gap
 from .importers import intelligence_database, json_lines
 from .reporting import build_report, html_report
@@ -104,29 +104,34 @@ def outcome_status(store, policy, now, collected):
     latest = {o["provider"]: o for o in store.observations(now)}
     healthy = {
         p
-        for p in FEEDS
+        for p in ACTIVE_FEEDS
         if p in latest
         and latest[p]["healthy"]
         and not latest[p]["error"]
         and 0 <= now - latest[p]["observed_at"] <= policy.maximum_coverage_gap_seconds
     }
-    refreshed = healthy & {
-        o["provider"] for o in collected if o["healthy"] and not o["error"]
+    available = healthy | {
+        p for p in ACTIVE_FEEDS if p == "completion_page" and p in latest
+        and not latest[p]["error"] and latest[p]["claims"] is not None
+        and 0 <= now - latest[p]["observed_at"] <= policy.maximum_coverage_gap_seconds
+    }
+    refreshed = available & {
+        o["provider"] for o in collected if (o["healthy"] or o["provider"] == "completion_page") and not o["error"]
     }
     state = (
         "failed"
-        if not healthy
+        if not available
         else "cached"
         if not refreshed
         else "refreshed"
-        if len(healthy) == len(FEEDS)
+        if len(available) == len(ACTIVE_FEEDS)
         else "partial"
     )
     return {
         "state": state,
         "refreshed_count": len(refreshed),
         "healthy_count": len(healthy),
-        "total": len(FEEDS),
+        "total": len(ACTIVE_FEEDS),
     }
 
 
@@ -137,6 +142,8 @@ def run_once(args, config, refresh=False, evaluator=None):
     store = Store(args.db)
     try:
         initialize(store, time.time(), policy)
+        from .reaction import initialize as initialize_reaction
+        initialize_reaction(store, time.time())
         producer = {"status": "external"}
         last_producer = store.get("last_producer")
         if last_producer:

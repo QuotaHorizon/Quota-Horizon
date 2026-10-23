@@ -21,7 +21,7 @@ NOW = stamp("2026-10-03T14:00:00Z")
 
 def history(now=NOW):
     return [Event(str(i), now - (20 - i) * 96 * 3600, now, "automatic",
-                  [f"https://example.com/event/{i}"]) for i in range(20)]
+                  [f"https://example.com/event/{i}"], precision="observed") for i in range(20)]
 
 
 class MathTests(unittest.TestCase):

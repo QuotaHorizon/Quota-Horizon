@@ -23,13 +23,18 @@ export interface QuantForecast {
   combination_method?: string | null;
   training_state: string | null; evaluation_windows: number; event_count: number;
   last_event_at?: number | null;
+  cycle?: { time_basis: "observed_reset" | "completion_confirmation" | "historical_background";
+    occurred_at: number | null; confirmation_at: number | null; invalidation_at: number | null;
+    references: string[]; identity: string } | null;
   statements_checked_at?: number | null;
   response?: { at: number; url: string; reviewed: string[]; changed: string[]; kind?: "announcement" | "revision" | null; deadline?: number | null } | null;
   curve: { hours: number; probability: number; baseline: number; component_range: [number, number]; radar_adjustment?: number | null; comment_adjustment?: number | null; community_adjustment?: number | null; coherence_adjustment?: number | null }[];
   sources: { id: string; probabilities: number[]; source_points: [number, number][] | null; origin: number | null; expires_at?: number | null; source_coverage_hours: number | null; weight?: number | null; baseline_points?: [number, number][] | null; role?: "information" | "background" | "comparison" | null; response_state?: string | null; signal_baseline?: number[] | null; baseline_weight?: number | null; comment?: CommentEstimate | null }[];
   community: { probabilities: number[]; weight: number } | null;
   family_weights?: Record<string, number>;
-  community_inputs?: { id: string; weight: number; votes: number | null; effective_votes: number | null; coverage_hours: number | null; probability_24h: number; probability_48h: number; total_votes?: number | null; recent_votes?: number | null; observation_window_hours?: number | null; latest_vote_at?: number | null; freshness_weight?: number | null }[];
+  community_inputs?: { id: string; weight: number; votes: number | null; effective_votes: number | null; coverage_hours: number | null; probability_24h: number; probability_48h: number; total_votes?: number | null; recent_votes?: number | null; observation_window_hours?: number | null; latest_vote_at?: number | null; freshness_weight?: number | null;
+    mapping_kind?: "sentiment_innovation" | null; mapping_version?: string | null; reference_share?: number | null; recent_share?: number | null;
+    log_odds_change?: number | null; repeat_sensitivity_units?: number | null; window_start?: number | null; window_end?: number | null }[];
   community_coverage?: { included: number; unavailable: number; supplementary_included: number; supplementary_checked: number; supplementary_weight: number } | null;
   changes?: QuantChanges | null;
   statements?: { id: string; at: number; url: string; original: string; translation_zh: string | null;
@@ -55,7 +60,9 @@ export interface QuantScorecard extends ForecastIdentity {
 }
 export interface CalendarTrend {
   window_hours: 6; bin_hours: 1; minimum_bin_votes: 50; minimum_coverage: number;
+  estimate_window_hours?: 6 | null; estimate_kind?: "rolling_weighted_preference" | null;
   bins: { start: number; end: number; new_clicks: number; reset_clicks: number; feature_clicks: number;
+    sample_votes?: number | null; sample_coverage_fraction?: number | null;
     coverage_fraction: number; reset_share: number | null; clicks_per_hour: number | null;
     state: "available" | "insufficient_recent_votes" | "incomplete_coverage" }[];
   change: { state: "available" | "awaiting_comparable_hours"; reset_share_delta: number | null; click_rate_ratio: number | null };
@@ -67,6 +74,20 @@ export interface CalendarSentiment {
     latest_vote_at: number | null;
     trend?: CalendarTrend | null;
     state: "ready_for_evaluation" | "insufficient_recent_votes" | "upcoming" | "closed" | "stale" }[];
+}
+export interface ReactionReport {
+  version: string;
+  events: { id: string; kind: string; status: string; time_basis: string;
+    completed_from: number; completed_to: number; first_received_at: number | null;
+    evidence: { provider: string; source_family: string; published_at: number | null;
+      first_received_at: number; published_to_capture_seconds: number | null }[];
+    series: { source: string; version: string; target: ResetTarget; track: string;
+      state: "updated" | "awaiting_update" | "anchor_unknown" | "no_prior_observation";
+      published_at: number | null; source_received_at: number | null; observer_received_at: number | null;
+      publication_to_capture_seconds: number | null; completion_to_update_seconds: number | null;
+      known_to_update_seconds: number | null; old_cycle_residual_seconds: number | null;
+      residual_censored: boolean; before_probability_24h: number | null; after_probability_24h: number | null;
+      ui_received_at: null; ui_presented_at?: null; ui_delay_seconds: null }[] }[];
 }
 export interface QuantReport {
   schema_version: "reset-observer/1"; generated_at: string; started_at: string; state: string;
@@ -82,8 +103,10 @@ export interface QuantReport {
   outcomes: { id: string; status: string; reason?: string | null; kind: string; from: number | null; to: number | null;
     announced_at: number | null; known_at: number; references: string[]; primary_references: number; completion_reports: number }[];
   outcome_providers: { provider: string; last_attempt: string; generated_at: string | null; healthy: boolean;
-    state?: "healthy" | "collector_overdue" | "request_or_decode_failure" | "stale_source_content" | "incomplete_source_evidence" | null }[];
+    coverage_role?: "complete_inventory" | "positive_only" | null; source_family?: string | null;
+    state?: "healthy" | "positive_evidence" | "collector_overdue" | "request_or_decode_failure" | "stale_source_content" | "incomplete_source_evidence" | null }[];
   calendar_sentiment?: CalendarSentiment | null;
+  reaction?: ReactionReport | null;
 }
 export interface QuantitativeView {
   connected: boolean; checkedAt: string; forecastIssue: string | null; evaluationIssue: string | null;
@@ -91,4 +114,5 @@ export interface QuantitativeView {
     checkedAt: string | null; retryAt: string | null; issue: string | null };
   forecast: { schema_version: "reset-intelligence-consumer/1"; forecasts: QuantForecast[] } | null;
   evaluation: QuantReport | null;
+  presentation?: { issuedAt: string; receivedAt: number; presentedAt: number | null; visible: boolean | null };
 }

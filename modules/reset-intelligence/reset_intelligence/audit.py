@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 from .contracts import TARGETS, digest, iso
+from .lifecycle import cycle_issues
 from .sources import normalization_outdated
 
 
@@ -11,18 +12,19 @@ def native_support(curve, issued_at, result, component):
     """Source deadline and freshness are different clocks; tails are model values."""
     remaining = max(0.0, curve.points[-1][0] - (issued_at - curve.origin) / 3600)
     last_event = result.get("last_event_at")
+    cycle = result.get("cycle") or {}
+    if "invalidation_at" not in cycle:
+        # Preserve the meaning of previously issued reports. New forecasts
+        # carry the explicit occurrence/confirmation/background distinction.
+        cycle = {"invalidation_at": last_event, "occurred_at": last_event, "references": []}
     current = (
         not normalization_outdated(curve)
         and not (
             curve.source == "codex_reset"
             and curve.metadata.get("estimate_kind") != "published_complete"
         )
-        and curve.aligned(issued_at, 0, last_event) is not None
-        and not (
-            last_event is not None
-            and curve.last_reset_at is not None
-            and curve.last_reset_at < last_event - 3600
-        )
+        and curve.aligned(issued_at, 0, None) is not None
+        and not cycle_issues(curve, cycle)
     )
     # Only the issued component can establish that a tail was actually used.
     used = bool(
@@ -145,6 +147,7 @@ def source_audit(store, now, results=None):
         rows.extend(target_rows)
         radar_rows = [r for r in target_rows if not r["private"] and r["issued_contribution"].get("family") == "radars"]
         targets.append({"target": result["target"], "issued_at": iso(result["issued_at"]), "status": result["status"],
+                        "reason": result.get("reason"),
                         "config_hash": result["config_hash"], "model_version": result["model_version"],
                         "family_weights": weights, "training_state": training.get("state"),
                         "training_windows": training.get("windows", 0), "coherence": result.get("coherence"),

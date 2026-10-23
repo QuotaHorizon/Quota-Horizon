@@ -68,6 +68,28 @@ def codex_rounding_only(data):
     return True
 
 
+def reset_anchor(at, time_basis, references=(), *, discovered_at=None, event_id=None):
+    """Keep the provider's occurrence, publication and discovery clocks distinct.
+
+    Receipt belongs to Curve.observed_at, not stable forecast metadata: adding a
+    new poll's receipt here would create a different observer forecast identity.
+    """
+    recorded = stamp(at)
+    refs = []
+    for value in references:
+        try:
+            url = canonical_url(value)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if url not in refs:
+            refs.append(url)
+    return {"occurred_at": recorded if time_basis in ("observed", "source_clock") else None,
+            "announced_at": recorded if time_basis == "announcement_proxy" else None,
+            "discovered_at": stamp(discovered_at) if discovered_at else None,
+            "time_basis": time_basis, "references": refs,
+            "source_event_id": str(event_id) if event_id is not None else None}
+
+
 def statement_relevance(text):
     if re.search(r"\beither\b.{0,350}\bor\b.{0,60}\b(?:full |global )?reset\b", text, re.I | re.S):
         return "conditional_pledge"
@@ -156,6 +178,8 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
                             "upstream_model": d["model"]["version"], "estimate_kind": "published_complete",
                             "rounding_only": codex_rounding_only(d),
                             "baseline_points": [(24, probability(ps["raw_24h"])), (48, probability(ps["raw_48h"]))]})
+        c.metadata["reset_anchor"] = reset_anchor(d["last_reset_at"], "source_clock",
+            [e.get("href") for e in d.get("evidence", []) if isinstance(e, dict) and e.get("code") == "last_reset"])
         c.evidence = [f"https://x.com/i/status/{i}" for i in d.get("context", {}).get("evidence_ids", []) if str(i).isdigit()]
         # An evidence inventory is not a review of every listed post. Preserve
         # the post the source says actually drives its published adjustment.
@@ -178,15 +202,21 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
     elif adapter == "monitor":
         if "t" in d:
             d = inert(d)["result"]
-        last = max(
-            (stamp(e["dateTime"]) for e in d["history"] if e["type"] == "forced-reset"),
-            default=None,
-        )
+        last_record = max((e for e in d["history"] if e["type"] == "forced-reset"),
+                          key=lambda e: stamp(e["dateTime"]), default=None)
+        last = stamp(last_record["dateTime"]) if last_record else None
         if last is None:
             obs.issues.append("missing_forced_reset_anchor")
         c = curve(AUTOMATIC, d["updatedAt"], [(24, probability(d["forecast"]["score24h"], 100)),
                   (48, probability(d["forecast"]["score48h"], 100))], 7 * 3600, last,
                   metadata={"upstream_health": d["status"], "forecast_status": d["forecastStatus"]})
+        if last_record:
+            # Monitor's X-backed history dates are publication proxies. A
+            # forced-reset label does not turn a post timestamp into telemetry.
+            basis = "observed" if last_record.get("timeBasis") in ("observed", "feed_observation", "occurrence") else "announcement_proxy"
+            c.metadata["reset_anchor"] = reset_anchor(last, basis,
+                [last_record.get("sourceUrl")], discovered_at=last_record.get("discoveredAt"),
+                event_id=last_record.get("id"))
         if all(k in d["forecast"] for k in ("baseScore24h", "baseScore48h")):
             c.metadata["baseline_points"] = [(24, probability(d["forecast"]["baseScore24h"], 100)),
                                               (48, probability(d["forecast"]["baseScore48h"], 100))]
@@ -207,6 +237,12 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
                         "decomposition_version": 1,
                         "baseline_points": [(w["hours"], probability(w["baseline"])) for w in d["windows"]]
                             if all("baseline" in w for w in d["windows"]) else None})
+        basis = ("observed" if last.get("timeBasis") in ("observed", "feed_observation", "occurrence")
+                 else "announcement_proxy" if last.get("timeBasis") in ("publication", "announcement", "announcement_proxy")
+                 else "source_clock" if last.get("timeBasis") is None else "unknown")
+        c.metadata["reset_anchor"] = reset_anchor(last["date"], basis, [last.get("source")],
+            discovered_at=last.get("discoveredAt"), event_id=last.get("id"))
+        c.metadata["adapter"] = "nextreset"
         c.metadata.update(response_version=2, reviewed_references=[])
         social = d.get("social") or {}
         # Consume a structured upstream interpretation, never score prose or
