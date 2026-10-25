@@ -30,16 +30,20 @@ export function evaluationStale(v: QuantitativeView, now: number) {
   return !!v.evaluationIssue || !Number.isFinite(time) || now - time > 180_000 || time > now + 60_000;
 }
 export function sameForecastVersion(version: string, f: QuantForecast) { return f.evaluation_version ? version === f.evaluation_version : version.startsWith(`${f.model_version}:`); }
-/** Only a contemporaneous ablation can quantify the community contribution.
- * The public consumer deliberately does not expose constituent private inputs. */
+/** Use the forecast's own ablation before the independently scheduled report.
+ * Legacy exports require an exact issue/version match in that report. */
 export function communityEffect(report: QuantReport | null, f: QuantForecast | undefined, hours: number) {
   if (!f) return null;
+  const point = f.curve.find(p => p.hours === hours), p = point?.probability;
+  if (p == null || !Number.isFinite(p) || p < 0 || p > 1) return null;
+  const direct = point?.without_community_probability;
+  if (direct != null && Number.isFinite(direct) && direct >= 0 && direct <= 1) return p - direct;
   const model = report?.latest.find(r => r.source === "horizon" && r.track === "model" && r.target === f.target
     && r.origin === f.issued_at && sameForecastVersion(r.version, f));
   const other = report?.latest.find(r => r.source === "without_community" && r.track === "shadow" && r.target === f.target
     && r.origin === f.issued_at && r.version === model?.version);
-  const p = probabilityAt(f, hours), without = other?.probabilities_at_publication[String(hours)];
-  return p == null || without == null ? null : p - without;
+  const without = other?.probabilities_at_publication[String(hours)];
+  return without == null || !Number.isFinite(without) || without < 0 || without > 1 ? null : p - without;
 }
 export function combinedStatements(timeline: PublicResetTimeline): PublicPost[] {
   const posts = new Map<string, PublicPost>();

@@ -8,7 +8,7 @@ shared evidence group we average revisions, rather than add repeated reports.
 from __future__ import annotations
 
 import numpy as np
-from .sentiment import shift_curve
+from .sentiment import consensus_curve, shift_curve
 
 
 def project_cdf(values):
@@ -71,9 +71,13 @@ def combine(components, config, exclude=frozenset(), community_weight=None, remo
     if informed_floor is not None:
         informed = np.maximum(informed, informed_floor)
     community = [c for c in items if c["family"] == "community" and c["metadata"].get("quality", 1.) > 0]
-    # Rebase innovations for every ablation. Reusing an overlay calculated on
+    # Rebase calendar estimates for every ablation. Reusing an overlay calculated on
     # the full news forecast would leak removed information into its control.
-    community = [{**c, "probabilities": shift_curve(informed, range(1, len(informed)+1),
+    community = [{**c, "probabilities": consensus_curve(informed, range(1, len(informed)+1),
+                  c["metadata"]["coverage_hours"], c["metadata"]["consensus_probability"],
+                  c["metadata"].get("elasticity", 1.))}
+                 if c["metadata"].get("mapping_kind") == "sentiment_level" else
+                 {**c, "probabilities": shift_curve(informed, range(1, len(informed)+1),
                   c["metadata"]["coverage_hours"], c["metadata"]["log_odds_change"])}
                  if c["metadata"].get("mapping_kind") == "sentiment_innovation" else c for c in community]
     precision = [{**c, "metadata": {**c["metadata"], "quality": min(1-1e-6, c["metadata"].get("quality", 0.)) / max(1e-6, 1-c["metadata"].get("quality", 0.))}} for c in community]

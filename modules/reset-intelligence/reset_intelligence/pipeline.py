@@ -90,7 +90,7 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                                         "issues": list(obs.issues) if obs else [],
                                         "private": name in (private_source_ids or set()) or (any(p.get("private") for p in obs.polls) if obs else False)})
         if obs:
-            result["facts"].extend(f for f in obs.facts if f.get("kind") == "statement" and f["at"] <= now)
+            result["facts"].extend(f for f in obs.facts if f.get("kind") in ("statement", "structured_schedule") and f["at"] <= now)
     if not ledger or len(events) < 3 or not ledger.complete or ledger.issues:
         result["reason"] = "event_history_unavailable_or_incomplete"
         return result
@@ -162,17 +162,18 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                     aligned_base = None
                 if aligned_base:
                     signal_baseline = aligned_base[0]
-                    # A reviewed neutral response can still be informative.
-                    active = c.metadata.get("revision_reviewed") or (
-                        not c.metadata.get("rounding_only", False)
-                        and any(abs(p-b) > 1e-6 for p,b in zip(values, signal_baseline))
-                    )
+                    # Reviewing a statement does not turn an unchanged cadence
+                    # forecast into a zero-effect news vote. Keep actual signed
+                    # revisions, including small ones; ignore only numerical
+                    # noise or an explicitly identified rounding-only change.
+                    active = (not c.metadata.get("rounding_only", False)
+                              and any(abs(p-b) > 1e-12 for p,b in zip(values, signal_baseline)))
                     role = "information" if active else "background"
             components.append({"id": c.source, "family": "radars", "dependency": c.dependency,
                                "role": role, "signal_baseline": signal_baseline,
                                "probabilities": values, "metadata": {**c.metadata, **alignment},
                                "source_points": c.points, "private": c.private})
-    apply_comment_estimates(components, result["facts"], now, last_event_at, HOURS)
+    apply_comment_estimates(components, result["facts"], now, last_event_at, HOURS, target=target)
     result["response"] = announcement_context(components, result["facts"], now, last_event_at)
     informed = combine(components, config, informed_floor=informed_floor)["radar_probability"]
     for obs in observations.values():
@@ -280,6 +281,7 @@ def consumer_export(results: list[dict]) -> dict:
     """Construct, rather than redact, the product payload. No raw market paths."""
     forecasts = []
     for result in results:
+        without_community = result.get("counterfactuals", {}).get("without_community", [])
         item = {"target": result["target"], "status": result["status"],
                 "issued_at": iso(result["issued_at"]), "model_version": result["model_version"],
                 "evaluation_version": result["model_version"] + ":" + result["config_hash"],
@@ -290,7 +292,9 @@ def consumer_export(results: list[dict]) -> dict:
                 "response": {k: result["response"].get(k) for k in ("at", "url", "reviewed", "changed", "kind", "deadline")}
                             if result.get("response") else None,
                 "statements_checked_at": max((h["last_success"] for h in result["source_health"] if h["id"] in ("statements", "tibo_posts") and h.get("last_success")), default=None),
-                "curve": result["curve"], "reason": result.get("reason"),
+                "curve": [{**point, "without_community_probability": without_community[i]
+                           if i < len(without_community) else None}
+                          for i, point in enumerate(result["curve"])], "reason": result.get("reason"),
                 "valid_until": iso(result["valid_until"]) if result.get("valid_until") else None,
                 "training_state": result.get("training", {}).get("state"),
                 "coherence": result.get("coherence"),
@@ -304,7 +308,7 @@ def consumer_export(results: list[dict]) -> dict:
                                   for h in result["source_health"] if not h["private"]],
                 "statements": [{**{k: f.get(k) for k in ("id", "at", "url", "original", "translation_zh", "stage", "event_type", "scope_note", "context", "relevance", "is_reply", "parent")},
                                 "collector": "Codex Reset" if f.get("source") == "tibo_posts" else "Codex Reset FM"}
-                               for f in result["facts"]]}
+                               for f in result["facts"] if f.get("kind") == "statement"]}
         for c in result["components"]:
             if not c["private"] and c["family"] in ("baseline", "radars", "history"):
                 item["sources"].append({"id": c["id"], "probabilities": c["probabilities"],
@@ -335,6 +339,7 @@ def consumer_export(results: list[dict]) -> dict:
                     "mapping_kind": m.get("mapping_kind"), "mapping_version": m.get("mapping_version"),
                     "reference_share": m.get("reference_share"), "recent_share": m.get("recent_share"),
                     "log_odds_change": m.get("log_odds_change"), "repeat_sensitivity_units": m.get("repeat_sensitivity_units"),
+                    "terminal_probability": m.get("terminal_probability"),
                     "window_start": m.get("window_start"), "window_end": m.get("window_end"),
                     "coverage_hours": m.get("coverage_hours"), "probability_24h": c["probabilities"][23],
                     "probability_48h": c["probabilities"][47]})

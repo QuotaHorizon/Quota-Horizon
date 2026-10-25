@@ -28,13 +28,13 @@ export interface QuantForecast {
     references: string[]; identity: string } | null;
   statements_checked_at?: number | null;
   response?: { at: number; url: string; reviewed: string[]; changed: string[]; kind?: "announcement" | "revision" | null; deadline?: number | null } | null;
-  curve: { hours: number; probability: number; baseline: number; component_range: [number, number]; radar_adjustment?: number | null; comment_adjustment?: number | null; community_adjustment?: number | null; coherence_adjustment?: number | null }[];
+  curve: { hours: number; probability: number; baseline: number; component_range: [number, number]; radar_adjustment?: number | null; comment_adjustment?: number | null; community_adjustment?: number | null; coherence_adjustment?: number | null; without_community_probability?: number | null }[];
   sources: { id: string; probabilities: number[]; source_points: [number, number][] | null; origin: number | null; expires_at?: number | null; source_coverage_hours: number | null; weight?: number | null; baseline_points?: [number, number][] | null; role?: "information" | "background" | "comparison" | null; response_state?: string | null; signal_baseline?: number[] | null; baseline_weight?: number | null; comment?: CommentEstimate | null }[];
   community: { probabilities: number[]; weight: number } | null;
   family_weights?: Record<string, number>;
   community_inputs?: { id: string; weight: number; votes: number | null; effective_votes: number | null; coverage_hours: number | null; probability_24h: number; probability_48h: number; total_votes?: number | null; recent_votes?: number | null; observation_window_hours?: number | null; latest_vote_at?: number | null; freshness_weight?: number | null;
-    mapping_kind?: "sentiment_innovation" | null; mapping_version?: string | null; reference_share?: number | null; recent_share?: number | null;
-    log_odds_change?: number | null; repeat_sensitivity_units?: number | null; window_start?: number | null; window_end?: number | null }[];
+    mapping_kind?: "sentiment_innovation" | "sentiment_level" | null; mapping_version?: string | null; reference_share?: number | null; recent_share?: number | null;
+    log_odds_change?: number | null; repeat_sensitivity_units?: number | null; window_start?: number | null; window_end?: number | null; terminal_probability?: number | null }[];
   community_coverage?: { included: number; unavailable: number; supplementary_included: number; supplementary_checked: number; supplementary_weight: number } | null;
   changes?: QuantChanges | null;
   statements?: { id: string; at: number; url: string; original: string; translation_zh: string | null;

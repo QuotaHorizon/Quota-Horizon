@@ -7,6 +7,9 @@ other radars already incorporating the comment are not boosted a second time.
 """
 from __future__ import annotations
 
+import math
+
+from .contracts import AUTOMATIC, RELIEF
 from .response import reference_key
 
 
@@ -74,11 +77,37 @@ def timing_link(estimate, announcement, links):
     return None
 
 
-def apply_comment_estimates(components, facts, now, last_event, hours):
+def structured_announcements(facts, now, last_event, target):
+    """Supply an event window, not another numerical source contribution."""
+    timings = []
+    for fact in facts:
+        if (fact.get("kind") != "structured_schedule" or fact.get("stage") != "scheduled"
+                or fact.get("population") != "broad" or not fact.get("upstream_healthy")
+                or fact.get("schedule_basis") != "explicit" or fact.get("schedule_timing_source") != "explicit"
+                or fact.get("schedule_constraint") != "deadline"
+                or fact.get("target") not in ((RELIEF, AUTOMATIC) if target == RELIEF else (AUTOMATIC,))):
+            continue
+        clocks = [fact.get(key) for key in ("at", "deadline", "generated_at", "checked_at", "observed_at", "expires_at")]
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in clocks):
+            continue
+        at, deadline, generated, checked, received, expires = clocks
+        if (not last_event < at <= min(generated, checked) <= max(generated, checked) <= received <= now
+                or not now < min(deadline, expires, generated+3600, checked+3600)
+                or not fact.get("source") or not fact.get("url")):
+            continue
+        timings.append(({"id": fact["source"]}, fact))
+    return timings
+
+
+def apply_comment_estimates(components, facts, now, last_event, hours, target=AUTOMATIC):
     radars = [c for c in components if c["family"] == "radars" and not c.get("private")]
     links = direct_reply_links(facts, now, last_event)
     closed = {reference_key(f["url"]) for f in facts if f["at"] <= now
-              and f.get("stage") in ("completed", "cancelled", "retracted")}
+              and f.get("stage") in ("completed", "cancelled", "retracted")
+              and (f.get("kind") != "structured_schedule"
+                   or max(f["generated_at"], f["checked_at"], f["observed_at"]) <= now)}
+    announcements = [(other, a) for other in radars if (a := other["metadata"].get("announcement"))]
+    announcements.extend(structured_announcements(facts, now, last_event, target))
     for c in radars:
         estimate = c["metadata"].get("comment_estimate")
         if not estimate:
@@ -90,8 +119,8 @@ def apply_comment_estimates(components, facts, now, last_event, hours):
         if not last_event < estimate["at"] <= now or key in closed:
             result["state"] = "closed_or_superseded"
             continue
-        timed = [(other, a, link) for other in radars if (a := other["metadata"].get("announcement"))
-                 and last_event < a["at"] <= now < a["deadline"]
+        timed = [(other, a, link) for other, a in announcements
+                 if last_event < a["at"] <= now < a["deadline"]
                  and (link := timing_link(estimate, a, links)) is not None]
         # Closure applies to this matched pair, not arbitrary siblings in a
         # conversation. A cancelled timing reply also closes its matched root.
@@ -122,6 +151,7 @@ def apply_comment_estimates(components, facts, now, last_event, hours):
         c["probabilities"] = after
         if after != before:
             c["role"] = "information"
-        c["metadata"]["fresh_until"] = min(deadline, c["metadata"].get("fresh_until", deadline))
+        c["metadata"]["fresh_until"] = min(deadline, c["metadata"].get("fresh_until", deadline),
+            *(a.get("expires_at", deadline) for _, a, _ in timed))
         result.update(included=True, state="included", adjustment_24h=after[23]-before[23],
                       adjustment_48h=after[47]-before[47])

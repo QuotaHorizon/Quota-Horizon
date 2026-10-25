@@ -44,6 +44,7 @@ export function CalendarSentiment({ report, language, now, input }: {
       {!current ? (zh ? "当前活动日等待新数据" : "Awaiting data for the current activity day")
         : stale ? (zh ? "采集待更新 · 上次记录" : "Collection update due · saved observation")
         : insufficient ? (zh ? "样本待达标 · 近 6h 需新增至少 50 次点击" : "Awaiting at least 50 new clicks in 6h")
+        : input?.mapping_kind === "sentiment_level" ? (zh ? "社区倾向已计入" : "Community sentiment included")
         : input?.mapping_kind === "sentiment_innovation" ? (zh ? "近期倾向变化已计入" : "Recent sentiment change included")
         : (zh ? "活动日候选 · 独立评估中" : "Calendar-day candidate · independent evaluation")}
       <span>{zh ? "综合判断权重 " : "Weight in the combined forecast "}{percent(input?.weight ?? data.production_weight)}</span>

@@ -173,6 +173,21 @@ describe("independent quantitative integration", () => {
     expect(zh).toContain("最近检测到新增票：");
     expect(en).toContain("Latest new ballots observed:");
   });
+  it.each(["zh", "en"] as const)("keeps the consensus deadline estimate distinct from its 24h and 48h projection in %s", language => {
+    const t = timeline(), f = forecastFor(t.quantitative)!;
+    const deadline = now / 1000 + 3 * 3600;
+    f.community_inputs = [{ id: "didcodex_poll", weight: .78, votes: 6960, recent_votes: 6960,
+      total_votes: 30447, effective_votes: null, coverage_hours: 3, probability_24h: .98,
+      probability_48h: .99, mapping_kind: "sentiment_level", mapping_version: "calendar-consensus-2",
+      terminal_probability: .977, window_end: deadline }];
+    const html = renderToStaticMarkup(<ResetBriefing timeline={t} now={now} language={language} />);
+    expect(html).toContain(language === "zh" ? "原期限内预估 97.7%" : "Estimate by original deadline 97.7%");
+    expect(html).toContain(`dateTime="${new Date(deadline * 1000).toISOString()}"`);
+    expect(html).toContain(language === "zh" ? "已折减重复点击影响" : "repeated-click sensitivity applied");
+    expect(html).toContain("24h 98.0%");
+    expect(html).toContain("48h 99.0%");
+    expect(html).not.toContain(language === "zh" ? "有效样本 —" : "Effective sample —");
+  });
   it("shows known-event errors separately without deriving calibration from positives alone", () => {
     const t=timeline(), card=t.quantitative!.evaluation!.scorecards.find(r=>r.track==="model")!;
     card.observed_event_scores={...card.scores,n:2,unique_events:1,brier:.123,log_loss:.4};
@@ -271,6 +286,45 @@ describe("independent quantitative integration", () => {
     expect(communityEffect(v.evaluation,f,24)).toBeCloseTo(.12);
     f.issued_at=new Date(now).toISOString();
     expect(communityEffect(v.evaluation,f,24)).toBeNull();
+  });
+  it("uses the forecast's own community ablation while the independent report lags", () => {
+    const v=quantitativeFixture(now),f=forecastFor(v)!;
+    const point=f.curve.find(p=>p.hours===24)!;
+    point.probability=.971;
+    point.without_community_probability=.773;
+    expect(communityEffect(v.evaluation,f,24)).toBeCloseTo(.198);
+    f.issued_at=new Date(now).toISOString();
+    expect(communityEffect(v.evaluation,f,24)).toBeCloseTo(.198);
+    expect(communityEffect(null,f,24)).toBeCloseTo(.198);
+    delete point.without_community_probability;
+    expect(communityEffect(v.evaluation,f,24)).toBeNull();
+    expect(communityEffect(null,f,24)).toBeNull();
+  });
+  it.each([[.62,0],[.72,-.1],[0,.62]])("preserves community ablation %s and its signed effect", (without,effect) => {
+    const f=forecastFor(quantitativeFixture(now))!;
+    f.curve.find(p=>p.hours===24)!.without_community_probability=without;
+    expect(communityEffect(null,f,24)).toBeCloseTo(effect);
+  });
+  it.each([null,NaN,Infinity,-.1,1.1])("never treats missing or invalid community ablation %s as zero", without => {
+    const v=quantitativeFixture(now),f=forecastFor(v)!;
+    f.curve.find(p=>p.hours===24)!.without_community_probability=without;
+    expect(communityEffect(null,f,24)).toBeNull();
+    expect(communityEffect(v.evaluation,f,24)).toBeCloseTo(.12);
+    f.issued_at=new Date(now).toISOString();
+    expect(communityEffect(v.evaluation,f,24)).toBeNull();
+  });
+  it("requires the matching legacy ablation version and a real probability", () => {
+    const v=quantitativeFixture(now),f=forecastFor(v)!;
+    const other=v.evaluation!.latest.find(r=>r.source==="without_community" && r.target===f.target)!;
+    other.version="other-version";
+    expect(communityEffect(v.evaluation,f,24)).toBeNull();
+    other.version=v.evaluation!.latest.find(r=>r.source==="horizon" && r.target===f.target)!.version;
+    for(const value of [null,NaN,Infinity,-.1,1.1]) {
+      other.probabilities_at_publication["24"]=value;
+      expect(communityEffect(v.evaluation,f,24)).toBeNull();
+    }
+    other.probabilities_at_publication["24"]=0;
+    expect(communityEffect(v.evaluation,f,24)).toBeCloseTo(.62);
   });
   it("preserves missing history and never bridges unsupported windows or long collection gaps", () => {
     const p=[{at:new Date(0).toISOString(),p:.2},{at:new Date(3600_000).toISOString(),p:null},{at:new Date(7200_000).toISOString(),p:.4},{at:new Date(18000_000).toISOString(),p:.6}];

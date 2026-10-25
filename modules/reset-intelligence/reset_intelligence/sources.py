@@ -24,6 +24,7 @@ CATALOG = [
     {"id": "community_poll", "adapter": "community_poll", "url": "https://nextreset.ai/api/community"},
     {"id": "didcodex_poll", "adapter": "calendar_preference", "url": "https://didcodexreset.com/api/oct28/votes",
      "calendar_url": "https://didcodexreset.com/zh-hk/oct28.html"},
+    {"id": "didcodex_status", "adapter": "scheduled_status", "url": "https://didcodexreset.com/api/status.json"},
     {"id": "statements", "adapter": "statements", "url": "https://codex-reset.pro/api/reset-feed"},
     {"id": "tibo_posts", "adapter": "tibo_posts", "url": "https://codex-reset.com/api/feed?locale=zh"},
 ]
@@ -88,6 +89,68 @@ def reset_anchor(at, time_basis, references=(), *, discovered_at=None, event_id=
             "discovered_at": stamp(discovered_at) if discovered_at else None,
             "time_basis": time_basis, "references": refs,
             "source_event_id": str(event_id) if event_id is not None else None}
+
+
+def scheduled_status_facts(raw, source, received_at):
+    """Read explicit schedule windows without turning confidence into a forecast.
+
+    The status snapshot is authoritative for its own pending inventory. A later
+    successful snapshot replaces these facts, including withdrawals. Source
+    publication/check clocks bound freshness; another HTTP receipt cannot renew it.
+    """
+    if (raw.get("schemaVersion") != 1 or not isinstance(raw.get("events"), list)
+            or not isinstance(raw.get("resetTimeline"), dict)
+            or "nextSchedule" not in raw["resetTimeline"]):
+        raise ValueError("incomplete schedule inventory")
+    generated, checked = stamp(raw["generatedAt"]), stamp(raw["lastSuccessfulCheckAt"])
+    if max(generated, checked) > received_at + 60:
+        raise ValueError("source schedule clock is in the future")
+    healthy = raw.get("monitor", {}).get("status") == "ok"
+    timeline = raw["resetTimeline"]
+    closed = {str(value) for value in timeline.get("suppressedPostIds", [])}
+    closed.update(str(item.get("schedule", {}).get("source", {}).get("postId"))
+                  for item in timeline.get("fulfilledSchedules", []))
+    closed.update(str(identifier) for item in timeline.get("manualCompletions", [])
+                  for identifier in item.get("schedulePostIds", []))
+    records = {str(row.get("source", {}).get("postId")): row for row in raw["events"]
+               if isinstance(row, dict) and row.get("kind") == "reset_scheduled"}
+    latest = timeline.get("nextSchedule")
+    if isinstance(latest, dict) and latest.get("kind") == "reset_scheduled":
+        records[str(latest.get("source", {}).get("postId"))] = latest
+    facts = []
+    for identifier, row in records.items():
+        if not identifier.isdigit() or not row.get("announcedAt") or not row.get("source", {}).get("url"):
+            continue
+        url = canonical_url(row["source"]["url"])
+        if url != f"https://x.com/i/status/{identifier}":
+            continue
+        target = {"global": AUTOMATIC, "global_and_banked": AUTOMATIC, "banked": RELIEF}.get(row.get("resetType"))
+        window = row.get("scheduleWindow") or {}
+        if target is None or not window.get("endAt"):
+            continue
+        announced, deadline = stamp(row["announcedAt"]), stamp(window["endAt"])
+        start = stamp(window["startAt"]) if window.get("startAt") else deadline
+        if start > deadline or deadline <= announced:
+            continue
+        plans = (row.get("scope") or {}).get("plans") or []
+        state = row.get("scheduleState", "pending")
+        stage = {"pending": "scheduled", "fulfilled": "completed", "completed": "completed",
+                 "cancelled": "cancelled", "canceled": "cancelled", "retracted": "retracted",
+                 "elapsed": "elapsed"}.get(state, "unknown")
+        if identifier in closed:
+            stage = "closed"
+        facts.append({"kind": "structured_schedule", "id": identifier, "url": url,
+            "at": announced, "deadline": deadline, "target": target,
+            "population": "broad" if "all" in plans else "unspecified" if not plans or "unknown" in plans else "targeted",
+            "stage": stage, "source": source, "generated_at": generated, "checked_at": checked,
+            "observed_at": received_at, "expires_at": min(generated+3600, checked+3600, deadline),
+            "upstream_healthy": healthy, "schedule_basis": row.get("scheduleBasis"),
+            "schedule_timing_source": row.get("scheduleTimingSource"),
+            "schedule_constraint": row.get("scheduleConstraint"), "schedule_timezone": row.get("scheduleTimezone")})
+    issues = [] if healthy else ["upstream_schedule_unhealthy"]
+    if received_at - min(generated, checked) >= 3600:
+        issues.append("upstream_schedule_stale")
+    return generated, facts, issues
 
 
 def statement_relevance(text):
@@ -364,6 +427,8 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
                                          "url": f"https://x.com/i/status/{p['in_reply_to_tweet_id']}", "text": None}
                                         if str(p.get("in_reply_to_tweet_id", "")).isdigit() else None,
                               "relevance": p.get("tibo_lane") or statement_relevance(p["text"])})
+    elif adapter == "scheduled_status":
+        obs.generated_at, obs.facts, obs.issues = scheduled_status_facts(d, name, at)
     elif adapter == "statements":
         obs.generated_at = stamp(d["generatedAt"])
         for p in d["posts"]:

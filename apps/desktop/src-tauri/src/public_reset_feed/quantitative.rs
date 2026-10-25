@@ -127,6 +127,7 @@ struct Prediction {
     comment_adjustment: Option<f64>,
     community_adjustment: Option<f64>,
     coherence_adjustment: Option<f64>,
+    without_community_probability: Option<f64>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Input {
@@ -196,6 +197,7 @@ struct CommunityInput {
     repeat_sensitivity_units: Option<f64>,
     window_start: Option<f64>,
     window_end: Option<f64>,
+    terminal_probability: Option<f64>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CommunityCoverage {
@@ -737,6 +739,9 @@ fn source(s: &str) -> bool {
         "codex_reset" | "monitor" | "nextreset" | "observatory" | "lunar" | "dreaife"
     )
 }
+fn timing_source(s: &str) -> bool {
+    source(s) || s == "didcodex_status"
+}
 fn outcome_provider(s: &str) -> bool {
     matches!(
         s,
@@ -942,6 +947,8 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
                 p.hours as usize != i + 1
                     || !probability(p.probability)
                     || !probability(p.baseline)
+                    || p.without_community_probability
+                        .is_some_and(|v| !probability(v))
                     || p.comment_adjustment.is_some_and(|v| !probability(v))
                     || p.component_range.iter().any(|v| !probability(*v))
                     || [
@@ -974,7 +981,7 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
             .retain(|s| source(&s.id) || s.id == "survival_baseline");
         for s in &mut f.sources {
             if let Some(c) = &mut s.comment {
-                c.timing_sources.retain(|id| source(id));
+                c.timing_sources.retain(|id| timing_source(id));
                 for evidence in &mut c.timing_evidence {
                     evidence.links.retain(|link| {
                         public_reference(&link.child_url)
@@ -982,13 +989,13 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
                             && epoch(link.at)
                             && link.at < evidence.deadline
                             && link.source.as_deref().is_some_and(|id| {
-                                source(id) || matches!(id, "tibo_posts" | "statements")
+                                timing_source(id) || matches!(id, "tibo_posts" | "statements")
                             })
                     });
                     evidence.links.truncate(16);
                 }
                 c.timing_evidence.retain(|evidence| {
-                    source(&evidence.source)
+                    timing_source(&evidence.source)
                         && epoch(evidence.deadline)
                         && evidence.deadline > c.at
                         && public_reference(&evidence.estimate_url)
@@ -1161,6 +1168,7 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
                 c.repeat_sensitivity_units = None;
                 c.window_start = None;
                 c.window_end = None;
+                c.terminal_probability = None;
             }
         }
         if f.family_weights.values().any(|w| !probability(*w))
@@ -1183,9 +1191,14 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
                     || c.latest_vote_at
                         .is_some_and(|at| !at.is_finite() || at < 0.)
                     || c.freshness_weight.is_some_and(|w| !probability(w))
+                    || c.terminal_probability.is_some_and(|p| !probability(p))
                     || (c.id == "didcodex_poll"
-                        && (c.mapping_kind.as_deref() != Some("sentiment_innovation")
-                            || c.mapping_version.as_deref() != Some("calendar-innovation-1")
+                        && (!matches!(
+                            (c.mapping_kind.as_deref(), c.mapping_version.as_deref()),
+                            (Some("sentiment_innovation"), Some("calendar-innovation-1"))
+                                | (Some("sentiment_level"), Some("calendar-consensus-2"))
+                        ) || (c.mapping_kind.as_deref() == Some("sentiment_level")
+                            && !c.terminal_probability.is_some_and(probability))
                             || c.effective_votes.is_some()
                             || !c.recent_votes.is_some_and(|n| n >= 50)
                             || !c.reference_share.is_some_and(probability)

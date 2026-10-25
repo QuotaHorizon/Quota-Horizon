@@ -603,6 +603,36 @@ fn announcement_context_retains_deadline_without_changing_probability() {
         .is_none());
 }
 #[test]
+fn forecast_community_ablation_is_optional_and_preserves_valid_probabilities() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("consumer.json");
+    let mut value = fixture();
+    fs::write(&path, value.to_string()).unwrap();
+    assert!(parse_forecast(&path).unwrap().forecasts[0].curve[23]
+        .without_community_probability
+        .is_none());
+    for probability in [None, Some(0.), Some(0.24), Some(0.8), Some(1.)] {
+        value["forecasts"][0]["curve"][23]["without_community_probability"] = json!(probability);
+        fs::write(&path, value.to_string()).unwrap();
+        let parsed = parse_forecast(&path).unwrap();
+        assert_eq!(
+            parsed.forecasts[0].curve[23].without_community_probability,
+            probability
+        );
+        assert_eq!(parsed.forecasts[0].curve[23].probability, 0.24);
+        let exported = serde_json::to_value(parsed).unwrap();
+        assert_eq!(
+            exported["forecasts"][0]["curve"][23]["without_community_probability"],
+            json!(probability)
+        );
+    }
+    for probability in [-0.1, 1.1] {
+        value["forecasts"][0]["curve"][23]["without_community_probability"] = json!(probability);
+        fs::write(&path, value.to_string()).unwrap();
+        assert!(parse_forecast(&path).is_err());
+    }
+}
+#[test]
 fn revision_breakdown_must_reconcile_to_the_published_probability() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("consumer.json");
@@ -820,6 +850,36 @@ fn applied_weights_and_sample_coverage_cross_only_the_public_boundary() {
 }
 
 #[test]
+fn public_status_can_supply_commitment_timing_without_becoming_a_forecast() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("consumer.json");
+    let mut value = fixture();
+    let forecast = json!({
+        "id":"codex_reset", "probabilities":vec![0.83;72], "source_points":[[24.,0.45],[48.,0.70]],
+        "origin":1791072000., "source_coverage_hours":48.,
+        "comment":{"probability":0.83,"url":"https://x.com/i/status/1234","at":1791068400.,
+            "included":true,"state":"included","deadline":1791075600.,
+            "timing_sources":["didcodex_status","private_signal"],"adjustment_24h":0.38,"adjustment_48h":0.13,
+            "timing_evidence":[{"source":"didcodex_status","deadline":1791075600.,
+                "relationship":"same_reference","estimate_url":"https://x.com/i/status/1234",
+                "timing_url":"https://x.com/i/status/1234","links":[]}]}
+    });
+    let mut unsupported = forecast.clone();
+    unsupported["id"] = json!("didcodex_status");
+    value["forecasts"][0]["sources"] = json!([forecast, unsupported]);
+    fs::write(&path, value.to_string()).unwrap();
+    let parsed = parse_forecast(&path).unwrap();
+    assert_eq!(parsed.forecasts[0].sources.len(), 1);
+    let comment = parsed.forecasts[0].sources[0].comment.as_ref().unwrap();
+    assert_eq!(comment.timing_sources, ["didcodex_status"]);
+    assert_eq!(comment.timing_evidence.len(), 1);
+    assert_eq!(comment.timing_evidence[0].source, "didcodex_status");
+    assert!(!serde_json::to_string(&parsed)
+        .unwrap()
+        .contains("private_signal"));
+}
+
+#[test]
 fn calendar_innovation_preserves_clicks_without_claiming_people() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("consumer.json");
@@ -851,6 +911,41 @@ fn calendar_innovation_preserves_clicks_without_claiming_people() {
         ("repeat_sensitivity_units", json!(-1.)),
         ("window_end", json!(0.)),
         ("log_odds_change", Value::Null),
+    ] {
+        let mut bad = value.clone();
+        bad["forecasts"][0]["community_inputs"][0][key] = invalid;
+        fs::write(&path, bad.to_string()).unwrap();
+        assert!(parse_forecast(&path).is_err(), "{key}");
+    }
+}
+
+#[test]
+fn calendar_consensus_preserves_the_original_window_estimate_and_validates_version() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("consumer.json");
+    let mut value = fixture();
+    value["forecasts"][0]["community_inputs"] = json!([{
+        "id":"didcodex_poll","weight":0.78,"votes":6960,"total_votes":30447,
+        "recent_votes":6960,"effective_votes":null,"coverage_hours":3.,
+        "probability_24h":0.98,"probability_48h":0.99,"observation_window_hours":6.,
+        "mapping_kind":"sentiment_level","mapping_version":"calendar-consensus-2",
+        "reference_share":0.9944,"recent_share":0.9934,"log_odds_change":-0.046,
+        "repeat_sensitivity_units":29.8,"window_start":1791158400.,"window_end":1791244800.,
+        "terminal_probability":0.9773
+    }]);
+    fs::write(&path, value.to_string()).unwrap();
+    let parsed = parse_forecast(&path).unwrap();
+    let c = &parsed.forecasts[0].community_inputs[0];
+    assert_eq!(c.mapping_kind.as_deref(), Some("sentiment_level"));
+    assert_eq!(c.mapping_version.as_deref(), Some("calendar-consensus-2"));
+    assert_eq!(c.terminal_probability, Some(0.9773));
+    assert_eq!(c.log_odds_change, Some(-0.046));
+    for (key, invalid) in [
+        ("terminal_probability", json!(1.01)),
+        ("terminal_probability", json!(-0.01)),
+        ("terminal_probability", Value::Null),
+        ("mapping_kind", json!("sentiment_innovation")),
+        ("mapping_version", json!("calendar-innovation-1")),
     ] {
         let mut bad = value.clone();
         bad["forecasts"][0]["community_inputs"][0][key] = invalid;

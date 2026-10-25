@@ -43,6 +43,74 @@
         "$ref": "#/$defs/probability"
       }
     },
+    "timingEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "deadline",
+        "relationship",
+        "estimate_url",
+        "timing_url",
+        "links"
+      ],
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "deadline": {
+          "type": "number",
+          "minimum": 0
+        },
+        "relationship": {
+          "enum": [
+            "same_reference",
+            "direct_reply"
+          ]
+        },
+        "estimate_url": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "timing_url": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "child_url",
+              "parent_url",
+              "at",
+              "source"
+            ],
+            "properties": {
+              "child_url": {
+                "type": "string",
+                "pattern": "^https://"
+              },
+              "parent_url": {
+                "type": "string",
+                "pattern": "^https://"
+              },
+              "at": {
+                "type": "number",
+                "minimum": 0
+              },
+              "source": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
     "forecast": {
       "type": "object",
       "required": [
@@ -139,6 +207,7 @@
                   "state",
                   "deadline",
                   "timing_sources",
+                  "timing_evidence",
                   "adjustment_24h",
                   "adjustment_48h"
                 ],
@@ -177,6 +246,12 @@
                     "type": "array",
                     "items": {
                       "type": "string"
+                    }
+                  },
+                  "timing_evidence": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/timingEvidence"
                     }
                   },
                   "adjustment_24h": {
@@ -341,6 +416,14 @@
               },
               "probability_48h": {
                 "$ref": "#/$defs/probability"
+              },
+              "terminal_probability": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 1
               }
             }
           }
@@ -544,6 +627,11 @@
           "type": "number",
           "minimum": -2,
           "maximum": 2
+        },
+        "without_community_probability": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
         },
         "comment_adjustment": {
           "type": [

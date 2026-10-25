@@ -130,10 +130,11 @@ function Community({ view, language, now }: { view: QuantitativeView; language: 
       {(f.community_inputs ?? []).map(c => <div className={styles.communityInput} key={c.id}>
         <div><b>{c.id === "didcodex_poll" ? "Did Codex Reset" : c.id === "date_poll" ? (zh ? "Codex Reset 日期投票" : "Codex Reset timing poll") : (zh ? "NextReset 概率投票" : "NextReset probability poll")}</b>
           <span>{c.recent_votes != null ? (zh ? `近 ${c.observation_window_hours?.toFixed(1) ?? "6"}h 新增 ${c.recent_votes} / 累计 ${c.total_votes ?? c.votes}` : `${c.recent_votes} new in ${c.observation_window_hours?.toFixed(1) ?? "6"}h / ${c.total_votes ?? c.votes} total`) : c.votes ?? "—"} {c.id === "didcodex_poll" ? (zh ? "次点击" : "clicks") : (zh ? "票" : "votes")}
-            {c.mapping_kind === "sentiment_innovation" ? (zh ? " · 已折减重复点击影响" : " · repeated-click sensitivity applied")
+            {c.mapping_kind ? (zh ? " · 已折减重复点击影响" : " · repeated-click sensitivity applied")
               : `${zh ? " · 有效样本 " : " · Effective sample "}${c.effective_votes?.toFixed(1) ?? "—"}`}</span>
           {c.latest_vote_at != null && <small>{zh ? "最近检测到新增票：" : "Latest new ballots observed: "}{publicEvidenceTime(new Date(c.latest_vote_at * 1000).toISOString(), language)}</small>}
-          <small>{zh ? "原期限还剩 " : "Original window remaining: "}{c.coverage_hours?.toFixed(1) ?? "—"}h{c.coverage_hours != null && c.coverage_hours < 48 ? c.mapping_kind === "sentiment_innovation" ? (zh ? " · 仅修正该时段" : " · adjustment scoped to this window") : (zh ? " · 超出期限接历史基准" : " · baseline after deadline") : ""}</small></div>
+          <small>{zh ? "原期限还剩 " : "Original window remaining: "}{c.coverage_hours?.toFixed(1) ?? "—"}h{c.coverage_hours != null && c.coverage_hours < 48 ? c.mapping_kind ? (zh ? " · 仅修正该时段" : " · adjustment scoped to this window") : (zh ? " · 超出期限接历史基准" : " · baseline after deadline") : ""}</small>
+          {c.terminal_probability != null && c.window_end != null && <small>{zh ? "原期限内预估 " : "Estimate by original deadline "}{percent(c.terminal_probability)} · <time dateTime={new Date(c.window_end * 1000).toISOString()}>{publicEvidenceTime(new Date(c.window_end * 1000).toISOString(), language)}</time></small>}</div>
         <div><strong>{percent(c.weight)}</strong><small>{zh ? "实际权重" : "Applied weight"}</small><span>24h {percent(c.probability_24h)}<br />48h {percent(c.probability_48h)}</span></div>
       </div>)}
       {f.community_coverage && <p className={styles.coverage}>{zh ? `${f.community_coverage.included} 项有效 · ${f.community_coverage.unavailable} 项待新数据或质量达标` : `${f.community_coverage.included} eligible · ${f.community_coverage.unavailable} awaiting fresh or qualifying data`}

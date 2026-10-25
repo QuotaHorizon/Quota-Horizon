@@ -281,28 +281,33 @@ class AdmissionAuditTests(unittest.TestCase):
         self.assertEqual(r["issued_contribution"]["background_anchor_weight"], 1)
         self.assertAlmostEqual(f["curve"][23]["probability"], 0.2)
 
-    def test_negative_and_reviewed_neutral_revisions_keep_eligibility(self):
+    def test_negative_revision_is_not_diluted_by_reviewed_neutral_background(self):
         self.save_curve("negative", baseline=[(24, 0.3), (48, 0.5)])
         self.save_curve("neutral", baseline=[(24, 0.2), (48, 0.4)], reviewed=True)
         f = forecast(self.store, NOW, RELIEF)
         audit, rows = self.audit(f)
         for name in ("negative", "neutral"):
-            self.assertTrue(rows[name]["participation"]["information_revision"])
+            self.assertTrue(rows[name]["participation"]["background_anchor"])
             self.assertEqual(
-                rows[name]["issued_contribution"]["component_weight_before_projection"],
+                rows[name]["issued_contribution"]["background_anchor_weight"],
                 0.5,
             )
+        self.assertTrue(rows["negative"]["participation"]["information_revision"])
+        self.assertFalse(rows["neutral"]["participation"]["information_revision"])
+        self.assertEqual(rows["negative"]["issued_contribution"]["component_weight_before_projection"], 1)
+        self.assertEqual(rows["neutral"]["issued_contribution"]["component_weight_before_projection"], 0)
         self.assertAlmostEqual(
             rows["negative"]["issued_contribution"]["revision_24h_before_projection"],
-            -0.05,
+            -0.1,
+        )
+        self.assertIsNone(
+            rows["neutral"]["issued_contribution"]["revision_24h_before_projection"]
         )
         self.assertEqual(
-            rows["neutral"]["issued_contribution"]["revision_24h_before_projection"], 0
+            audit["targets"][0]["radar_coverage"]["information_revision"], 1
         )
-        self.assertEqual(
-            audit["targets"][0]["radar_coverage"]["information_revision"], 2
-        )
-        self.assertAlmostEqual(f["curve"][23]["probability"], 0.2)
+        self.assertAlmostEqual(f["curve"][23]["baseline"], 0.25)
+        self.assertAlmostEqual(f["curve"][23]["probability"], 0.15)
 
     def test_expired_and_missed_event_are_both_reported_without_numerical_change(self):
         original = forecast(self.store, NOW, RELIEF)
