@@ -6,6 +6,18 @@ import { QuantitativeEvaluation } from "./QuantitativeEvaluation";
 
 const now = Date.parse("2026-10-22T14:00:00Z");
 describe("version-specific evaluation", () => {
+  it("keeps evaluation results reachable while leaving update failures visible outside the disclosure", () => {
+    const view = quantitativeFixture(now, true);
+    view.evaluationIssue = "read_failed";
+    const html = renderToStaticMarkup(<QuantitativeEvaluation view={view} now={now} language="en" />);
+    const detailStart = html.indexOf("<details");
+    expect(detailStart).toBeGreaterThan(0);
+    expect(html.slice(0, detailStart)).toContain("saved report");
+    expect(html.slice(0, detailStart)).not.toContain("Probability calibration");
+    expect(html.slice(detailStart)).toContain("Probability calibration");
+    expect(html.slice(detailStart)).toContain("0.184");
+    expect(html).not.toMatch(/<details[^>]* open/);
+  });
   it("keeps old model scores in history while a new model waits for its own windows", () => {
     const view = quantitativeFixture(now, true), report = view.evaluation!;
     report.scorecards = report.scorecards.filter(r => r.track === "model");

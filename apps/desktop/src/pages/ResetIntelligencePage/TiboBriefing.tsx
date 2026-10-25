@@ -34,7 +34,7 @@ export function TiboBriefing({ timeline, language, notice, now, failed, onOpenSo
     </div>
     {stale && <p className={styles.correction}>{zh ? "发言来源待更新，保留完整正文与原发布时间。" : "Post source update due; complete text and original publication times are retained."}</p>}
     <div className={styles.tiboGrid}>
-      <div className={styles.tiboLead}><div className={styles.sectionLabel}>{zh ? "重置最新进展" : "Latest reset development"}</div>
+      <div className={styles.tiboLead}>
         {lead ? <PostConversation key={lead.id} post={lead} timeline={timeline} language={language} onOpenSource={onOpenSource} onRead={onRead} />
           : <p className={styles.meta}>{zh ? "正在获取公开发言…" : "Fetching public statements…"}</p>}
       </div>

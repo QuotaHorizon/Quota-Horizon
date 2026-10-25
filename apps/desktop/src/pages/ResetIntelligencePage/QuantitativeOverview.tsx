@@ -35,15 +35,14 @@ export function QuantitativeOverview({ timeline, language, now, failed, onOpenSo
           const committed = !!outlook.announcement?.timing && outlook.announcement.timing.end <= now + h*3600_000;
           const p = outlook.awaitingResetForecast ? null : probabilityAt(f,h), effect = communityEffect(view.evaluation,f,h);
           return <div key={h}><span>{zh ? `未来 ${h} 小时` : `Next ${h} hours`}</span><strong>{percent(committed ? 1 : p)}</strong>
-            <b>{outlook.awaitingResetForecast ? (zh ? "等待重置后预测" : "Awaiting a post-reset forecast") : committed ? (zh ? "明确预告覆盖" : "Explicitly announced") : stale ? (f?.curve.length ? (zh ? "上次预测 · 待更新" : "Saved forecast · update due") : (zh ? "等待预测输出" : "Awaiting forecast")) : p != null && p >= .65 ? (zh ? "近期预期偏乐观" : "Optimistic near-term outlook") : p != null && p >= .4 ? (zh ? "保持关注" : "Watch closely") : (zh ? "近期预期偏低" : "Lower near-term outlook")}</b>
+            {(outlook.awaitingResetForecast || committed || stale) && <b>{outlook.awaitingResetForecast ? (zh ? "等待重置后预测" : "Awaiting a post-reset forecast") : committed ? (zh ? "明确预告覆盖" : "Explicitly announced") : f?.curve.length ? (zh ? "上次预测 · 待更新" : "Saved forecast · update due") : (zh ? "等待预测输出" : "Awaiting forecast")}</b>}
             {committed && <small>{zh ? "模型估计 " : "Model estimate "}{percent(p)}</small>}
             <small>{zh ? "自动重置 " : "Automatic reset "}{percent(precedesCompletion(auto,outlook.completion) ? null : probabilityAt(auto,h))}{forecastStale(view,auto,now) && (zh ? " · 待更新" : " · update due")}</small>
             {!outlook.awaitingResetForecast && <small className={styles.accent}>{zh ? "新增投票补充 " : "Recent ballot effect "}{points(effect)} {zh ? "点" : "pts"}</small>}
           </div>;
         })}</div>
-        {!outlook.awaitingResetForecast && <PoolWeights forecast={f} automatic={auto} language={language} />}
-        <div className={styles.meta}><span>{sourceCount} {zh ? "家雷达提供信息修正" : "radars supplying revisions"}</span><span>{f?.event_count ?? 0} {zh ? "次历史事件" : "historical events"}</span></div>
-        <p className={styles.caption}>{zh ? "预测生成 " : "Forecast issued "}{publicEvidenceTime(f?.issued_at,language)}</p>
+        <div className={styles.meta}><span>{sourceCount} {zh ? "家雷达参与" : "contributing radars"}</span><time dateTime={f?.issued_at}>{publicEvidenceTime(f?.issued_at,language)}</time></div>
+        {!outlook.awaitingResetForecast && <details className={styles.breakdown}><summary>{zh ? "概率组成" : "Probability breakdown"}</summary><PoolWeights forecast={f} automatic={auto} language={language} /><span className={styles.meta}>{f?.event_count ?? 0} {zh ? "次历史事件" : "historical events"}</span></details>}
       </div>
       {outlook.awaitingResetForecast ? <p className={styles.notice}>{zh ? "预测更新中…" : "Updating forecast…"}</p> : <ProbabilityCurve view={view} language={language} />}
     </article>
@@ -53,8 +52,8 @@ export function QuantitativeOverview({ timeline, language, now, failed, onOpenSo
     </TiboBriefing>
     <QuantitativeTrend view={view} language={language} now={now} />
     </div>
-    <ForecastChanges timeline={timeline} language={language} onOpenSource={onOpenSource} />
     <div className={styles.twoColumns}>
+      <div className={styles.columnStack}>
       <article className={styles.card}>
         <div className={styles.heading}><h2>{zh ? "各方怎样判断" : "How sources compare"}</h2><span>{zh ? "发布时原值" : "As published"}</span></div>
         <div className={styles.sourceHeader}><span>{zh ? "来源 / 事件范围" : "Source / scope"}</span><span>24h</span><span>48h</span></div>
@@ -69,11 +68,13 @@ export function QuantitativeOverview({ timeline, language, now, failed, onOpenSo
           {sources.filter(s => s.state === "excluded").map(s => <p key={s.source}>{sourceNames[s.source]} · {zh ? "质量或口径审查未通过，保留观测但不纳入当前模型。" : "Quality or scope review pending; observations retained and excluded from the current model."}</p>)}
         </details>
       </article>
+      <ForecastChanges timeline={timeline} language={language} onOpenSource={onOpenSource} />
+      </div>
       <Community view={view} language={language} now={now} />
     </div>
-    {timeline.radar && <details className={styles.rawPolls}><summary>{zh ? "查看社区原始投票 · 日期分布、票数与每日走势" : "Original community ballots · dates, counts and daily trends"}</summary><CommunityForecasts radar={timeline.radar} language={language} now={now} onOpenSource={onOpenSource} independent /></details>}
+    {timeline.radar && <details className={styles.rawPolls}><summary>{zh ? "全部投票与日期分布" : "All ballots and date distributions"}</summary><CommunityForecasts radar={timeline.radar} language={language} now={now} onOpenSource={onOpenSource} independent /></details>}
     <QuantitativeEvaluation view={view} language={language} now={now} onOpenSource={onOpenSource} />
-    <footer className={styles.footer}><ModuleRuntimeStatus view={view} language={language} /><span>{zh ? "新预测与评估发布后自动更新。" : "New forecasts and evaluations appear automatically after publication."}</span><details><summary>{zh ? "模型与评估方法" : "Model and evaluation methods"}</summary><p>{zh ? "历史起点只计入一次。来源提供的基准与完整预测成对转换，其正负修正按共有依据合并；只有历史值的来源保留为背景，未提供拆分的来源用于对照。来源单列的承诺判断按同一事件时间窗补足未覆盖差额。新增投票以当前判断为参照提供补充，按有效样本与先验的相对信息量确定权重，未知重叠按 50% 折减，按票数实际变化的时间每 2 小时减半，并计入剩余期限。广义恢复包含自动重置的概率下限。参数与范围传递规则等待前瞻检验。" : "The historical anchor enters once. Paired source baselines and complete forecasts supply signed revisions, pooled by shared evidence. History-only sources provide background; sources without a split remain comparisons. Separate source commitment estimates fill uncovered gaps within the matching event window. Recent ballots supplement the informed outlook: weight follows effective sample information relative to the prior, discounted by 50% for unknown overlap decayed with a two-hour half-life from observed ballot arrivals, and adjusted for remaining coverage. Broader relief inherits the automatic-reset probability floor. These assumptions await forward validation."}</p><p>{zh ? "评估器冻结当时可见的预测，独立核验实际事件，等待窗口到期及报告宽限后记分。比较采用相同事件范围与时间窗；缺失证据保留未决。当前成绩用于评估模型改进，评估器不会自行修改权重。" : "The evaluator freezes forecasts available at the time, independently checks outcomes, and scores after the horizon and reporting grace period. Comparisons match event scope and time windows; missing evidence remains unresolved. Evaluation informs model changes and does not itself modify weights."}</p><p>{f?.model_version} · {zh ? "权重训练窗口 " : "Weight-training windows "}{f?.evaluation_windows ?? 0}</p></details></footer>
+    <footer className={styles.footer}><ModuleRuntimeStatus view={view} language={language} /><details><summary>{zh ? "模型与评估方法" : "Model and evaluation methods"}</summary><p>{zh ? "历史起点只计入一次。来源提供的基准与完整预测成对转换，其正负修正按共有依据合并；只有历史值的来源保留为背景，未提供拆分的来源用于对照。来源单列的承诺判断按同一事件时间窗补足未覆盖差额。新增投票以当前判断为参照提供补充，按有效样本与先验的相对信息量确定权重，未知重叠按 50% 折减，按票数实际变化的时间每 2 小时减半，并计入剩余期限。广义恢复包含自动重置的概率下限。参数与范围传递规则等待前瞻检验。" : "The historical anchor enters once. Paired source baselines and complete forecasts supply signed revisions, pooled by shared evidence. History-only sources provide background; sources without a split remain comparisons. Separate source commitment estimates fill uncovered gaps within the matching event window. Recent ballots supplement the informed outlook: weight follows effective sample information relative to the prior, discounted by 50% for unknown overlap decayed with a two-hour half-life from observed ballot arrivals, and adjusted for remaining coverage. Broader relief inherits the automatic-reset probability floor. These assumptions await forward validation."}</p><p>{zh ? "评估器冻结当时可见的预测，独立核验实际事件，等待窗口到期及报告宽限后记分。比较采用相同事件范围与时间窗；缺失证据保留未决。当前成绩用于评估模型改进，评估器不会自行修改权重。" : "The evaluator freezes forecasts available at the time, independently checks outcomes, and scores after the horizon and reporting grace period. Comparisons match event scope and time windows; missing evidence remains unresolved. Evaluation informs model changes and does not itself modify weights."}</p><p>{f?.model_version} · {zh ? "权重训练窗口 " : "Weight-training windows "}{f?.evaluation_windows ?? 0}</p></details></footer>
   </section>;
 }
 
@@ -123,8 +124,10 @@ function Community({ view, language, now }: { view: QuantitativeView; language: 
   const zh = language === "zh", f = forecastFor(view), c = f?.community;
   return <article className={`${styles.card} ${styles.community}`}>
     <div className={styles.heading}><h2>{zh ? "社区预期" : "Community outlook"}</h2><span>{zh ? "重置或发卡" : "Reset or new credit"}</span></div>
-    <div className={styles.communityNumbers}>{[24,48].map(h => <div key={h}><span>{h}h · {zh ? "社区信息对应预估" : "Community-informed estimate"}</span><strong>{percent(c?.probabilities[h-1])}</strong><small>{zh ? "对综合判断 " : "Effect on combined outlook "}<b>{points(communityEffect(view.evaluation,f,h))} {zh ? "点" : "pts"}</b></small></div>)}</div>
-    <div className={styles.weight}><span>{zh ? "本次投票补充权重" : "Ballot residual weight"}</span><strong>{percent(c?.weight)}</strong><i><i style={{ width: `${(c?.weight ?? 0)*100}%` }} /></i></div>
+    <div className={styles.communityNumbers}>{[24,48].map(h => <div key={h}><span>{h}h · {zh ? "社区预估" : "Community estimate"}</span><strong>{percent(c?.probabilities[h-1])}</strong><small>{zh ? "贡献 " : "Contribution "}<b>{points(communityEffect(view.evaluation,f,h))} {zh ? "点" : "pts"}</b></small></div>)}</div>
+    <div className={styles.weight}><span>{zh ? "补充权重" : "Supplement weight"}</span><strong>{percent(c?.weight)}</strong><i><i style={{ width: `${(c?.weight ?? 0)*100}%` }} /></i></div>
+    <CalendarSentiment report={view.evaluation} language={language} now={now} input={f?.community_inputs?.find(c => c.id === "didcodex_poll")} />
+    <details className={styles.disclosure}><summary>{zh ? "投票输入与权重" : "Ballot inputs and weights"}</summary>
     <div className={styles.communityInputs}>{view.forecast?.forecasts.map(f => <section key={f.target}>
       <h3>{f.target === "automatic_reset" ? (zh ? "自动重置" : "Automatic reset") : (zh ? "重置或发卡" : "Reset or new credit")}</h3>
       {(f.community_inputs ?? []).map(c => <div className={styles.communityInput} key={c.id}>
@@ -139,8 +142,7 @@ function Community({ view, language, now }: { view: QuantitativeView; language: 
       </div>)}
       {f.community_coverage && <p className={styles.coverage}>{zh ? `${f.community_coverage.included} 项有效 · ${f.community_coverage.unavailable} 项待新数据或质量达标` : `${f.community_coverage.included} eligible · ${f.community_coverage.unavailable} awaiting fresh or qualifying data`}
         {f.community_coverage.supplementary_checked > 0 && <span>{zh ? `补充社区指标：${f.community_coverage.supplementary_included}/${f.community_coverage.supplementary_checked} 项纳入，权重 ` : `Supplementary community indicators: ${f.community_coverage.supplementary_included}/${f.community_coverage.supplementary_checked} admitted, weight `}{percent(f.community_coverage.supplementary_weight)}</span>}</p>}
-    </section>)}</div>
-    <CalendarSentiment report={view.evaluation} language={language} now={now} input={f?.community_inputs?.find(c => c.id === "didcodex_poll")} />
-    <div className={styles.communityStatus}>{!c ? (zh ? "本次暂无可直接计入概率的近期投票。" : "No recent ballots currently qualify as a probability input.") : forecastStale(view,f,now) ? (zh ? "上次社区结果 · 等待模块更新" : "Saved community result · awaiting an update") : (zh ? "已参与本次综合判断" : "Included in this combined forecast")}</div>
+    </section>)}</div></details>
+    {(!c || forecastStale(view,f,now)) && <div className={styles.communityStatus}>{!c ? (zh ? "本次暂无可直接计入概率的近期投票。" : "No recent ballots currently qualify as a probability input.") : forecastStale(view,f,now) ? (zh ? "上次社区结果 · 等待模块更新" : "Saved community result · awaiting an update") : (zh ? "已参与本次综合判断" : "Included in this combined forecast")}</div>}
   </article>;
 }

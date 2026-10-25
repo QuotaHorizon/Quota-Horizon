@@ -1,6 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#0b1118"/>
-  <rect x="104" y="288" width="72" height="112" rx="24" fill="#75e6b5"/>
-  <rect x="220" y="224" width="72" height="176" rx="24" fill="#75e6b5"/>
-  <rect x="336" y="128" width="72" height="272" rx="24" fill="#75e6b5"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="tile" x1="52" y1="40" x2="454" y2="488" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#203f42"/>
+      <stop offset="1" stop-color="#101c25"/>
+    </linearGradient>
+    <linearGradient id="mint" x1="144" y1="128" x2="352" y2="388" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c4f7e3"/>
+      <stop offset="1" stop-color="#55c6b1"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="264" y1="186" x2="308" y2="244" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffe6ae"/>
+      <stop offset="1" stop-color="#f3b66e"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#tile)"/>
+  <path d="M158 357 A142 142 0 1 1 354 357" fill="none" stroke="url(#mint)" stroke-width="48" stroke-linecap="round"/>
+  <circle cx="282" cy="220" r="32" fill="url(#sun)"/>
+  <path d="M128 276 H384" fill="none" stroke="#c4f7e3" stroke-width="22" stroke-linecap="round"/>
+  <path d="M302 330 L364 392" fill="none" stroke="url(#mint)" stroke-width="48" stroke-linecap="round"/>
 </svg>

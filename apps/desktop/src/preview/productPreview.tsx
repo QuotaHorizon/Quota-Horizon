@@ -123,7 +123,7 @@ if (scenario === "unavailable") {
 function DesktopRadarPreview() {
   const [collapsed, setCollapsed] = useState(false);
   return <div className={`app-shell sidebar-navigation-shell${collapsed ? " sidebar-collapsed" : ""}`}>
-    <aside className="app-sidebar"><div className="brand sidebar-brand"><span>QuotaHorizon</span></div>
+    <aside className="app-sidebar"><div className="brand sidebar-brand"><img className="brand-logo" src={new URL("../../src-tauri/icons/128x128.png", import.meta.url).href} alt="" /><span><b>Quota</b>Horizon</span></div>
       <DashboardNavigation page="resetIntelligence" variant="sidebar" collapsed={collapsed} onPageChange={noop} t={(key,values)=>translate(language,key,values)} />
       <button className="sidebar-collapse-button" onClick={()=>setCollapsed(!collapsed)} aria-label={zh ? "切换侧栏宽度" : "Toggle sidebar width"}>{collapsed ? "»" : "«"}</button>
     </aside>

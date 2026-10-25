@@ -28,6 +28,12 @@ describe("calendar-day community sentiment", () => {
     expect(html).toContain(language === "zh" ? "综合判断权重 78.0%" : "Weight in the combined forecast 78.0%");
     expect(html).toContain("87.3%");
     expect(html).not.toContain(language === "zh" ? "近期倾向变化已计入" : "Recent sentiment change included");
+    const visible = html.slice(0, html.indexOf("<details"));
+    expect(visible).toContain("87.3%");
+    expect(visible).toContain("2,529");
+    expect(visible).not.toContain("84.1%");
+    expect(visible).not.toContain("78.0%");
+    expect(html).not.toMatch(/<details[^>]* open/);
   });
   it("shows the applied innovation weight separately from the raw preference research candidate", () => {
     const html = renderToStaticMarkup(<CalendarSentiment report={report()} language="zh" now={now} input={{
@@ -76,6 +82,7 @@ describe("calendar-day community sentiment", () => {
     expect(html).toContain("Collection update due · saved observation");
     expect(html).toContain("87.3%");
     expect(html).not.toContain("Calendar-day candidate · independent evaluation");
+    expect(html.indexOf("Collection update due")).toBeLessThan(html.indexOf("<details"));
   });
 
   it("retains a small click count without inventing a probability or unique participants", () => {
@@ -87,6 +94,7 @@ describe("calendar-day community sentiment", () => {
     expect(html).toContain("样本待达标 · 近 6h 需新增至少 50 次点击");
     expect(html).not.toContain("87.3%");
     expect(html).not.toContain("49 人");
+    expect(html.indexOf("样本待达标")).toBeLessThan(html.indexOf("<details"));
   });
 
   it("keeps legacy reports unchanged when the optional calendar section is absent", () => {
