@@ -1,21 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 512 512">
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="tile" x1="52" y1="40" x2="454" y2="488" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#203f42"/>
-      <stop offset="1" stop-color="#101c25"/>
-    </linearGradient>
-    <linearGradient id="mint" x1="144" y1="128" x2="352" y2="388" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#c4f7e3"/>
-      <stop offset="1" stop-color="#55c6b1"/>
-    </linearGradient>
-    <linearGradient id="sun" x1="264" y1="186" x2="308" y2="244" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#ffe6ae"/>
-      <stop offset="1" stop-color="#f3b66e"/>
-    </linearGradient>
+    <linearGradient id="tile" x1="112" y1="64" x2="884" y2="960" gradientUnits="userSpaceOnUse"><stop stop-color="#163f4a"/><stop offset="1" stop-color="#10232f"/></linearGradient>
+    <linearGradient id="orbit" x1="276" y1="276" x2="738" y2="742" gradientUnits="userSpaceOnUse"><stop stop-color="#bdffec"/><stop offset="1" stop-color="#38bba9"/></linearGradient>
   </defs>
-  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#tile)"/>
-  <path d="M158 357 A142 142 0 1 1 354 357" fill="none" stroke="url(#mint)" stroke-width="48" stroke-linecap="round"/>
-  <circle cx="282" cy="220" r="32" fill="url(#sun)"/>
-  <path d="M128 276 H384" fill="none" stroke="#c4f7e3" stroke-width="22" stroke-linecap="round"/>
-  <path d="M302 330 L364 392" fill="none" stroke="url(#mint)" stroke-width="48" stroke-linecap="round"/>
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#tile)"/>
+  <circle cx="490" cy="524" r="228" fill="none" stroke="url(#orbit)" stroke-width="88"/>
+  <circle cx="675" cy="339" r="100" fill="url(#tile)"/>
+  <circle cx="675" cy="339" r="76" fill="#ffd397"/>
 </svg>

@@ -215,19 +215,19 @@ describe("independent quantitative integration", () => {
     raw.origin=new Date(now).toISOString();raw.state="cycle_closed";
     expect(sourceRows(v).find(r=>r.source==="monitor" && r.target===f.target)!.state).toBe("cycle_closed");
   });
-  it("keeps full bilingual posts and progress inside the focusable Tibo panel", () => {
+  it("keeps full bilingual posts and progress inside the focusable Tibo body", () => {
     const t=timeline(), f=forecastFor(t.quantitative)!;
     const original="Synthetic detailed reset statement. ".repeat(40)+"Original ending retained.";
     const translation="合成的完整重置发言。".repeat(40)+"译文结尾保留。";
     f.statements=[{id:"long-post",at:(now-1000)/1000,url:"https://x.com/i/status/123",original,
       translation_zh:translation,stage:"completed",event_type:"usage_reset",context:null}];
-    const html=renderToStaticMarkup(<TiboBriefing className="aligned-panel" timeline={t} notice={null} language="zh" now={now}>
+    const html=renderToStaticMarkup(<TiboBriefing className="aligned-panel" bodyClassName="scrolling-body" timeline={t} notice={null} language="zh" now={now}>
       <section aria-label="Reset timing and progress">Progress remains reachable</section>
     </TiboBriefing>);
     expect(html).toContain('aligned-panel');
-    expect(html).toContain('tabindex="0" aria-label="Tibo 发言与互动"');
+    expect(html).toContain('scrolling-body" tabindex="0" aria-label="发言正文与互动列表"');
     expect(html).toContain(original);expect(html).toContain(translation);
-    expect(html).toContain('Progress remains reachable</section></article>');
+    expect(html).toContain('Progress remains reachable</section></div></article>');
   });
   it("keeps activities in the ordinary post list as newer replies and completions arrive", () => {
     const t=timeline(), f=forecastFor(t.quantitative)!;

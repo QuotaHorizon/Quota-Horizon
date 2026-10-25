@@ -47,13 +47,12 @@ export function QuantitativeOverview({ timeline, language, now, failed, onOpenSo
       {outlook.awaitingResetForecast ? <p className={styles.notice}>{zh ? "预测更新中…" : "Updating forecast…"}</p> : <ProbabilityCurve view={view} language={language} />}
     </article>
 
-    <TiboBriefing className={styles.intelligence} timeline={timeline} language={language} notice={outlook.notice} now={now} failed={failed} onOpenSource={onOpenSource} onRead={onRead}>
+    <TiboBriefing className={styles.intelligence} bodyClassName={styles.intelligenceBody} timeline={timeline} language={language} notice={outlook.notice} now={now} failed={failed} onOpenSource={onOpenSource} onRead={onRead}>
     {outlook.notice && <section className={styles.noticeProgress}><div className={styles.heading}><h3>{outlook.noticeWithdrawn ? (zh ? "预告已更正" : "Announcement corrected") : outlook.notice.state === "reported" ? (zh ? "上一轮重置已报告完成" : "Previous reset reported complete") : (zh ? "重置安排与进展" : "Reset timing and progress")}</h3><EvidenceLink url={outlook.notice.url} label={zh ? "查看原帖" : "Original post"} onOpen={onOpenSource} /></div><div className={shared.alignedTimes}>{outlook.notice.reportedAt && <div><span>{zh ? "报告完成" : "Reported complete"}</span><time>{publicEvidenceTime(new Date(outlook.notice.reportedAt).toISOString(),language)}</time></div>}{outlook.notice.timing && <div><span>{zh ? "预告时间" : "Scheduled"}</span><time>{publicEvidenceTime(new Date(outlook.notice.timing.end).toISOString(),language)}</time></div>}</div></section>}
     </TiboBriefing>
     <QuantitativeTrend view={view} language={language} now={now} />
     </div>
     <div className={styles.twoColumns}>
-      <div className={styles.columnStack}>
       <article className={styles.card}>
         <div className={styles.heading}><h2>{zh ? "各方怎样判断" : "How sources compare"}</h2><span>{zh ? "发布时原值" : "As published"}</span></div>
         <div className={styles.sourceHeader}><span>{zh ? "来源 / 事件范围" : "Source / scope"}</span><span>24h</span><span>48h</span></div>
@@ -68,10 +67,9 @@ export function QuantitativeOverview({ timeline, language, now, failed, onOpenSo
           {sources.filter(s => s.state === "excluded").map(s => <p key={s.source}>{sourceNames[s.source]} · {zh ? "质量或口径审查未通过，保留观测但不纳入当前模型。" : "Quality or scope review pending; observations retained and excluded from the current model."}</p>)}
         </details>
       </article>
-      <ForecastChanges timeline={timeline} language={language} onOpenSource={onOpenSource} />
-      </div>
       <Community view={view} language={language} now={now} />
     </div>
+    <ForecastChanges timeline={timeline} language={language} onOpenSource={onOpenSource} />
     {timeline.radar && <details className={styles.rawPolls}><summary>{zh ? "全部投票与日期分布" : "All ballots and date distributions"}</summary><CommunityForecasts radar={timeline.radar} language={language} now={now} onOpenSource={onOpenSource} independent /></details>}
     <QuantitativeEvaluation view={view} language={language} now={now} onOpenSource={onOpenSource} />
     <footer className={styles.footer}><ModuleRuntimeStatus view={view} language={language} /><details><summary>{zh ? "模型与评估方法" : "Model and evaluation methods"}</summary><p>{zh ? "历史起点只计入一次。来源提供的基准与完整预测成对转换，其正负修正按共有依据合并；只有历史值的来源保留为背景，未提供拆分的来源用于对照。来源单列的承诺判断按同一事件时间窗补足未覆盖差额。新增投票以当前判断为参照提供补充，按有效样本与先验的相对信息量确定权重，未知重叠按 50% 折减，按票数实际变化的时间每 2 小时减半，并计入剩余期限。广义恢复包含自动重置的概率下限。参数与范围传递规则等待前瞻检验。" : "The historical anchor enters once. Paired source baselines and complete forecasts supply signed revisions, pooled by shared evidence. History-only sources provide background; sources without a split remain comparisons. Separate source commitment estimates fill uncovered gaps within the matching event window. Recent ballots supplement the informed outlook: weight follows effective sample information relative to the prior, discounted by 50% for unknown overlap decayed with a two-hour half-life from observed ballot arrivals, and adjusted for remaining coverage. Broader relief inherits the automatic-reset probability floor. These assumptions await forward validation."}</p><p>{zh ? "评估器冻结当时可见的预测，独立核验实际事件，等待窗口到期及报告宽限后记分。比较采用相同事件范围与时间窗；缺失证据保留未决。当前成绩用于评估模型改进，评估器不会自行修改权重。" : "The evaluator freezes forecasts available at the time, independently checks outcomes, and scores after the horizon and reporting grace period. Comparisons match event scope and time windows; missing evidence remains unresolved. Evaluation informs model changes and does not itself modify weights."}</p><p>{f?.model_version} · {zh ? "权重训练窗口 " : "Weight-training windows "}{f?.evaluation_windows ?? 0}</p></details></footer>
