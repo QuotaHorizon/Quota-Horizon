@@ -127,12 +127,20 @@ calibration, fixed-threshold alerts, and paired comparisons against baselines an
 variants become available as windows mature. Missing observations remain missing; both positive and
 negative outcomes require continuous evidence coverage. Event corrections append settlement revisions.
 `replay --db <path> --as-of <ISO-8601>` retrieves the report saved at or before that time;
-unchanged reports share one saved snapshot.
+the live report updates every cycle. The archive retains the last report of each UTC hour for seven days,
+then one per UTC day, plus the first and last report of each implementation and policy revision.
+Replays retain the report's actual generation time. Full response bodies are cached for 48 hours,
+then retained as daily snapshots for 30 days, along with each source's latest usable response.
+Expired response bodies are cleared automatically. Structured inputs, receipt clocks, ballots, original
+forecasts, frozen trials, and event and settlement revisions remain in the long-term ledger.
+Expired shadow and aligned intermediates older than 48 hours are retired when no frozen trial references them.
+Complete forecasts used by formal or community evaluations remain available. Retired intermediates keep
+their first-receipt clocks and deduplication IDs, preserving cumulative collection counts.
 The report's `diagnostics` separates collection gaps, request failures, stale source content and unchanged
 content, grouping source trials by their underlying event window. Use
 `diagnose --db <path> --origin <ISO-8601> --hours 6` to inspect a window's coverage without writing to the database;
 `--hours` also accepts 12, 24 and 48. Parser corrections append a current knowledge revision while preserving
-original observation clocks and saved reports. `dependence` provides matched-clock level and change correlations.
+original observation clocks and the report archive. `dependence` provides matched-clock level and change correlations.
 Predeclared community weights of 25% / 50% / 75% run alongside no-community, baseline and equal-component
 variants, compared using Brier and log loss on matching windows. The evaluator leaves weight replacement to review.
 

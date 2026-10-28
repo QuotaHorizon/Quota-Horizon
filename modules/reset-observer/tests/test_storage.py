@@ -32,8 +32,8 @@ class ObserverStorageTests(unittest.TestCase):
             self.assertIsNone(store.report_at(-1))
             self.assertEqual(store.db.execute("SELECT COUNT(*) FROM reports").fetchone()[0], len(values))
             with sqlite3.connect(path) as raw:
-                self.assertLess(raw.execute("SELECT MAX(length(payload)) FROM reports WHERE at>0").fetchone()[0], 100)
-                self.assertLess(raw.execute("SELECT COUNT(*) FROM json_bodies").fetchone()[0], 40)
+                self.assertLess(raw.execute("SELECT MAX(length(payload)) FROM reports WHERE at>0").fetchone()[0], 2048)
+                self.assertEqual(raw.execute("SELECT COUNT(*) FROM json_bodies").fetchone()[0], 0)
             store.close()
 
     def test_standalone_observer_loads_shared_codec_without_pythonpath(self):

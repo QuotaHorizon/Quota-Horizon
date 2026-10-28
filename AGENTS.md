@@ -29,6 +29,9 @@
   verification hidden by default. Native UI automation can interrupt the owner's
   work; use foreground windows only when an essential native interaction cannot
   be verified in the background, and keep those interactions brief.
+- When manual authorization is necessary, provide a one-click completion reply.
+  Verify the result from actual app behavior; do not require a typed confirmation
+  or ask the owner to repeat an authorization already completed for that build.
 - Start from the user's actual task. Add a visible step, file, attachment or
   explanation only when it helps that task; tool output, template defaults and
   customary engineering checklists are not automatically product requirements.

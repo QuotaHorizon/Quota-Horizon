@@ -14,6 +14,8 @@ import zlib
 
 
 _PREFIX = b"\x00QHJSON2\x00"
+_INLINE = b"\x00QHJSON3\x00"
+RETIRED_RAW = b"\x00QHRAWEXPIRED1\x00"
 _FAMILY = b"\x00QHJSON"
 _THRESHOLD = 2048
 _CACHE_BYTES = 16 * 1024 * 1024
@@ -22,6 +24,83 @@ _INTERN_CACHE_ENTRIES = 4096
 
 def _packed(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"))
+
+
+def pack_inline(value):
+    """Compress small records and disposable reports without allocating shared bodies."""
+    text = _packed(value)
+    raw = text.encode("utf-8")
+    compressed = _INLINE + zlib.compress(raw)
+    return compressed if len(compressed) + 16 < len(raw) else text
+
+
+def retain_raw_cache(db, now, *, maximum_rows=256):
+    """Keep 48h of full responses, daily snapshots for 30d, and latest inputs.
+
+    The content hash and every normalized receipt remain permanent. An explicit
+    binary marker retires only the diagnostic response body, never a forecast,
+    ballot, coverage clock or event correction. Blobs are self-contained so
+    retirement releases pages without a shared-body garbage-collection pass.
+    """
+    columns = {r[1] for r in db.execute("PRAGMA table_info(observations)")}
+    if {"source", "normalized"} <= columns:
+        source, success = "source", "normalized"
+    elif {"provider", "claims"} <= columns:
+        source, success = "provider", "claims"
+    else:
+        raise ValueError("unrecognized raw response cache")
+    if maximum_rows < 1:
+        raise ValueError("cache batch limit must be positive")
+    # Names above are fixed schema identifiers, never caller-controlled SQL.
+    with db:
+        cursor = db.execute(f"""UPDATE payloads SET body=? WHERE hash IN (
+            SELECT hash FROM payloads WHERE body!=? AND hash IN (
+                SELECT payload_hash FROM observations WHERE observed_at<?
+            ) AND hash NOT IN (
+                SELECT payload_hash FROM observations WHERE observed_at>=? AND payload_hash IS NOT NULL
+                UNION SELECT payload_hash FROM (
+                    SELECT payload_hash,ROW_NUMBER() OVER(PARTITION BY {source},CAST(observed_at/86400 AS INTEGER)
+                        ORDER BY observed_at DESC,id DESC) rank
+                    FROM observations WHERE observed_at>=? AND payload_hash IS NOT NULL
+                ) WHERE rank=1
+                UNION SELECT payload_hash FROM (
+                    SELECT payload_hash,ROW_NUMBER() OVER(PARTITION BY {source}
+                        ORDER BY observed_at DESC,id DESC) rank FROM observations WHERE payload_hash IS NOT NULL
+                ) WHERE rank=1
+                UNION SELECT payload_hash FROM (
+                    SELECT payload_hash,ROW_NUMBER() OVER(PARTITION BY {source}
+                        ORDER BY observed_at DESC,id DESC) rank FROM observations
+                        WHERE payload_hash IS NOT NULL AND {success} IS NOT NULL
+                ) WHERE rank=1
+            ) LIMIT ?
+        )""", (RETIRED_RAW, RETIRED_RAW, now - 2 * 86400, now - 2 * 86400, now - 30 * 86400, maximum_rows))
+    return cursor.rowcount
+
+
+def maintain_raw_cache(db, now):
+    """Check at most hourly; catch up older installations in bounded batches."""
+    db.execute("CREATE TABLE IF NOT EXISTS qh_storage_cache(key TEXT PRIMARY KEY,at REAL NOT NULL)")
+    previous = db.execute("SELECT at FROM qh_storage_cache WHERE key='raw_retention'").fetchone()
+    if previous and now - previous[0] < 3600:
+        return 0
+    removed = retain_raw_cache(db, now, maximum_rows=1024)
+    if removed < 1024:
+        with db:
+            db.execute("INSERT OR REPLACE INTO qh_storage_cache VALUES ('raw_retention',?)", (now,))
+    reclaim_pages(db)
+    return removed
+
+
+def reclaim_pages(db, *, minimum_bytes=16 * 1024 * 1024, maximum_pages=256):
+    if db.in_transaction or db.execute("PRAGMA auto_vacuum").fetchone()[0] != 2:
+        return 0
+    page_size = db.execute("PRAGMA page_size").fetchone()[0]
+    before = db.execute("PRAGMA freelist_count").fetchone()[0]
+    if before * page_size < minimum_bytes:
+        return 0
+    db.execute(f"PRAGMA incremental_vacuum({int(maximum_pages)})").fetchall()
+    after = db.execute("PRAGMA freelist_count").fetchone()[0]
+    return (before - after) * page_size
 
 
 class JSONStorage:
@@ -101,7 +180,7 @@ class JSONStorage:
             key = self._store({"version": 1, "value": overrides, "refs": [], "base": base}, text)
             return _PREFIX + key.encode("ascii")
         if size < _THRESHOLD:
-            return text
+            return pack_inline(value)
         return _PREFIX + self._intern(json.loads(text), text).encode("ascii")
 
     def _body(self, key, ancestors):
@@ -158,6 +237,11 @@ class JSONStorage:
 
     def expand_json(self, value):
         if isinstance(value, bytes) and value.startswith(_FAMILY):
+            if value.startswith(_INLINE):
+                try:
+                    return zlib.decompress(value[len(_INLINE):]).decode("utf-8")
+                except (zlib.error, UnicodeDecodeError) as error:
+                    raise ValueError("invalid compressed inline JSON") from error
             if not value.startswith(_PREFIX) or len(value) != len(_PREFIX) + 64:
                 raise ValueError("unsupported JSON storage reference")
             try:

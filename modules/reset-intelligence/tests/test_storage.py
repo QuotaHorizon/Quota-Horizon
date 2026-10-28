@@ -46,7 +46,8 @@ class StorageCompatibilityTests(unittest.TestCase):
         small = {"n": 1}
         for value in (large, small, legacy, legacy_blob):
             self.store.save("source", 100, value, Observation("source", 100, 100))
-        compressed = self.store.db.execute("SELECT body FROM payloads WHERE hash=?", (digest(large),)).fetchone()[0]
+        with sqlite3.connect(self.path) as raw_db:
+            compressed = raw_db.execute("SELECT body FROM payloads WHERE hash=?", (digest(large),)).fetchone()[0]
         self.assertIsInstance(compressed, bytes)
         self.assertLess(len(compressed), len(json.dumps(large, ensure_ascii=False).encode()) / 10)
         self.assertIsInstance(self.store.db.execute("SELECT body FROM payloads WHERE hash=?", (digest(small),)).fetchone()[0], str)
@@ -88,11 +89,11 @@ class StorageCompatibilityTests(unittest.TestCase):
 
     def test_corrupt_compressed_evidence_fails_instead_of_becoming_missing(self):
         raw = {"text": "repeated source evidence" * 100}
-        self.store.save("source", 100, raw, None)
         payload_hash = digest(raw)
-        body = self.store.db.execute("SELECT body FROM payloads WHERE hash=?", (payload_hash,)).fetchone()[0]
+        from reset_intelligence.store import _payload_body
+        body = _payload_body(raw)
         with self.store.db:
-            self.store.db.execute("UPDATE payloads SET body=? WHERE hash=?", (body[:-2], payload_hash))
+            self.store.db.execute("INSERT INTO payloads VALUES (?,?)", (payload_hash, body[:-2]))
         with self.assertRaisesRegex(ValueError, "invalid compressed source payload"):
             self.store.raw_payload(payload_hash)
 
@@ -112,6 +113,40 @@ class StorageCompatibilityTests(unittest.TestCase):
         self.assertEqual(json.loads(row["renamed"])["observed_at"], row["stamp"])
         self.assertTrue(self.store.coverage("source", 0, 29, 29, max_gap=2))
         self.assertFalse(self.store.coverage("source", 0, 29, 28, max_gap=2))
+
+    def test_small_compressed_records_preserve_sql_json_and_detect_damage(self):
+        from reset_intelligence.storage_codec import pack_inline
+        value = {"clock": 0.123456789, "id": 9007199254740993, "literal": "重复但仍然完整" * 20}
+        encoded = pack_inline(value)
+        self.assertIsInstance(encoded, bytes)
+        self.assertLess(len(encoded), len(json.dumps(value).encode()) / 3)
+        row = self.store.db.execute("SELECT qh_json(?)", (encoded,)).fetchone()
+        self.assertEqual(json.loads(row[0]), value)
+        with self.assertRaisesRegex(sqlite3.OperationalError, "user-defined function"):
+            self.store.db.execute("SELECT qh_json(?)", (encoded[:-2],)).fetchone()
+
+    def test_raw_cache_retirement_preserves_normalized_history_and_rehydrates_reappearing_content(self):
+        from reset_intelligence.storage_codec import retain_raw_cache
+        day = 86400
+        now = 50 * day
+        originals = [{"at": at, "history": [{"id": n, "text": "source original" * 200} for n in range(20)]}
+                     for at in (day, day+3600, 25*day, 25*day+3600, 47*day, 47*day+3600, 49*day, now)]
+        for value in originals:
+            self.store.save("source", value["at"], value, Observation("source", value["at"], value["at"], facts=[value]))
+        before = [tuple(r) for r in self.store.db.execute("SELECT * FROM observations")]
+        self.assertEqual(retain_raw_cache(self.store.db, now), 4)
+        self.assertEqual([tuple(r) for r in self.store.db.execute("SELECT * FROM observations")], before)
+        self.assertEqual(self.store.raw_payload(digest(originals[0])), None)
+        self.assertEqual(self.store.observations(day)["source"].facts, [originals[0]])
+        for index in (3, 5, 6, 7):
+            self.assertEqual(self.store.raw_payload(digest(originals[index])), originals[index])
+        self.assertEqual(retain_raw_cache(self.store.db, now), 0)
+        # Repeated old content is fresh evidence when it is received again.
+        self.store.save("source", now+1, originals[0], None)
+        self.store.close()
+        self.store = Store(self.path, read_only=True)
+        self.assertEqual(self.store.raw_payload(digest(originals[0])), originals[0])
+        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM observations").fetchone()[0], 9)
 
     def test_external_json_keys_and_reference_shaped_values_remain_literal(self):
         value = {"version": 1, "value": None, "refs": [["fake", "0"*64]],

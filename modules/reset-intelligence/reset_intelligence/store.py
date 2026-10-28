@@ -7,7 +7,7 @@ import sqlite3
 import zlib
 
 from .contracts import Observation, digest
-from .storage_codec import configure_storage
+from .storage_codec import configure_storage, RETIRED_RAW
 
 
 _COMPRESSED_JSON = b"QHJSON\x01ZLIB\x00"
@@ -29,6 +29,8 @@ def _payload_body(value: object) -> str | bytes:
 
 
 def _read_payload(body: str | bytes) -> object:
+    if body == RETIRED_RAW:
+        return None
     if isinstance(body, bytes) and body.startswith(_COMPRESSED_JSON):
         try:
             body = zlib.decompress(body[len(_COMPRESSED_JSON):])
@@ -45,7 +47,10 @@ class Store:
             self.json_storage = configure_storage(self.db, read_only=True)
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        new_database = not self.path.exists()
         self.db = sqlite3.connect(self.path, timeout=30)
+        if new_database:
+            self.db.execute("PRAGMA auto_vacuum=INCREMENTAL")
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript("""
@@ -77,7 +82,12 @@ class Store:
         with self.db:
             h = digest(raw) if raw is not None else None
             if raw is not None:
-                self.db.execute("INSERT OR IGNORE INTO payloads VALUES (?,?)", (h, _payload_body(raw)))
+                saved = self.db.execute("SELECT body=? FROM payloads WHERE hash=?", (RETIRED_RAW, h)).fetchone()
+                if saved is None:
+                    self.db.execute("INSERT OR IGNORE INTO payloads VALUES (?,?)", (h, _payload_body(raw)))
+                elif saved[0]:
+                    # A source can legitimately publish an old content hash again.
+                    self.db.execute("UPDATE payloads SET body=? WHERE hash=? AND body=?", (_payload_body(raw), h, RETIRED_RAW))
             self.db.execute("INSERT INTO observations(source,observed_at,generated_at,payload_hash,normalized,error) VALUES (?,?,?,?,?,?)",
                             (source, at, observation.generated_at if observation else None, h,
                              self.pack_json(observation.to_dict(), ("observed_at", "generated_at")) if observation else None, error))

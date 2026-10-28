@@ -283,6 +283,8 @@ def evaluate(args, policy, now, evidence, runtime, preference_features=None):
         from .preferences import settle as settle_preferences
 
         settle_preferences(store, now, policy, evidence)
+        from .retention import maintain_auxiliary_forecasts
+        maintain_auxiliary_forecasts(store, now)
         timings = dict(runtime["phase_seconds"])
         timings["settlement"] = time.monotonic() - phase
         phase = time.monotonic()
@@ -304,7 +306,7 @@ def evaluate(args, policy, now, evidence, runtime, preference_features=None):
         ]
         report_hash = digest(semantic)
         if store.get("last_report_hash") != report_hash:
-            store.report(now, report)
+            store.report(now, report, archive=True)
             store.put("last_report_hash", report_hash)
         if args.output:
             atomic_write(
@@ -316,6 +318,10 @@ def evaluate(args, policy, now, evidence, runtime, preference_features=None):
             )
         if args.html:
             atomic_write(args.html, html_report(report))
+        from .store import maintain_raw_cache
+        from .retention import reclaim_cache_pages
+        maintain_raw_cache(store.db, now)
+        reclaim_cache_pages(store)
         return {
             "state": report["state"],
             "settlement_updates": revisions,

@@ -359,9 +359,7 @@ def build_report(store, now, policy, evidence, preference_features=None):
             "inference": "exploratory_paired_UTC_block_bootstrap_minimum_8_blocks",
         },
         "summary": {
-            "forecast_snapshots": store.db.execute(
-                "SELECT COUNT(*) FROM forecasts WHERE available_at<=?", (now,)
-            ).fetchone()[0],
+            "forecast_snapshots": store.forecast_count(now),
             "frozen_trials": len(trials),
             "settlements": dict(counts),
             "scored_nonoverlapping_trials": mature,

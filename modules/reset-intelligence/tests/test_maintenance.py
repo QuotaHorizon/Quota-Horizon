@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 import zlib
 
-from reset_intelligence.maintenance import compact, begin_batch, vacuum, verify, LEGACY_SOURCE
+from reset_intelligence.maintenance import compact, begin_batch, vacuum, verify, collect_unused_bodies, LEGACY_SOURCE
 from reset_intelligence.storage_codec import configure_storage, JSONStorage
 from reset_intelligence.store import Store
 
@@ -168,17 +168,38 @@ class StorageMaintenanceTests(unittest.TestCase):
                 CREATE TABLE forecasts(id TEXT PRIMARY KEY,payload TEXT);""")
             for at, value in enumerate(self.values):
                 db.execute("INSERT INTO reports(at,payload) VALUES (?,?)", (at, zlib.compress(json.dumps(value).encode())))
-            # This raw evidence must remain legacy zlib for its existing reader.
+            # Legacy source evidence remains JSON-readable after inline compression.
             raw = zlib.compress(json.dumps(self.values[0]).encode())
             db.execute("INSERT INTO payloads VALUES ('raw',?)", (raw,))
         result = compact(path, batch_rows=2)
         self.assertEqual(result["status"], "complete")
         db = sqlite3.connect(path)
         configure_storage(db, read_only=True)
-        self.assertEqual(db.execute("SELECT body FROM payloads").fetchone()[0], raw)
+        self.assertEqual(json.loads(db.execute("SELECT body FROM payloads").fetchone()[0]), self.values[0])
         self.assertEqual([json.loads(r[0]) for r in db.execute("SELECT payload FROM reports ORDER BY at")], self.values)
         db.close()
         self.assertTrue(verify(path)["verified"])
+
+    def test_shared_body_sweep_preserves_nested_roots_and_rolls_back_on_missing_body(self):
+        compact(self.path)
+        db = sqlite3.connect(self.path)
+        codec = JSONStorage(db)
+        with db:
+            codec.pack_json({"orphan": "unused disposable report" * 200})
+        db.close()
+        with self.assertRaisesRegex(ValueError, "stopped"):
+            collect_unused_bodies(self.path)
+        result = collect_unused_bodies(self.path, writers_stopped=True)
+        self.assertGreater(result["removed"], 0)
+        self.assert_original_values()
+        self.assertTrue(verify(self.path)["verified"])
+        with sqlite3.connect(self.path) as db:
+            before = db.execute("SELECT COUNT(*) FROM json_bodies").fetchone()[0]
+            db.execute("UPDATE forecasts SET payload=? WHERE id='0'", (b'\0QHJSON2\0' + b'0' * 64,))
+        with self.assertRaisesRegex(ValueError, "missing"):
+            collect_unused_bodies(self.path, writers_stopped=True)
+        with sqlite3.connect(self.path) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM json_bodies").fetchone()[0], before)
 
     def test_unknown_database_and_missing_path_do_not_create_evidence(self):
         missing = Path(self.directory.name) / "missing.sqlite"

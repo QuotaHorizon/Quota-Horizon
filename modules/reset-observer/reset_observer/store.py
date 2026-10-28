@@ -8,7 +8,7 @@ import zlib
 
 from .contracts import Forecast, digest, packed
 try:
-    from reset_intelligence.storage_codec import configure_storage
+    from reset_intelligence.storage_codec import configure_storage, pack_inline, RETIRED_RAW, maintain_raw_cache, reclaim_pages
 except ModuleNotFoundError as error:
     if error.name != "reset_intelligence":
         raise
@@ -23,6 +23,10 @@ except ModuleNotFoundError as error:
     codec = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(codec)
     configure_storage = codec.configure_storage
+    pack_inline = codec.pack_inline
+    RETIRED_RAW = codec.RETIRED_RAW
+    maintain_raw_cache = codec.maintain_raw_cache
+    reclaim_pages = codec.reclaim_pages
 
 
 class Store:
@@ -32,7 +36,10 @@ class Store:
             self.db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=30)
         else:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            new_database = not self.path.exists()
             self.db = sqlite3.connect(self.path, timeout=30)
+            if new_database:
+                self.db.execute("PRAGMA auto_vacuum=INCREMENTAL")
             self.db.execute("PRAGMA journal_mode=WAL")
         self.db.row_factory = sqlite3.Row
         if read_only:
@@ -57,6 +64,7 @@ class Store:
         CREATE INDEX IF NOT EXISTS forecasts_publication_curve ON forecasts(available_at,origin,id)
           WHERE track IN ('native','model');
         CREATE INDEX IF NOT EXISTS forecasts_latest ON forecasts(source,target,track,origin DESC,available_at DESC,id DESC);
+        CREATE TABLE IF NOT EXISTS retired_forecasts(id TEXT PRIMARY KEY,available_at REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS imports(kind TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(kind,id));
         CREATE TABLE IF NOT EXISTS indicators(id TEXT PRIMARY KEY,source TEXT NOT NULL,observed_at REAL NOT NULL,payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS truth_revisions(hash TEXT PRIMARY KEY,at REAL NOT NULL,payload TEXT NOT NULL);
@@ -118,7 +126,11 @@ class Store:
         h = digest(raw) if raw is not None else None
         with self.db:
             if raw is not None:
-                self.db.execute("INSERT OR IGNORE INTO payloads VALUES (?,?)", (h, zlib.compress(packed(raw).encode())))
+                saved = self.db.execute("SELECT body=? FROM payloads WHERE hash=?", (RETIRED_RAW, h)).fetchone()
+                if saved is None:
+                    self.db.execute("INSERT OR IGNORE INTO payloads VALUES (?,?)", (h, pack_inline(raw)))
+                elif saved[0]:
+                    self.db.execute("UPDATE payloads SET body=? WHERE hash=? AND body=?", (pack_inline(raw), h, RETIRED_RAW))
             self.db.execute("INSERT INTO observations(provider,observed_at,generated_at,healthy,claims,payload_hash,error) VALUES (?,?,?,?,?,?,?)",
                             (provider, now, generated, int(healthy), self.pack_json(claims) if claims is not None else None, h, error))
             from .evidence import inventory_revisions
@@ -155,11 +167,18 @@ class Store:
     def add_forecast(self, f: Forecast):
         f.validate()
         key = f.id
-        if self.db.execute("SELECT 1 FROM forecasts WHERE id=?", (key,)).fetchone():
+        if self.db.execute("SELECT 1 FROM forecasts WHERE id=? UNION ALL SELECT 1 FROM retired_forecasts WHERE id=?", (key, key)).fetchone():
             return
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO forecasts VALUES (?,?,?,?,?,?,?,?,?)",
-                            (key, f.source, f.version, f.target, f.track, f.origin, f.available_at, f.expires_at, self.pack_json(f.__dict__)))
+                            (key, f.source, f.version, f.target, f.track, f.origin, f.available_at, f.expires_at,
+                             pack_inline(f.__dict__) if f.track in ("shadow", "adapted") else self.pack_json(f.__dict__)))
+
+    def forecast_count(self, now):
+        count = self.db.execute("SELECT COUNT(*) FROM forecasts WHERE available_at<=?", (now,)).fetchone()[0]
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='retired_forecasts'").fetchone():
+            count += self.db.execute("SELECT COUNT(*) FROM retired_forecasts WHERE available_at<=?", (now,)).fetchone()[0]
+        return count
 
     def forecasts(self, now, latest=False):
         # Discover series through the covering index, then seek its latest known
@@ -286,9 +305,18 @@ class Store:
             output[row["trial"]] = {"at": row["at"], **value}
         return output
 
-    def report(self, now, payload):
+    def raw_payload(self, payload_hash):
+        row = self.db.execute("SELECT body FROM payloads WHERE hash=?", (payload_hash,)).fetchone()
+        if row and row[0] == RETIRED_RAW:
+            return None
+        return json.loads(zlib.decompress(row[0]) if isinstance(row[0], bytes) else row[0]) if row else None
+
+    def report(self, now, payload, *, archive=False):
         with self.db:
-            self.db.execute("INSERT INTO reports(at,payload) VALUES (?,?)", (now, self.pack_json(payload)))
+            self.db.execute("INSERT INTO reports(at,payload) VALUES (?,?)", (now, pack_inline(payload)))
+        if archive:
+            from .retention import retain_reports
+            retain_reports(self, now)
 
     def report_at(self, now):
         row = self.db.execute("SELECT payload FROM reports WHERE id=(SELECT id FROM reports WHERE at<=? ORDER BY at DESC,id DESC LIMIT 1)", (now,)).fetchone()

@@ -128,6 +128,9 @@ def main(argv=None) -> int:
             write_json(args.output, payload)
         if args.audit_output:
             write_json(args.audit_output, source_audit(store, now, results))
+        if args.command in ("run", "forecast"):
+            from .storage_codec import maintain_raw_cache
+            maintain_raw_cache(store.db, now)
         summary = {"issued_at": iso(now), "mode": args.command, "sources": outcomes,
                    "forecasts": [{"target": r["target"], "status": r["status"], "reason": r.get("reason"),
                                   "event_count": r["event_count"], "components": [c["id"] for c in r["components"]],

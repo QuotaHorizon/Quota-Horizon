@@ -13,7 +13,6 @@ from html.parser import HTMLParser
 import json
 import re
 import time
-import zlib
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -492,11 +491,12 @@ def reinterpret_latest(store, now):
         return
     with store.db:
         for row in store.observations(now, successful=True):
-            body = store.db.execute("SELECT body FROM payloads WHERE hash=?", (row["payload_hash"],)).fetchone()
-            if row["provider"] not in FEEDS or body is None:
+            if row["provider"] not in FEEDS:
                 continue
             try:
-                raw = json.loads(zlib.decompress(body[0]))
+                raw = store.raw_payload(row["payload_hash"])
+                if raw is None:
+                    continue
                 _, healthy, claims = parse(row["provider"], raw, row["observed_at"])
             except (KeyError, ValueError, TypeError, AttributeError):
                 continue

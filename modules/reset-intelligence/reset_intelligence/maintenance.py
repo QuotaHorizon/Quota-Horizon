@@ -18,10 +18,10 @@ import sys
 import time
 import zlib
 
-from .storage_codec import JSONStorage
+from .storage_codec import JSONStorage, pack_inline, RETIRED_RAW
 
 
-VERSION = "lossless-json-1"
+VERSION = "lossless-json-2"
 PREFIX = b"\x00QHJSON2\x00"
 LEGACY_SOURCE = b"QHJSON\x01ZLIB\x00"
 ZERO = "0" * 64
@@ -105,6 +105,8 @@ def targets(db):
 def unpack(codec, value, mode):
     if value is None:
         return None
+    if mode in ("source", "keep_zlib") and value == RETIRED_RAW:
+        return {"expired_raw_response": True}
     value = codec.expand_json(value)
     if isinstance(value, bytes):
         if mode == "source" and value.startswith(LEGACY_SOURCE):
@@ -115,16 +117,16 @@ def unpack(codec, value, mode):
 
 
 def encode(codec, original, value, mode, volatile):
-    if original is None or mode == "keep_zlib":
+    if original is None:
         return original
+    if mode in ("source", "keep_zlib"):
+        if original == RETIRED_RAW:
+            return original
+        return pack_inline(value)
+    if mode == "report":
+        return pack_inline(value)
     if isinstance(original, bytes) and original.startswith(PREFIX):
         return original
-    if mode == "source":
-        if isinstance(original, bytes) and original.startswith(LEGACY_SOURCE):
-            return original
-        text = canonical(value)
-        compressed = LEGACY_SOURCE + zlib.compress(text)
-        return compressed if len(compressed) < len(text) else text.decode("utf-8")
     return codec.pack_json(value, volatile)
 
 
@@ -376,6 +378,63 @@ def verify(path, emit=None):
         db.close()
 
 
+def collect_unused_bodies(path, *, writers_stopped=False, emit=None):
+    """One-time sweep after converting legacy report caches.
+
+    All application roots and their complete reference closure are marked under
+    one write reservation. Only unreachable immutable bodies are removed. New
+    reports are inline blobs, so routine archive rotation needs no global sweep.
+    """
+    if not writers_stopped:
+        raise ValueError("body collection requires explicitly stopped module writers")
+    db = connect(path)
+    try:
+        _, selected = targets(db)
+        with db:
+            begin_batch(db, emit)
+            db.execute("CREATE TEMP TABLE live_bodies(hash TEXT PRIMARY KEY,visited INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID")
+            db.execute("CREATE INDEX temp.live_bodies_pending ON live_bodies(visited)")
+            for table, column, _, _ in selected:
+                db.execute(f"""INSERT OR IGNORE INTO live_bodies(hash)
+                    SELECT CAST(substr({quote(column)},10) AS TEXT) FROM {quote(table)}
+                    WHERE typeof({quote(column)})='blob' AND substr({quote(column)},1,9)=?""", (PREFIX,))
+            count = 0
+            while True:
+                pending = db.execute("""SELECT l.hash,b.body FROM live_bodies l LEFT JOIN json_bodies b ON b.hash=l.hash
+                    WHERE l.visited=0 LIMIT 512""").fetchall()
+                if not pending:
+                    break
+                for key, body in pending:
+                    if body is None:
+                        raise ValueError("reachable JSON storage body is missing")
+                    encoded = zlib.decompress(body)
+                    if hashlib.sha256(encoded).hexdigest() != key:
+                        raise ValueError("reachable JSON storage body hash mismatch")
+                    envelope = json.loads(encoded)
+                    if not isinstance(envelope, dict) or envelope.get("version") != 1 or not isinstance(envelope.get("refs"), list):
+                        raise ValueError("unsupported JSON storage body")
+                    children = []
+                    for ref in envelope["refs"]:
+                        if not isinstance(ref, list) or len(ref) != 2:
+                            raise ValueError("invalid JSON storage reference")
+                        children.append(ref[1])
+                    if "base" in envelope:
+                        children.append(envelope["base"])
+                    if any(not isinstance(child, str) or len(child) != 64 or any(c not in "0123456789abcdef" for c in child) for child in children):
+                        raise ValueError("invalid JSON storage reference")
+                    db.executemany("INSERT OR IGNORE INTO live_bodies(hash) VALUES (?)", ((child,) for child in children))
+                    db.execute("UPDATE live_bodies SET visited=1 WHERE hash=?", (key,))
+                    count += 1
+                if emit and count % 8192 < 512:
+                    emit({"event": "body_marking", "visited": count})
+            before = db.execute("SELECT COUNT(*) FROM json_bodies").fetchone()[0]
+            db.execute("DELETE FROM json_bodies WHERE hash NOT IN (SELECT hash FROM live_bodies)")
+            after = db.execute("SELECT COUNT(*) FROM json_bodies").fetchone()[0]
+        return {"event": "unused_bodies_removed", "before": before, "after": after, "removed": before - after}
+    finally:
+        db.close()
+
+
 def vacuum(path, *, writers_stopped=False, emit=None):
     if not writers_stopped:
         raise ValueError("VACUUM requires explicitly stopped module writers")
@@ -411,6 +470,7 @@ def vacuum(path, *, writers_stopped=False, emit=None):
             db.execute(f"UPDATE {_JOBS} SET status='vacuum_started' WHERE id=?", (job["id"],))
         # SQLite's transaction/journal provides interruption recovery. No backup
         # copy or evidence deletion is used. VACUUM owns its temporary work file.
+        db.execute("PRAGMA auto_vacuum=INCREMENTAL")
         db.execute("VACUUM")
         if emit:
             emit({"event": "vacuum_sql_complete", "job": job["id"]})
@@ -434,7 +494,7 @@ def vacuum(path, *, writers_stopped=False, emit=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("inspect", "compact", "verify", "vacuum"))
+    parser.add_argument("command", choices=("inspect", "compact", "verify", "vacuum", "collect-bodies"))
     parser.add_argument("--db", required=True)
     parser.add_argument("--batch-rows", type=int, default=64)
     parser.add_argument("--batch-mib", type=float, default=8)
@@ -455,6 +515,8 @@ def main(argv=None):
             result = verify(args.db, emit=output)
         elif args.command == "vacuum":
             result = vacuum(args.db, writers_stopped=args.writers_stopped, emit=output)
+        elif args.command == "collect-bodies":
+            result = collect_unused_bodies(args.db, writers_stopped=args.writers_stopped, emit=output)
         else:
             db = connect(args.db, read_only=True)
             try:
