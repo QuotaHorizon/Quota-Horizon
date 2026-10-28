@@ -12,6 +12,34 @@ import type { PublicResetTimeline } from "./types";
 const now = Date.parse("2026-10-04T02:10:00Z");
 const timeline = (): PublicResetTimeline => ({sources:[],entries:[],revisionCount:0,evidenceFamilyCount:0,quantitative:quantitativeFixture(now)});
 describe("independent quantitative integration", () => {
+  it.each(["zh", "en"] as const)("propagates completion revisions without changing the forecast or losing the statement in %s", language => {
+    const t = timeline(), f = forecastFor(t.quantitative)!;
+    const postId = "2115297093879472332", published = now / 1000 - 60;
+    f.cycle = null; f.last_event_at = published - 3600;
+    f.statements = [{ id: postId, at: published, url: `https://x.com/thsottiaux/status/${postId}`,
+      original: "https://t.co/Fgy0dBAHsJ has landed", translation_zh: null, stage: "completed", event_type: "usage_reset", context: null }];
+    const event = { id: "completion-revision", status: "confirmed", reason: "public_completion_notice", kind: "automatic",
+      from: published, to: published, announced_at: published, known_at: now / 1000 - 10,
+      references: [`https://x.com/i/status/${postId}`], primary_references: 1, completion_reports: 1 };
+    t.quantitative!.evaluation!.outcomes = [event];
+    const curve = JSON.stringify(f.curve);
+    expect(forecastPresentation(undefined, now, false, t).awaitingResetForecast).toBe(true);
+    event.status = "pending"; event.reason = "completion_withdrawn"; event.completion_reports = 0;
+    expect(forecastPresentation(undefined, now - 20_000, false, t).awaitingResetForecast).toBe(true);
+    const current = forecastPresentation(undefined, now, false, t);
+    expect(current.awaitingResetForecast).toBe(false);
+    expect(current.probability24h).toBe(f.curve.find(p => p.hours === 24)!.probability * 100);
+    const html = renderToStaticMarkup(<ResetBriefing timeline={t} now={now} language={language} />);
+    expect(html).toContain("has landed");
+    expect(html).toContain(language === "zh" ? "完成状态待核实" : "Completion status under review");
+    expect(html).not.toContain(language === "zh" ? "等待重置后预测" : "Awaiting a post-reset forecast");
+    event.references = ["https://x.com/i/status/999999"];
+    expect(forecastPresentation(undefined, now, false, t).awaitingResetForecast).toBe(true);
+    event.references = [`https://x.com/i/status/${postId}`];
+    event.status = "confirmed"; event.reason = "public_completion_notice"; event.completion_reports = 1;
+    expect(forecastPresentation(undefined, now, false, t).awaitingResetForecast).toBe(true);
+    expect(JSON.stringify(f.curve)).toBe(curve);
+  });
   it("attributes inherited automatic news before the broader community supplement", () => {
     const t = timeline(), broad = forecastFor(t.quantitative)!, auto = forecastFor(t.quantitative, "automatic_reset")!;
     broad.combination_method = "baseline_plus_revisions";

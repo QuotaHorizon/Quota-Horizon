@@ -223,9 +223,13 @@ def run_once(args, config, refresh=False, evaluator=None):
         phase = time.monotonic()
         freeze_grid(store, now, policy)
         evidence = reconcile(store, now, policy)
-        from .preferences import freeze as freeze_preferences
+        from .preferences import current_features, freeze as freeze_preferences
 
-        freeze_preferences(store, now, policy, evidence)
+        # Both consumers use this exact capture cutoff. Carry the small feature
+        # projection to evaluation instead of decoding twelve hours of ballot
+        # receipts a second time. New captures always compute their own input.
+        preference_features = current_features(store, now)
+        freeze_preferences(store, now, policy, evidence, current=preference_features)
         timings["freeze_and_reconcile"] = time.monotonic() - phase
         timings["capture_total"] = time.monotonic() - began
         runtime = {
@@ -249,9 +253,9 @@ def run_once(args, config, refresh=False, evaluator=None):
             },
         )
         if evaluator is None:
-            result = evaluate(args, policy, now, evidence, runtime)
+            result = evaluate(args, policy, now, evidence, runtime, preference_features)
         else:
-            evaluator.submit(args, policy, now, evidence, runtime)
+            evaluator.submit(args, policy, now, evidence, runtime, preference_features)
             result = {"state": "captured", "evaluation": "background"}
         return {
             "at": iso(now),
@@ -266,7 +270,7 @@ def run_once(args, config, refresh=False, evaluator=None):
         store.close()
 
 
-def evaluate(args, policy, now, evidence, runtime):
+def evaluate(args, policy, now, evidence, runtime, preference_features=None):
     """One evaluator per locked worker; collection owns a separate connection.
 
     Capture and forecast publication continue while historical scoring runs.
@@ -282,7 +286,7 @@ def evaluate(args, policy, now, evidence, runtime):
         timings = dict(runtime["phase_seconds"])
         timings["settlement"] = time.monotonic() - phase
         phase = time.monotonic()
-        report = build_report(store, now, policy, evidence)
+        report = build_report(store, now, policy, evidence, preference_features=preference_features)
         timings["report"] = time.monotonic() - phase
         report["runtime"] = {
             **runtime,

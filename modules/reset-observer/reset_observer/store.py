@@ -54,6 +54,8 @@ class Store:
           track TEXT NOT NULL,origin REAL NOT NULL,available_at REAL NOT NULL,
           expires_at REAL NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS forecasts_time ON forecasts(available_at,origin);
+        CREATE INDEX IF NOT EXISTS forecasts_publication_curve ON forecasts(available_at,origin,id)
+          WHERE track IN ('native','model');
         CREATE INDEX IF NOT EXISTS forecasts_latest ON forecasts(source,target,track,origin DESC,available_at DESC,id DESC);
         CREATE TABLE IF NOT EXISTS imports(kind TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(kind,id));
         CREATE TABLE IF NOT EXISTS indicators(id TEXT PRIMARY KEY,source TEXT NOT NULL,observed_at REAL NOT NULL,payload TEXT NOT NULL);
@@ -63,6 +65,10 @@ class Store:
           track TEXT NOT NULL,origin REAL NOT NULL,hours INTEGER NOT NULL,p REAL,
           frozen_at REAL NOT NULL,policy_hash TEXT NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS trials_time ON trials(origin,hours);
+        CREATE TABLE IF NOT EXISTS trial_revisions(
+          id INTEGER PRIMARY KEY,trial TEXT NOT NULL,at REAL NOT NULL,
+          signature TEXT NOT NULL,payload TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS trial_revisions_trial ON trial_revisions(trial,at);
         CREATE TABLE IF NOT EXISTS settlements(
           id INTEGER PRIMARY KEY,trial TEXT NOT NULL,at REAL NOT NULL,signature TEXT NOT NULL,
           label INTEGER,status TEXT NOT NULL,payload TEXT NOT NULL);
@@ -73,6 +79,7 @@ class Store:
           id TEXT PRIMARY KEY,source TEXT NOT NULL,round_id TEXT NOT NULL,
           observed_at REAL NOT NULL,received_at REAL NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS preference_samples_time ON preference_samples(source,round_id,observed_at);
+        CREATE INDEX IF NOT EXISTS preference_samples_received ON preference_samples(received_at);
         CREATE TABLE IF NOT EXISTS preference_trials(id TEXT PRIMARY KEY,frozen_at REAL NOT NULL,payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS preference_settlements(trial TEXT NOT NULL,at REAL NOT NULL,signature TEXT NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS preference_settlements_trial ON preference_settlements(trial,at);
@@ -114,7 +121,10 @@ class Store:
                 self.db.execute("INSERT OR IGNORE INTO payloads VALUES (?,?)", (h, zlib.compress(packed(raw).encode())))
             self.db.execute("INSERT INTO observations(provider,observed_at,generated_at,healthy,claims,payload_hash,error) VALUES (?,?,?,?,?,?,?)",
                             (provider, now, generated, int(healthy), self.pack_json(claims) if claims is not None else None, h, error))
-            self.record_claims(claims or [], now)
+            from .evidence import inventory_revisions
+            revisions = inventory_revisions(self, provider, raw, now, error is None and claims is not None, claims or [])
+            revised = {(c["provider"], c["record"]) for c in revisions}
+            self.record_claims([c for c in claims or [] if (c["provider"], c["record"]) not in revised] + revisions, now)
 
     def record_claims(self, claims, now):
         # Reinterpretation appends knowledge revisions, never monitoring samples.
@@ -190,15 +200,62 @@ class Store:
                              trial["hours"], trial["p"], trial["frozen_at"], trial["policy_hash"], packed(trial)))
         return id
 
-    def trials(self, now):
-        return [{"id": r["id"], **json.loads(r["payload"])} for r in self.db.execute(
-            "SELECT id,payload FROM trials WHERE frozen_at<=? ORDER BY origin,source", (now,))]
+    def trial_revisions(self, now):
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trial_revisions'").fetchone():
+            return {}
+        return {r["trial"]: json.loads(r["payload"]) for r in self.db.execute("""
+          SELECT r.trial,r.payload FROM (SELECT DISTINCT trial FROM trial_revisions) ids
+          JOIN trial_revisions r ON r.id=(SELECT id FROM trial_revisions
+            WHERE trial=ids.trial AND at<=? ORDER BY at DESC,id DESC LIMIT 1)""", (now,))}
+
+    def revise_trial(self, trial, now, revision):
+        signature = digest(revision)
+        last = self.db.execute("SELECT signature FROM trial_revisions WHERE trial=? ORDER BY at DESC,id DESC LIMIT 1", (trial,)).fetchone()
+        if last and last[0] == signature:
+            return False
+        self.db.execute("INSERT INTO trial_revisions(trial,at,signature,payload) VALUES (?,?,?,?)",
+                        (trial, now, signature, packed(revision)))
+        return True
+
+    def trials(self, now, compact=False):
+        revisions = self.trial_revisions(now)
+        if compact:
+            rows = self.db.execute("""SELECT id,source,version,target,track,origin,hours,p,frozen_at,policy_hash,
+              json_extract(qh_json(payload),'$.private','$.headline','$.missing_reason','$.forecast_id',
+                           '$.received_at','$.publication_origin') fields
+              FROM trials WHERE frozen_at<=? ORDER BY origin,source""", (now,))
+        else:
+            rows = self.db.execute("SELECT id,payload FROM trials WHERE frozen_at<=? ORDER BY origin,source", (now,))
+        result = []
+        symbols = {}
+        for row in rows:
+            if compact:
+                value = {key: row[key] for key in row.keys() if key != "fields"}
+                value.update(zip(("private", "headline", "missing_reason", "forecast_id", "received_at", "publication_origin"), json.loads(row["fields"])))
+                for key in ("source", "version", "target", "track", "policy_hash", "missing_reason"):
+                    if isinstance(value.get(key), str):
+                        value[key] = symbols.setdefault(value[key], value[key])
+            else:
+                value = {"id": row["id"], **json.loads(row["payload"])}
+            if revision := revisions.get(row["id"]):
+                value.update(original_probability=value["p"], original_missing_reason=value.get("missing_reason"))
+                value.update(revision)
+            result.append(value)
+        return result
 
     def settle(self, id, now, result, commit=True):
-        signature = digest({k: result.get(k) for k in ("label", "status", "events", "reason",
-            "score_eligible", "event_score_eligible", "coverage_complete", "settlement_version")})
+        content = {k: result.get(k) for k in ("label", "status", "events", "reason",
+            "score_eligible", "event_score_eligible", "coverage_complete", "settlement_version")}
+        if result.get("eligibility_revision") is not None:
+            content["eligibility_revision"] = result["eligibility_revision"]
+        signature = digest(content)
         last = self.db.execute("SELECT signature FROM settlements WHERE trial=? ORDER BY at DESC,id DESC LIMIT 1", (id,)).fetchone()
         if last and last[0] == signature:
+            return False
+        # The first eligibility-aware writer included an empty field in every
+        # signature. Accept those already-written rows as unchanged too, while
+        # preserving actual revision changes and every historical settlement.
+        if last and "eligibility_revision" not in content and last[0] == digest({**content, "eligibility_revision": None}):
             return False
         self.db.execute("INSERT INTO settlements(trial,at,signature,label,status,payload) VALUES (?,?,?,?,?,?)",
                         (id, now, signature, result["label"], result["status"], packed(result)))
@@ -206,15 +263,35 @@ class Store:
             self.db.commit()
         return True
 
-    def settled(self, now):
-        return {r["trial"]: {"at": r["at"], **json.loads(r["payload"])} for r in self.db.execute("""
-          SELECT * FROM (SELECT *,ROW_NUMBER() OVER (PARTITION BY trial ORDER BY at DESC,id DESC) rank
-          FROM settlements WHERE at<=?) WHERE rank=1""", (now,))}
+    def settled(self, now, compact=False):
+        # Seek each trial's latest revision through settlements_trial instead
+        # of sorting all historical payloads on every background report.
+        fields = ("label", "status", "events", "reason", "deadline", "matures_at",
+                  "score_eligible", "event_score_eligible", "coverage_complete",
+                  "settlement_version")
+        projection = ("json_extract(qh_json(s.payload)," +
+                      ",".join("'$." + key + "'" for key in fields) + ")") if compact else "s.payload"
+        rows = self.db.execute(f"""SELECT s.trial,s.at,{projection} AS payload FROM
+          (SELECT DISTINCT trial FROM settlements) trials JOIN settlements s ON s.id=(
+            SELECT id FROM settlements WHERE trial=trials.trial AND at<=?
+            ORDER BY at DESC,id DESC LIMIT 1) ORDER BY s.trial""", (now,))
+        output, symbols = {}, {}
+        for row in rows:
+            value = json.loads(row["payload"])
+            if compact:
+                value = dict(zip(fields, value))
+                for key in ("status", "reason", "settlement_version"):
+                    if isinstance(value.get(key), str):
+                        value[key] = symbols.setdefault(value[key], value[key])
+            output[row["trial"]] = {"at": row["at"], **value}
+        return output
 
     def report(self, now, payload):
         with self.db:
-            self.db.execute("INSERT INTO reports(at,payload) VALUES (?,?)", (now, zlib.compress(packed(payload).encode())))
+            self.db.execute("INSERT INTO reports(at,payload) VALUES (?,?)", (now, self.pack_json(payload)))
 
     def report_at(self, now):
         row = self.db.execute("SELECT payload FROM reports WHERE id=(SELECT id FROM reports WHERE at<=? ORDER BY at DESC,id DESC LIMIT 1)", (now,)).fetchone()
-        return json.loads(zlib.decompress(row[0])) if row else None
+        # QHJSON2 is expanded by the shared row factory. Legacy reports retain
+        # their original zlib representation until explicit maintenance.
+        return json.loads(zlib.decompress(row[0]) if isinstance(row[0], bytes) else row[0]) if row else None

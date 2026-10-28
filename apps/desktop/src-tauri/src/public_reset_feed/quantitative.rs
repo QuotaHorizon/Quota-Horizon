@@ -1380,6 +1380,7 @@ fn parse_report(path: &Path) -> Result<Report, String> {
                 "conditional_pledge"
                     | "population_unspecified"
                     | "insufficient_primary_confirmation"
+                    | "completion_withdrawn"
             )
         ) {
             o.reason = None;

@@ -7,12 +7,35 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 
 from reset_observer.contracts import AUTOMATIC, Forecast
 from reset_observer.store import Store
 
 
 class ObserverStorageTests(unittest.TestCase):
+    def test_shared_reports_preserve_legacy_as_of_reads_and_every_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "observer.sqlite"
+            store = Store(path)
+            detail = [{"id": str(i), "text": "完整历史报告与来源依据" * 150} for i in range(20)]
+            values = [{"at": at, "history": detail, "unknown": None} for at in range(12)]
+            with store.db:
+                store.db.execute("INSERT INTO reports(at,payload) VALUES (?,?)",
+                                 (0, zlib.compress(json.dumps(values[0]).encode())))
+            for at, value in enumerate(values[1:], 1):
+                store.report(at, value)
+            store.close()
+            store = Store(path, read_only=True)
+            for at, value in enumerate(values):
+                self.assertEqual(store.report_at(at), value)
+            self.assertIsNone(store.report_at(-1))
+            self.assertEqual(store.db.execute("SELECT COUNT(*) FROM reports").fetchone()[0], len(values))
+            with sqlite3.connect(path) as raw:
+                self.assertLess(raw.execute("SELECT MAX(length(payload)) FROM reports WHERE at>0").fetchone()[0], 100)
+                self.assertLess(raw.execute("SELECT COUNT(*) FROM json_bodies").fetchone()[0], 40)
+            store.close()
+
     def test_standalone_observer_loads_shared_codec_without_pythonpath(self):
         environment = dict(os.environ)
         environment.pop("PYTHONPATH", None)

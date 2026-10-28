@@ -291,6 +291,7 @@ fn outcome_provider_states_are_optional_and_allowlisted() {
         Some("population_unspecified"),
         Some("conditional_pledge"),
         Some("insufficient_primary_confirmation"),
+        Some("completion_withdrawn"),
         Some("private_diagnostic_content"),
     ] {
         report["outcomes"][0]["reason"] = json!(reason);
@@ -1169,7 +1170,9 @@ fn capture_installed_connection() {
         std::env::var("HORIZON_PUBLIC_LEDGER_TEST_PATH").expect("explicit public journal path"),
     );
     assert_eq!(path.file_name().unwrap(), DB_NAME);
+    let started = std::time::Instant::now();
     let timeline = load_timeline(&path, &now()).unwrap();
+    let cold_ms = started.elapsed().as_secs_f64() * 1000.;
     let q = &timeline.quantitative;
     assert!(
         q.connected && q.forecast_issue.is_none() && q.evaluation_issue.is_none(),
@@ -1189,6 +1192,14 @@ fn capture_installed_connection() {
         r.scorecards.len(),
         r.outcomes.len(),
         r.generated_at
+    );
+    let started = std::time::Instant::now();
+    let repeated = load(path.parent().unwrap(), &now());
+    let warm_ms = started.elapsed().as_secs_f64() * 1000.;
+    assert!(repeated.forecast_issue.is_none() && repeated.evaluation_issue.is_none());
+    println!(
+        "installed-read cold_timeline_ms={cold_ms:.3} warm_exports_ms={warm_ms:.3} same_publication={}",
+        repeated.evaluation.as_ref().unwrap().generated_at == r.generated_at
     );
     if let Ok(output) = std::env::var("HORIZON_PUBLIC_CAPTURE_PATH") {
         fs::write(output, serde_json::to_vec(&timeline).unwrap()).unwrap();

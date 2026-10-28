@@ -7,6 +7,7 @@ of individual accounts. Relays sharing a primary URL are one primary claim.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from http.client import IncompleteRead
 from html.parser import HTMLParser
 import json
@@ -34,7 +35,7 @@ POSITIVE_ONLY_FEEDS = {"codex_reset_status", "completion_page"}
 RETIRED_FEEDS = {"completion_feed"}
 ACTIVE_FEEDS = {key: value for key, value in FEEDS.items() if key not in RETIRED_FEEDS}
 SOURCE_FAMILIES = {"completion_feed": "codex_reset_fm", "completion_page": "codex_reset_fm"}
-INTERPRETATION_VERSION = "structured-completion-links-v6"
+INTERPRETATION_VERSION = "structured-completion-links-v7"
 
 
 class CompletionPage(HTMLParser):
@@ -173,6 +174,80 @@ def didcodex_claims(raw, now):
     if checked > now + 60:
         raise ValueError("future monitor clock")
     return generated, healthy, claims
+
+
+def inventory_revisions(store, provider, raw, now, available, claims):
+    """Withdraw superseded completion evidence from a bounded full inventory.
+
+    This does not infer that no reset occurred. Ordinary feeds, failed snapshots,
+    incomplete day inventories and records outside the retained days preserve
+    their previous evidence. The source's explicit suppression also qualifies.
+    """
+    if provider != "didcodex_status" or not available or not isinstance(raw, dict):
+        return []
+    try:
+        generated, checked = stamp(raw["generatedAt"]), stamp(raw["lastSuccessfulCheckAt"])
+        heatmap, timeline = raw["heatmap"], raw["resetTimeline"]
+        days, events = heatmap["days"], raw["events"]
+        if (raw.get("schemaVersion") != 1 or raw.get("monitor", {}).get("status") != "ok"
+                or max(generated, checked) > now + 60 or now - min(generated, checked) >= 3600
+                or heatmap.get("timezone") != "UTC" or not isinstance(days, list)
+                or not isinstance(events, list) or "nextSchedule" not in timeline
+                or any(not isinstance(timeline.get(k), list) for k in
+                       ("fulfilledSchedules", "manualCompletions", "suppressedPostIds"))):
+            return []
+        covered_days, records, count = set(), {}, 0
+        for day in days:
+            date = day["date"]
+            datetime.strptime(date, "%Y-%m-%d")
+            if date in covered_days or not isinstance(day["sources"], list) or day.get("count") != len(day["sources"]):
+                return []
+            covered_days.add(date)
+            count += len(day["sources"])
+            records.update((str(row["postId"]), row) for row in day["sources"])
+        if type(heatmap.get("total")) is not int or heatmap["total"] != count:
+            return []
+        records.update((str(row["source"]["postId"]), row) for row in events)
+        suppressed = {str(value) for value in timeline["suppressedPostIds"]}
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return []
+    current = {c["record"]: c for c in claims}
+    previous = store.db.execute("""SELECT payload FROM (SELECT payload,ROW_NUMBER() OVER
+      (PARTITION BY record ORDER BY observed_at DESC,id DESC) rank FROM claims
+      WHERE provider=? AND observed_at<=?) WHERE rank=1""", (provider, now))
+    revisions = []
+    for row in previous:
+        old = json.loads(row[0])
+        if old.get("stage") not in ("completed", "withdrawn"):
+            continue
+        record, replacement = old["record"], current.get(old["record"])
+        if replacement and replacement["stage"] in ("completed", "cancelled", "retracted", "disputed"):
+            continue
+        if old["stage"] == "withdrawn":
+            if replacement:
+                revisions.append({**old, "observed_at": now})
+            continue
+        if old.get("completed_at") is None:
+            continue
+        day = datetime.fromtimestamp(old["announced_at"], timezone.utc).date().isoformat()
+        explicit = record in suppressed or str(timeline.get("recentNonCompletedPostId")) == record
+        removed = record not in records and day in covered_days
+        current_kind = records.get(record, {}).get("kind")
+        reclassified = ((replacement is not None and replacement["stage"] in ("announced", "conditional", "started"))
+                        or (day in covered_days and isinstance(current_kind, str) and bool(current_kind)
+                            and current_kind != "reset_completed"))
+        if not (explicit or removed or reclassified) or old["announced_at"] > generated:
+            continue
+        previous_clock = store.db.execute("""SELECT generated_at FROM observations WHERE provider=?
+          AND observed_at<=? AND generated_at IS NOT NULL ORDER BY observed_at DESC,id DESC LIMIT 1""",
+          (provider, old["observed_at"])).fetchone()
+        if previous_clock and generated < previous_clock[0]:
+            continue
+        revisions.append({**old, "stage": "withdrawn", "completed_at": None, "observed_at": now,
+            "prior_completed_at": old["completed_at"], "prior_claim_signature": digest({k: v for k, v in old.items() if k != "observed_at"}),
+            "withdrawal_reason": "source_suppressed_record" if explicit else "source_reclassified_completion" if reclassified else "completion_removed_from_current_day_inventory",
+            "inventory_generated_at": generated, "inventory_checked_at": checked})
+    return revisions
 
 
 def population(text):
@@ -421,10 +496,13 @@ def reinterpret_latest(store, now):
             if row["provider"] not in FEEDS or body is None:
                 continue
             try:
-                _, _, claims = parse(row["provider"], json.loads(zlib.decompress(body[0])), row["observed_at"])
+                raw = json.loads(zlib.decompress(body[0]))
+                _, healthy, claims = parse(row["provider"], raw, row["observed_at"])
             except (KeyError, ValueError, TypeError, AttributeError):
                 continue
-            store.record_claims([{**c, "observed_at": now} for c in claims], now)
+            revisions = inventory_revisions(store, row["provider"], raw, now, True, claims)
+            revised = {(c["provider"], c["record"]) for c in revisions}
+            store.record_claims([{**c, "observed_at": now} for c in claims if (c["provider"], c["record"]) not in revised] + revisions, now)
     store.put("claim_interpretation", INTERPRETATION_VERSION)
     store.runtime_event(now, {"kind": "evidence_reinterpretation", "at": now, "version": INTERPRETATION_VERSION})
 
@@ -442,6 +520,7 @@ def reconcile(store, now, policy):
     for group in groups:
         refs = sorted({r for c in group for r in c["references"]})
         completed = [c for c in group if c["stage"] == "completed" and c["completed_at"] is not None]
+        withdrawn = [c for c in group if c["stage"] == "withdrawn" and c.get("prior_completed_at") is not None]
         kinds = {c["kind"] for c in completed or group}
         kinds.discard("unknown")
         times = [c["completed_at"] for c in completed]
@@ -461,6 +540,11 @@ def reconcile(store, now, policy):
         status, reason = "pending", "no_completion_report"
         if stage_conflict or any(c["stage"] in ("retracted", "cancelled", "disputed") for c in group):
             status, reason = "disputed", "conflicting_or_retracted_report"
+        elif withdrawn and not completed:
+            # Retain the previous possible occurrence interval for unresolved
+            # settlement, while removing its authority to close a live cycle.
+            reason = "completion_withdrawn"
+            times = [c["prior_completed_at"] for c in withdrawn]
         elif not completed and any(c["stage"] == "conditional" for c in group):
             reason = "conditional_pledge"
         elif not completed and "targeted" in populations:

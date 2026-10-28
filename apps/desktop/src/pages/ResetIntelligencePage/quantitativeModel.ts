@@ -67,7 +67,11 @@ export function combinedStatements(timeline: PublicResetTimeline): PublicPost[] 
 }
 export function latestCompletion(timeline: PublicResetTimeline, now: number) {
   return combinedStatements(timeline).find(p => p.stage === "completed" && ["reset_report", "grant"].includes(p.kind)
-    && Date.parse(p.publishedAt) <= now + 60_000);
+    && Date.parse(p.publishedAt) <= now + 60_000
+    && !timeline.quantitative?.evaluation?.outcomes.some(outcome =>
+      outcome.status === "pending" && outcome.reason === "completion_withdrawn"
+      && outcome.known_at * 1000 <= now && outcome.known_at * 1000 >= Date.parse(p.publishedAt)
+      && outcome.references.some(url => url.match(/\/status\/(\d+)(?:\/|$|\?)/u)?.[1] === p.id)));
 }
 export function activeForecastAnnouncement(timeline: PublicResetTimeline, now: number) {
   return timeline.quantitative?.forecast?.forecasts.flatMap(f => {

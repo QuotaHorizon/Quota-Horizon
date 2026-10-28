@@ -64,51 +64,50 @@ def publication_curves(store, now):
     Determine continuity from every receipt before keeping the latest point per
     hour/continuous segment. Recovery boundaries remain actual receipt points.
     """
-    # Use the receipt-time index and project only curve fields: model metadata
-    # can be large, and neither older history nor other tracks belong here.
+    # The reaction index already holds the exact publication probabilities.
+    # Reuse that compact projection instead of expanding large model metadata
+    # again. Older/unindexed receipts retain the original decoding path.
     rows = store.db.execute(
-        """SELECT source,version,target,track,origin,available_at,expires_at,
-        json_extract(qh_json(payload),'$.private','$.issues','$.points','$.generated_at') AS fields
-        FROM forecasts
-        WHERE available_at BETWEEN ? AND ? AND track IN ('native','model')
-        ORDER BY available_at,origin,id""",
+        """SELECT f.source,f.version,f.target,f.track,f.origin,f.available_at,f.expires_at,
+        r.payload AS projection,
+        CASE WHEN r.id IS NULL THEN
+          json_extract(qh_json(f.payload),'$.private','$.issues','$.points','$.generated_at')
+        END AS fields
+        FROM forecasts f LEFT JOIN reaction_forecasts r ON r.id=f.id
+        WHERE f.available_at BETWEEN ? AND ? AND f.track IN ('native','model')
+        ORDER BY f.available_at,f.origin,f.id""",
         (now - 7 * 86400, now),
     )
     curves, coverage_end, recovery = defaultdict(list), {}, {}
     for row in rows:
-        private, issues, points, generated_at = json.loads(row["fields"])
-        if private:
-            continue
-        f = Forecast(
-            **{
-                name: row[name]
-                for name in (
-                    "source",
-                    "version",
-                    "target",
-                    "track",
-                    "origin",
-                    "available_at",
-                    "expires_at",
-                )
-            },
-            points=points,
-            generated_at=generated_at,
-            issues=issues or [],
-        )
+        if row["projection"] is not None:
+            projection = json.loads(row["projection"])
+            issues = projection["issues"]
+            probabilities = {h: projection[f"p{h}"] for h in (24, 48)}
+        else:
+            private, issues, points, generated_at = json.loads(row["fields"])
+            if private:
+                continue
+            forecast = Forecast(
+                **{name: row[name] for name in (
+                    "source", "version", "target", "track", "origin", "available_at", "expires_at",
+                )},
+                points=points, generated_at=generated_at, issues=issues or [],
+            )
+            probabilities = {h: forecast.cdf(h) for h in (24, 48)}
         for h in (24, 48):
-            key = f.source, f.version, f.target, f.track, h
+            key = row["source"], row["version"], row["target"], row["track"], h
             values = curves[key]
             end = coverage_end.get(key)
-            if end is not None and end < f.available_at:
+            if end is not None and end < row["available_at"]:
                 values.append({"at": end, "p": None})
                 coverage_end.pop(key)
             p = (
-                f.cdf(h)
-                if not f.issues and f.origin <= f.available_at < f.expires_at
+                probabilities[h]
+                if not issues and row["origin"] <= row["available_at"] < row["expires_at"]
                 else None
             )
-            point = {"at": f.available_at, "p": p}
+            point = {"at": row["available_at"], "p": p}
             if p is None:
                 # An explicit invalid/unsupported publication is a boundary,
                 # even while an earlier forecast would otherwise cover it.
@@ -121,7 +120,7 @@ def publication_curves(store, now):
                     values.append(point)
                 elif (
                     values
-                    and int(values[-1]["at"] // 3600) == int(f.available_at // 3600)
+                    and int(values[-1]["at"] // 3600) == int(row["available_at"] // 3600)
                     and recovery.get(key) != len(values) - 1
                 ):
                     values[-1] = point
@@ -130,7 +129,7 @@ def publication_curves(store, now):
                 # A newer short TTL must not erase still-valid coverage from
                 # earlier receipts in this same version/horizon/segment.
                 coverage_end[key] = max(
-                    coverage_end.get(key, f.expires_at), f.expires_at
+                    coverage_end.get(key, row["expires_at"]), row["expires_at"]
                 )
     for key, expiry in coverage_end.items():
         if expiry < now:
@@ -188,21 +187,25 @@ def paired_comparisons(scored, policy, safe):
     return comparisons
 
 
-def build_report(store, now, policy, evidence):
+def build_report(store, now, policy, evidence, preference_features=None):
     forecasts = store.forecasts(now, latest=True)
     private = {f.source for f in forecasts if f.private}
     safe = lambda source: source_name(source, source in private)
     latest = {}
     for f in forecasts:
+        # The report only needs the reset anchor for cycle eligibility. Keep
+        # full input provenance in its immutable forecast row, not beside every
+        # historical trial while the report is assembled.
+        f.metadata = {"last_reset_at": f.metadata.get("last_reset_at")}
         key = f.source, f.target, f.track
         if key not in latest or (f.origin, f.available_at) >= (
             latest[key].origin,
             latest[key].available_at,
         ):
             latest[key] = f
-    trials = store.trials(now)
+    trials = store.trials(now, compact=True)
     private.update(r["source"] for r in trials if r.get("private"))
-    settlements = store.settled(now)
+    settlements = store.settled(now, compact=True)
     groups = defaultdict(list)
     for trial in trials:
         groups[
@@ -217,19 +220,21 @@ def build_report(store, now, policy, evidence):
     for f in latest.values():
         for hours in HORIZONS:
             groups.setdefault((f.source, f.version, f.target, f.track, hours), [])
-    rows, scored, all_scored = [], {}, {}
+    rows, scored = [], {}
     for key, members in sorted(groups.items()):
         source, version, target, track, hours = key
         labels = [(r, settlements.get(r["id"], {"status": "pending"})) for r in members]
         usable = [
-            {**r, **label}
+            {**{name: r[name] for name in ("origin", "hours", "target", "p", "headline")},
+             "label": label["label"], "events": label.get("events", [])}
             for r, label in labels
             if label.get("score_eligible") and r["p"] is not None
         ]
         headline = [r for r in usable if r["headline"]]
-        partial_events = [{**r, **label} for r, label in labels
+        partial_events = [{"origin": r["origin"], "p": r["p"], "label": label["label"],
+                           "events": label.get("events", [])} for r, label in labels
                           if r["headline"] and label.get("event_score_eligible") and not label.get("coverage_complete")]
-        scored[key], all_scored[key] = headline, usable
+        scored[key] = headline
         missing = Counter(r["missing_reason"] for r in members if r["p"] is None)
         row = {
             "source": safe(source),
@@ -369,7 +374,7 @@ def build_report(store, now, policy, evidence):
         },
         "latest": latest_rows,
         "indicators": indicators,
-        "calendar_sentiment": preference_report(store, now),
+        "calendar_sentiment": preference_report(store, now, latest=preference_features),
         "reaction": reaction_report(store, now, evidence, policy),
         "outcome_providers": providers,
         "outcomes": outcomes,

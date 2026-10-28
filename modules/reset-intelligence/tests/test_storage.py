@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import sqlite3
 import zlib
+from unittest.mock import patch
 
 from reset_intelligence.contracts import AUTOMATIC, Observation, digest
 from reset_intelligence.store import Store
@@ -12,6 +13,19 @@ from reset_intelligence.storage_codec import configure_storage
 
 
 class StorageCompatibilityTests(unittest.TestCase):
+    def test_intern_cache_is_bounded_and_reuses_persisted_subtrees(self):
+        common = {"facts": [{"id": n, "body": "完整来源资料" * 200} for n in range(5)]}
+        with patch("reset_intelligence.storage_codec._INTERN_CACHE_ENTRIES", 4):
+            with self.store.db:
+                for at in range(10):
+                    encoded = self.store.pack_json({"at": at, "shared": common})
+                    self.assertLessEqual(len(self.store.json_storage.intern_cache), 4)
+                    self.store.db.execute("INSERT INTO forecasts VALUES (?,?,?,?,?)", (str(at), at, "target", "test", encoded))
+        self.store.close()
+        self.store = Store(self.path, read_only=True)
+        rows = self.store.db.execute("SELECT payload FROM forecasts ORDER BY issued_at").fetchall()
+        self.assertEqual([json.loads(row[0]) for row in rows], [{"at": at, "shared": common} for at in range(10)])
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.path = Path(self.directory.name) / "state.sqlite"

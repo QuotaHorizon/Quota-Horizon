@@ -175,7 +175,7 @@ class ReportStorageTests(TemporaryStore):
         self.assertEqual(selected["id"] if selected else None, expected_id)
         self.assertEqual(
             actual,
-            json.loads(zlib.decompress(original["payload"])) if original else None,
+            json.loads(zlib.decompress(original["payload"]) if isinstance(original["payload"], bytes) else original["payload"]) if original else None,
         )
         return query
 
@@ -197,7 +197,7 @@ class ReportStorageTests(TemporaryStore):
             blob = self.store.db.execute(
                 "SELECT payload FROM reports ORDER BY id DESC LIMIT 1"
             ).fetchone()[0]
-            self.assertEqual(blob, zlib.compress(packed(report).encode()))
+            self.assertEqual(json.loads(blob), report)
         for at, expected in (
             (9, None),
             (10, 2),

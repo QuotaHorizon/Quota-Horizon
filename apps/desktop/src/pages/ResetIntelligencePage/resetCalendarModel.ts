@@ -154,6 +154,9 @@ export function resetCalendarRecords(archive: PublicResetArchiveEntry[], live: P
   // A denial is not a calendar event, but must still suppress a mirrored old
   // occurrence. Do this before filtering negatives out of calendar records.
   const withdrawals = inputs.filter((input) => isPublicWithdrawal(input.entry));
+  const completionWithdrawals = new Set(outcomes.filter(outcome => outcome.status === "pending"
+    && outcome.reason === "completion_withdrawn" && Number.isFinite(outcome.known_at)
+    && outcome.known_at * 1000 <= now).flatMap(outcome => outcome.references.map(referenceKey).filter(Boolean)));
   const completions = outcomes.flatMap(outcome => {
     const value = completionRecord(outcome, language, now);
     if (!value) return [];
@@ -219,6 +222,7 @@ export function resetCalendarRecords(archive: PublicResetArchiveEntry[], live: P
       || a.value.key.localeCompare(b.value.key));
     const selected = group[0].value;
     const withdrawn = group.some((item) => item.value.withdrawn
+      || item.value.sources.some(source => completionWithdrawals.has(referenceKey(source.url)))
       || (item.input != null && withdrawals.some((other) => sameResetSubject(item.input!.entry.signal, other.entry.signal))));
     const sources = group.flatMap((item) => item.value.sources).filter((source, index, all) => all.findIndex((other) => other.url === source.url && other.time === source.time && other.basis === source.basis) === index);
     // Announcement and delivery/confirmation can legitimately have different

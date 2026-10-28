@@ -17,6 +17,7 @@ _PREFIX = b"\x00QHJSON2\x00"
 _FAMILY = b"\x00QHJSON"
 _THRESHOLD = 2048
 _CACHE_BYTES = 16 * 1024 * 1024
+_INTERN_CACHE_ENTRIES = 4096
 
 
 def _packed(value):
@@ -28,6 +29,9 @@ class JSONStorage:
         self.db = db
         self.cache = OrderedDict()
         self.cache_bytes = 0
+        # Content digests, not another copy of large evidence trees. Repeated
+        # report subtrees can reuse a persisted body without encoding it again.
+        self.intern_cache = OrderedDict()
         if not read_only:
             db.execute("CREATE TABLE IF NOT EXISTS json_bodies(hash TEXT PRIMARY KEY,body BLOB NOT NULL)")
 
@@ -45,6 +49,15 @@ class JSONStorage:
             self.cache_bytes -= old_size
 
     def _intern(self, value, text=None):
+        text = text if text is not None else _packed(value)
+        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        existing = self.intern_cache.get(content_hash)
+        if existing is not None and self.db.execute("SELECT 1 FROM json_bodies WHERE hash=?", (existing,)).fetchone():
+            # An earlier transaction may have rolled back. Only the actual body
+            # table establishes persistence; a cache entry alone never does.
+            self.intern_cache.move_to_end(content_hash)
+            self._remember(existing, text)
+            return existing
         refs = []
         if isinstance(value, (dict, list, tuple)):
             is_object = isinstance(value, dict)
@@ -60,8 +73,12 @@ class JSONStorage:
                     template.append(child)
         else:
             template = value
-        return self._store({"version": 1, "value": template, "refs": refs},
-                           text if text is not None else _packed(value))
+        key = self._store({"version": 1, "value": template, "refs": refs}, text)
+        self.intern_cache[content_hash] = key
+        self.intern_cache.move_to_end(content_hash)
+        while len(self.intern_cache) > _INTERN_CACHE_ENTRIES:
+            self.intern_cache.popitem(last=False)
+        return key
 
     def _store(self, envelope, text):
         encoded = _packed(envelope).encode("utf-8")

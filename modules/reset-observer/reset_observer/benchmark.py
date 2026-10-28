@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import json
 import math
 
 from . import SETTLEMENT_VERSION
-from .contracts import AUTOMATIC, HORIZONS
+from .contracts import AUTOMATIC, HORIZONS, Forecast
 from .evidence import coverage, reconcile
 
 
@@ -128,12 +129,93 @@ def label_window(trial, events, now, policy, covered):
     return result
 
 
+def revise_trial_eligibility(store, now, policy, evidence, truth_hash):
+    """Append corrections to event exclusions using the original received forecast.
+
+    No probability model is rerun and no frozen row is replaced. The correction
+    is visible only from its own knowledge time; earlier as-of reads retain the
+    original exclusion and old settlements. Every source/track is treated alike.
+    """
+    context = store.get("trial_revision_context")
+    if context == truth_hash:
+        return 0
+    prior = store.trial_revisions(now)
+    times = [e["from"] for e in evidence["events"]
+             if e.get("reason") == "completion_withdrawn" and e.get("from") is not None]
+    old_hash = context or (store.get("settlement_context") or {}).get("truth_hash")
+    if old_hash:
+        previous = store.db.execute("SELECT payload FROM truth_revisions WHERE hash=?", (old_hash,)).fetchone()
+        if previous:
+            for old in json.loads(previous[0])["events"]:
+                if old.get("from") is None:
+                    continue
+                matches = [e for e in evidence["events"] if set(e["references"]) & set(old["references"])]
+                if not matches or any(tuple(e.get(k) for k in ("status", "reason", "from", "to")) !=
+                                      tuple(old.get(k) for k in ("status", "reason", "from", "to")) for e in matches):
+                    times.append(old["from"])
+    if prior:
+        row = store.db.execute("""SELECT MIN(t.origin) FROM trials t JOIN
+          (SELECT DISTINCT trial FROM trial_revisions WHERE at<=?) r ON r.trial=t.id""", (now,)).fetchone()
+        if row[0] is not None:
+            times.append(row[0])
+    if not times:
+        store.put("trial_revision_context", truth_hash)
+        return 0
+    rows = store.db.execute("""SELECT id,payload FROM trials WHERE frozen_at<=? AND origin>=?
+      AND (p IS NULL OR id IN (SELECT trial FROM trial_revisions WHERE at<=?)) ORDER BY origin,id""",
+      (now, min(times), now)).fetchall()
+    # Finish the read cursor before appending revisions. A concurrent collector
+    # or maintenance batch can commit while probabilities are reconstructed;
+    # upgrading its older WAL snapshot would otherwise fail with SQLITE_BUSY_SNAPSHOT.
+    history, forecasts, count = {}, {}, 0
+    with store.db:
+        for row in rows:
+            original = json.loads(row["payload"])
+            if original.get("missing_reason") not in ("source_missed_known_event", "event_since_forecast"):
+                continue
+            identifier = original.get("forecast_id")
+            if not identifier:
+                continue
+            if identifier not in forecasts:
+                saved = store.db.execute("SELECT payload FROM forecasts WHERE id=? AND available_at<=?", (identifier, original["origin"])).fetchone()
+                forecasts[identifier] = Forecast(**json.loads(saved[0])) if saved else None
+            forecast = forecasts[identifier]
+            if forecast is None:
+                continue
+            origin = original["origin"]
+            if origin not in history:
+                history[origin] = reconcile(store, origin, policy)["events"]
+            corrected = []
+            for event in evidence["events"]:
+                # Reinstatement of the same previously known event must also
+                # reinstate its exclusion. A newly discovered unrelated event
+                # must never be backdated into the original information set.
+                old = [e for e in history[origin] if set(e["references"]) & set(event["references"])
+                       and (e["status"] == "confirmed" or (e["status"] == "pending"
+                            and e.get("reason") == "insufficient_primary_confirmation"
+                            and any(c["provider"] == "codex_reset_status" and c["stage"] == "completed"
+                                    for c in e.get("claims", []))))]
+                known = min([event.get("known_at", now)] + [e.get("known_at", origin) for e in old])
+                corrected.append({**event, "known_at": known})
+            p, reason = trial_probability(forecast, origin, original["hours"], corrected, policy)
+            current = prior.get(row["id"], original)
+            if p == current.get("p") and reason == current.get("missing_reason"):
+                continue
+            revision = {"p": p, "missing_reason": reason, "eligibility_revision": {
+                "at": now, "reason": "completion_evidence_revision", "truth_hash": truth_hash,
+                "forecast_id": identifier, "method": "original_received_forecast_with_revised_evidence"}}
+            count += store.revise_trial(row["id"], now, revision)
+    store.put("trial_revision_context", truth_hash)
+    return count
+
+
 def settle_all(store, now, policy, evidence):
     truth_hash = store.truth(now, evidence)
-    trials = store.trials(now)
-    previous = store.settled(now)
+    revised = revise_trial_eligibility(store, now, policy, evidence, truth_hash)
+    trials = store.trials(now, compact=True)
+    previous = store.settled(now, compact=True)
     context = {"truth_hash": truth_hash, "settlement_version": SETTLEMENT_VERSION}
-    unchanged_evidence = store.get("settlement_context") == context
+    unchanged_evidence = store.get("settlement_context") == context and not revised
     changes = 0
     cached_coverage = {}
     with store.db:
@@ -148,6 +230,8 @@ def settle_all(store, now, policy, evidence):
                 cached_coverage[key] = now >= end + policy.reporting_grace_seconds and coverage(store, trial["origin"], end, now, policy)
             result = label_window(trial, evidence["events"], now, policy, cached_coverage[key])
             result["truth_hash"] = truth_hash
+            if trial.get("eligibility_revision"):
+                result["eligibility_revision"] = trial["eligibility_revision"]
             changes += store.settle(trial["id"], now, result, commit=False)
     store.put("settlement_context", context)
     return changes

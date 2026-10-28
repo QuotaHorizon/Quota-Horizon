@@ -217,14 +217,14 @@ def frozen_trial(store, f, now, policy, evidence, sampling):
             "comparisons": comparisons}
 
 
-def freeze(store, now, policy, evidence):
+def freeze(store, now, policy, evidence, current=None):
     activation_key = CHECKPOINT_VERSION + ":activated_at"
     activated_at = store.get(activation_key)
     if activated_at is None:
         store.put(activation_key, now)
         activated_at = now
     created = 0
-    for f in current_features(store, now):
+    for f in current_features(store, now) if current is None else current:
         if f["state"] != "ready_for_evaluation":
             continue
         # The calendar question is already answered once an independently
@@ -254,7 +254,10 @@ def freeze(store, now, policy, evidence):
 
 def settle(store, now, policy, evidence):
     changed = 0
-    for row in store.db.execute("SELECT id,payload FROM preference_trials WHERE frozen_at<=?", (now,)):
+    # These frozen checkpoints are immutable. Release the read snapshot before
+    # doing coverage work and writing, so other collectors can commit meanwhile.
+    trials = store.db.execute("SELECT id,payload FROM preference_trials WHERE frozen_at<=?", (now,)).fetchall()
+    for row in trials:
         trial = json.loads(row["payload"])
         coverage = coverage_details(store, trial["origin"], trial["origin"]+trial["hours"]*3600, now, policy)
         result = label_window(trial, evidence["events"], now, policy, coverage["covered"])
@@ -300,8 +303,9 @@ def activity_endpoint(sample, settlement):
             "mismatch": mismatch, "used_for_completion_settlement": False}
 
 
-def report(store, now):
-    latest = current_features(store, now)
+def report(store, now, latest=None):
+    if latest is None:
+        latest = current_features(store, now)
     trials = []
     activity_samples = {}
     for row in store.db.execute("SELECT id,payload FROM preference_trials WHERE frozen_at<=? ORDER BY frozen_at DESC", (now,)):

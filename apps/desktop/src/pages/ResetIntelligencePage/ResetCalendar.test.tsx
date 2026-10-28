@@ -50,6 +50,45 @@ function completion(overrides: Partial<QuantReport["outcomes"][number]> = {}): Q
 }
 
 describe("reset calendar evidence and time semantics", () => {
+  it("uses the later confirmed completion time when a withdrawn post remains in its evidence trail", () => {
+    const oldTime = 1793161102000, actualTime = 1793168978000;
+    const outcome = completion({ status: "confirmed", reason: "public_completion_notice",
+      from: actualTime / 1000, to: actualTime / 1000, known_at: 1793169082.282332,
+      completion_reports: 2, references: ["https://x.com/i/status/2115297093879472332",
+        "https://x.com/i/status/2115330127886463244"] });
+    const records = resetCalendarRecords([], [], "zh", actualTime + 3600000, [outcome]);
+    expect(records).toMatchObject([{ time: actualTime, withdrawn: false }]);
+    expect(records.some(record => record.time === oldTime)).toBe(false);
+    expect(records[0].sources.map(source => source.url)).toEqual(outcome.references);
+  });
+  it("removes a withdrawn completion from the calendar and restores a later confirmation", () => {
+    const event = completion({ status: "confirmed", reason: null });
+    expect(resetCalendarRecords([], [], "zh", afterCompletion, [event])).toHaveLength(1);
+    const revised = { ...event, status: "pending", reason: "completion_withdrawn", completion_reports: 0 };
+    expect(resetCalendarRecords([], [], "zh", afterCompletion, [revised])).toEqual([]);
+    expect(revised.references).toEqual(event.references);
+    expect(event.status).toBe("confirmed");
+    expect(resetCalendarRecords([], [], "zh", afterCompletion, [{ ...revised, status: "confirmed", reason: null, completion_reports: 1 }])).toHaveLength(1);
+  });
+  it("propagates a completion withdrawal to cached live and archive mirrors at its knowledge time", () => {
+    const id = "2110618732666257557", cached = lead(id), saved = reviewed(id);
+    const event = completion({ status: "pending", reason: "completion_withdrawn", completion_reports: 0 });
+    for (const input of [cached, saved]) {
+      input.signal.occurredAt = new Date(completionAt).toISOString();
+      input.signal.source.publishedAt = new Date(completionAt).toISOString();
+    }
+    const before = resetCalendarRecords([saved], [cached], "zh", event.known_at * 1000 - 1, [event]);
+    expect(before).toMatchObject([{ mode: "events", withdrawn: false, time: completionAt }]);
+    const after = resetCalendarRecords([saved], [cached], "zh", afterCompletion, [event]);
+    expect(after).toMatchObject([{ withdrawn: true, time: null, reviewed: false }]);
+    expect(after[0].sources).toEqual(before[0].sources);
+    expect(resetCalendarRecords([saved], [cached], "zh", afterCompletion,
+      [{ ...event, references: ["https://x.com/i/status/999999"] }])).toMatchObject([{ withdrawn: false, time: completionAt }]);
+    expect(resetCalendarRecords([saved], [cached], "zh", afterCompletion,
+      [{ ...event, status: "confirmed", reason: "public_completion_notice", completion_reports: 1 }]))
+      .toMatchObject([{ withdrawn: false, time: completionAt }]);
+    expect(cached.signal.semantics).toBe("confirmed_reset");
+  });
   it.each(["zh", "en"] as const)("shows an observed completion in the default calendar while scope remains pending in %s", language => {
     const outcomes = [completion()];
     const saved = JSON.stringify(outcomes);
