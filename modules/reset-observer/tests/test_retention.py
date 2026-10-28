@@ -12,6 +12,33 @@ from reset_observer.contracts import Forecast, RELIEF, packed
 
 
 class ReportRetentionTests(unittest.TestCase):
+    def test_worker_automatically_upgrades_legacy_observer_without_touching_ledger(self):
+        from types import SimpleNamespace
+        from reset_observer.runtime import maintain_storage
+        original = {"frozen_prediction": .91234567, "evidence": "public source record " * 2000}
+        with self.store.db:
+            for i in range(12):
+                self.store.db.execute("INSERT INTO runtime_events(id,at,payload) VALUES (?,?,?)", (i*3+1, i, json.dumps(original)))
+                self.store.db.execute("INSERT INTO reports(at,payload) VALUES (?,?)", (i, zlib.compress(json.dumps({"policy":{}, "n":i, "details":"archive "*10000}).encode())))
+            self.store.db.execute("DELETE FROM qh_storage_upgrade")
+        self.store.close()
+        db = sqlite3.connect(self.path)
+        db.execute("PRAGMA auto_vacuum=NONE")
+        db.execute("VACUUM")
+        db.close()
+        for _ in range(40):
+            result = maintain_storage(SimpleNamespace(db=self.path, producer_db=None))["observer"]
+            self.assertNotEqual(result.get("state"), "deferred", result)
+            if result["phase"] == "done":
+                break
+        self.assertEqual(result["phase"], "done")
+        self.store = Store(self.path)
+        self.assertEqual(self.store.db.execute("PRAGMA auto_vacuum").fetchone()[0], 2)
+        rows = self.store.db.execute("SELECT id,payload FROM runtime_events ORDER BY id").fetchall()
+        self.assertEqual([r[0] for r in rows], [i*3+1 for i in range(12)])
+        self.assertTrue(all(json.loads(r[1]) == original for r in rows))
+        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM reports").fetchone()[0], 2)
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.path = Path(self.directory.name) / "observer.sqlite"

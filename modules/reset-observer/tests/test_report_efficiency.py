@@ -8,11 +8,21 @@ from test_preferences import poll
 from reset_observer.benchmark import initialize
 from reset_observer.preferences import capture, current_features
 from reset_observer.reaction import record_forecast
-from reset_observer.reporting import build_report, publication_curves
+from reset_observer.reporting import build_report, publication_curves, thin_curve
 from reset_observer.runtime import run_once
 
 
 class CompactReportTests(TemporaryStore):
+    def test_hourly_chart_preserves_both_sides_of_real_reset_step(self):
+        points = [{"at": T + m * 60, "p": .94 if m < 31 else .30} for m in range(60)]
+        output = thin_curve(points)
+        self.assertIn(points[30], output)
+        self.assertIn(points[31], output)
+        self.assertEqual(output[0], points[0])
+        self.assertEqual(output[-1], points[-1])
+        self.assertLess(len(output), 10)
+        gap = [{"at": T+3600, "p": None}, {"at": T+3900, "p": .5}]
+        self.assertEqual(thin_curve(points + gap)[-2:], gap)
     def test_curve_and_count_queries_use_their_bounded_indexes(self):
         curves = self.store.db.execute("""EXPLAIN QUERY PLAN SELECT f.source,f.available_at,r.payload
             FROM forecasts f LEFT JOIN reaction_forecasts r ON r.id=f.id

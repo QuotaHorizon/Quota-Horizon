@@ -7,7 +7,7 @@ import sqlite3
 import zlib
 
 from .contracts import Observation, digest
-from .storage_codec import configure_storage, RETIRED_RAW
+from .storage_codec import configure_storage, RETIRED_RAW, prepare_upgrade
 
 
 _COMPRESSED_JSON = b"QHJSON\x01ZLIB\x00"
@@ -70,6 +70,9 @@ class Store:
             hash TEXT PRIMARY KEY, first_seen_at REAL NOT NULL, payload TEXT NOT NULL);
         """)
         self.json_storage = configure_storage(self.db)
+        prepare_upgrade(self.db, new_database)
+        from .automatic_storage import recover_rowids
+        recover_rowids(self.db)
 
     def close(self):
         self.db.close()

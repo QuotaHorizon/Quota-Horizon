@@ -65,14 +65,17 @@ describe("combined radar overview", () => {
     const r = radar(); r.estimate = null;
     expect(forecastPresentation(undefined, now, false, timeline(r)).probability24h).toBeNull();
   });
-  it("puts both horizons and all admitted sources on one chart, excluding unreviewed input", () => {
+  it("plots 24h history for all admitted sources while retaining both headline horizons", () => {
     const r = radar();
     r.forecasts = [source, { ...source, id: "reset_monitor", name: "Codex Reset Monitor", method: "statements", history: r.history },
       { ...source, id: "reset_app", name: "CodexReset.app", method: "mixed", probability24h: 78, probability48h: 92 }];
     const html = renderToStaticMarkup(<RadarOverview timeline={timeline(r)} radar={r} now={now} language="zh" />);
-    for (const id of ["horizon", "reset_monitor", "codex_reset"]) for (const h of [24, 48]) expect(html).toContain(`data-series="${id}-${h}"`);
+    for (const id of ["horizon", "reset_monitor", "codex_reset"]) {
+      expect(html).toContain(`data-series="${id}-24"`);
+      expect(html).not.toContain(`data-series="${id}-48"`);
+    }
     expect(html).toContain("未来 24 小时"); expect(html).toContain("未来 48 小时");
-    expect(html).toContain('stroke-dasharray="6 5"'); expect(html).toContain("var(--radar-blue)");
+    expect(html).not.toContain('stroke-dasharray="6 5"'); expect(html).toContain("var(--radar-blue)");
     expect(html).not.toContain("78%"); expect(html).not.toContain('data-series="reset_app');
     expect(html).not.toMatch(/<button[^>]*>24h/); expect(html).not.toMatch(/<button[^>]*>Horizon/);
   });

@@ -581,3 +581,13 @@ def reconcile(store, now, policy):
 def coverage(store, start, end, known_by, policy):
     from .diagnostics import coverage_details
     return coverage_details(store, start, end, known_by, policy)["covered"]
+
+
+def completion_export(evidence, now):
+    """Small, revision-aware outcome contract; never exports forecast values."""
+    return {"schema_version": "reset-completions/1", "generated_at": now,
+        "events": [{"id": event["id"], "status": event["status"], "kind": event["kind"],
+            "at": event["to"] or event["announced_at"], "known_at": event["known_at"],
+            "references": sorted(set(event["references"]) | {
+                key for claim in event["claims"] for key in claim["keys"] if key.startswith("https://")})}
+            for event in evidence["events"]]}

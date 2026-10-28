@@ -8,7 +8,8 @@ import zlib
 
 from .contracts import Forecast, digest, packed
 try:
-    from reset_intelligence.storage_codec import configure_storage, pack_inline, RETIRED_RAW, maintain_raw_cache, reclaim_pages
+    from reset_intelligence.storage_codec import configure_storage, pack_inline, RETIRED_RAW, maintain_raw_cache, reclaim_pages, prepare_upgrade, retention_ready
+    from reset_intelligence.automatic_storage import recover_rowids, step as storage_upgrade_step
 except ModuleNotFoundError as error:
     if error.name != "reset_intelligence":
         raise
@@ -16,17 +17,26 @@ except ModuleNotFoundError as error:
     # Resolve the sibling shared codec without changing sys.path or requiring an
     # environment install; bundled distributions import the package above.
     import importlib.util
-    codec_path = Path(__file__).resolve().parents[2] / "reset-intelligence" / "reset_intelligence" / "storage_codec.py"
-    spec = importlib.util.spec_from_file_location("_quota_horizon_storage_codec", codec_path)
+    import importlib
+    import sys
+    package_path = Path(__file__).resolve().parents[2] / "reset-intelligence" / "reset_intelligence"
+    spec = importlib.util.spec_from_file_location("_quota_horizon_storage", package_path / "__init__.py", submodule_search_locations=[str(package_path)])
     if spec is None or spec.loader is None:
         raise ImportError("shared reset storage codec is unavailable") from error
-    codec = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(codec)
+    package = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = package
+    spec.loader.exec_module(package)
+    codec = importlib.import_module(spec.name + ".storage_codec")
+    maintenance = importlib.import_module(spec.name + ".automatic_storage")
     configure_storage = codec.configure_storage
     pack_inline = codec.pack_inline
     RETIRED_RAW = codec.RETIRED_RAW
     maintain_raw_cache = codec.maintain_raw_cache
     reclaim_pages = codec.reclaim_pages
+    prepare_upgrade = codec.prepare_upgrade
+    retention_ready = codec.retention_ready
+    recover_rowids = maintenance.recover_rowids
+    storage_upgrade_step = maintenance.step
 
 
 class Store:
@@ -98,6 +108,8 @@ class Store:
         CREATE INDEX IF NOT EXISTS reaction_forecasts_series ON reaction_forecasts(source,target,track,available_at);
         """)
         self.json_storage = configure_storage(self.db)
+        prepare_upgrade(self.db, new_database)
+        recover_rowids(self.db)
 
     def close(self):
         self.db.close()

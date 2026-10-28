@@ -7,7 +7,7 @@ forecasts while retaining an unknown occurrence time.
 """
 import math
 
-from .contracts import AUTOMATIC, RELIEF, canonical_url, digest
+from .contracts import AUTOMATIC, RELIEF, event_reference, digest
 from .sources import CATALOG
 
 
@@ -20,7 +20,7 @@ def references(values):
     result = []
     for value in values:
         try:
-            url = canonical_url(value)
+            url = event_reference(value)
         except (TypeError, ValueError, AttributeError):
             continue
         if url not in result:
@@ -61,7 +61,7 @@ def live_cycle(observations, historical_at, now, historical_events=None, target=
     for obs in observations.values():
         if obs.observed_at > now or obs.issues:
             continue
-        facts.extend((obs, f) for f in obs.facts if f.get("kind") == "statement")
+        facts.extend((obs, f) for f in obs.facts if f.get("kind") in ("statement", "structured_completion"))
         for curve in obs.curves:
             if (adapter_for(curve) not in ("codex_reset", "monitor", "nextreset")
                     or curve.target != AUTOMATIC or curve.private or curve.issues
@@ -77,30 +77,54 @@ def live_cycle(observations, historical_at, now, historical_events=None, target=
             elif valid_clock(anchor.get("announced_at"), min(curve.origin, now)):
                 proxies.append(anchor)
 
-    # A structured completed stage is a confirmation, not an exact event time.
-    # Only the reviewed statement feed supplies this state. Display selection,
-    # message text, siblings and temporal proximity never establish identity.
+    # A fresh observer inventory includes corrections and resolved event links.
+    # It takes precedence over the standalone status adapter for the same refs.
+    inventory_refs = {r for obs, f in facts if obs.source == "completion_evidence"
+                      and f.get("expires_at", 0) > now for r in references(f.get("references", []))}
+    blocked = {r for obs, f in facts if obs.source == "completion_evidence"
+               and f.get("expires_at", 0) > now and f.get("stage") != "completed"
+               for r in references(f.get("references", []))}
+    occurrences = [a for a in occurrences if not set(a["references"]) & blocked]
     explicit_stages = {}
     for _, fact in facts:
         if valid_clock(fact.get("at"), now) and fact.get("stage"):
             for url in references([fact.get("url")]):
                 explicit_stages.setdefault(url, set()).add(fact["stage"])
     for obs, fact in facts:
-        if (obs.source != "statements" or fact.get("stage") != "completed"
-                or fact.get("event_type") not in (("usage_reset", "reset_card") if target == RELIEF else ("usage_reset",))
-                or not valid_clock(fact.get("at"), now)):
+        structured = fact.get("kind") == "structured_completion"
+        accepted = (obs.source in ("didcodex_status", "completion_evidence")
+                    and fact.get("population") == "broad" and fact.get("expires_at", 0) > now
+                    and fact.get("target") in ((AUTOMATIC, RELIEF) if target == RELIEF else (AUTOMATIC,))) if structured else (
+                    obs.source == "statements" and fact.get("event_type") in
+                    (("usage_reset", "reset_card") if target == RELIEF else ("usage_reset",)))
+        if not accepted or fact.get("stage") != "completed" or not valid_clock(fact.get("at"), now):
             continue
-        refs = references([fact.get("url")])
-        if not refs or any(explicit_stages[url] != {"completed"} for url in refs):
+        refs = references(fact.get("references", [fact.get("url")]))
+        if (not refs or set(refs) & blocked
+                or (obs.source == "didcodex_status" and set(refs) & inventory_refs)
+                or any(explicit_stages.get(url, {"completed"}) != {"completed"} for url in refs)):
             continue
         # A later completion post for an already identified observation adds
         # evidence; it must not restart that event's waiting clock.
-        if any(set(refs) & set(a["references"]) for a in occurrences):
+        matching = [a for a in occurrences if set(refs) & set(a["references"])]
+        if any(a["occurred_at"] <= fact["at"] for a in matching):
+            occurrences = [a for a in occurrences if a not in matching or a["occurred_at"] <= fact["at"]]
+            for anchor in (a for a in matching if a["occurred_at"] <= fact["at"]):
+                anchor["references"] = sorted(set(anchor["references"]) | set(refs))
             continue
-        confirmations.append({"source": obs.source, "occurred_at": None,
+        # An operator's later discovery of the same event cannot move a known
+        # completion upper bound forward and renew the cycle a second time.
+        occurrences = [a for a in occurrences if a not in matching]
+        confirmation = {"source": obs.source, "occurred_at": None,
             "announced_at": fact["at"], "confirmation_at": fact["at"], "discovered_at": None,
             "received_at": obs.observed_at, "time_basis": "completion_confirmation",
-            "references": refs, "source_event_id": str(fact.get("id", "")) or None})
+            "references": refs, "source_event_id": str(fact.get("id", "")) or None}
+        linked = [a for a in confirmations if set(refs) & set(a["references"])]
+        if linked:
+            confirmation = {**min([confirmation, *linked], key=lambda a: a["confirmation_at"]),
+                            "references": sorted(set(refs) | {r for a in linked for r in a["references"]})}
+            confirmations = [a for a in confirmations if a not in linked]
+        confirmations.append(confirmation)
 
     latest_occurrence = max((a["occurred_at"] for a in occurrences), default=None)
     latest_confirmation = max((a["confirmation_at"] for a in confirmations), default=None)
@@ -120,6 +144,9 @@ def live_cycle(observations, historical_at, now, historical_events=None, target=
             "identity": digest(["reset_references", refs]) if refs else
                         digest(["reset_clock", at, [(a["source"], a.get("source_event_id")) for a in selected]]),
             "observations": selected,
+            "previous_references": sorted({r for a in occurrences + confirmations + proxies
+                if (a.get("occurred_at") or a.get("confirmation_at") or a.get("announced_at") or 0) < (boundary or 0) - 3600
+                for r in a["references"]} - set(refs)),
             "unresolved_proxies": [a for a in proxies if a["announced_at"] > (boundary or 0)
                                    and not set(a["references"]) & set(refs)]}
 
@@ -135,8 +162,10 @@ def cycle_issues(curve, cycle):
     # A proxy earlier than a measured occurrence proves this provider's last
     # known event is old, unless an explicit shared identity links that event.
     # A later proxy says nothing about a new occurrence, and cannot exclude peers.
-    if (cycle.get("occurred_at") is not None and curve.last_reset_at is not None
-            and curve.last_reset_at < boundary - 3600 and not same_event):
+    if ((cycle.get("occurred_at") is not None or cycle.get("confirmation_at") is not None)
+            and curve.last_reset_at is not None
+            and curve.last_reset_at < boundary - 3600 and not same_event) or (
+            not same_event and set(anchor["references"]) & set(cycle.get("previous_references", []))):
         issues.append("missed_latest_event")
     if boundary > curve.origin:
         issues.append("forecast_precedes_latest_event")

@@ -48,6 +48,9 @@ def report_identity(store, raw):
 
 def retain_reports(store, now):
     """Idempotent UTC roll-up, including a one-time legacy identity backfill."""
+    from .store import retention_ready
+    if not retention_ready(store.db):
+        return 0
     db = store.db
     with db:
         db.execute("CREATE TABLE IF NOT EXISTS report_versions(signature TEXT PRIMARY KEY,first_id INTEGER NOT NULL,last_id INTEGER NOT NULL)")
@@ -149,6 +152,9 @@ def retain_auxiliary_forecasts(store, now, *, maximum_rows=2048):
 
 
 def maintain_auxiliary_forecasts(store, now):
+    from .store import retention_ready
+    if not retention_ready(store.db):
+        return 0
     previous = store.get("auxiliary_retention_at")
     if previous is not None and now - previous < HOUR:
         return 0

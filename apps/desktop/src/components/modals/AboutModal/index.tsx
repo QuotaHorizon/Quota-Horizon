@@ -12,6 +12,8 @@ interface AboutModalProps {
   logoUrl: string;
   onClose: () => void;
   onFeedback: () => void;
+  onCheckUpdate: () => void;
+  checkUpdateLabel: string;
   version: string;
   t: Translate;
 }
@@ -20,6 +22,8 @@ export function AboutModal({
   logoUrl,
   onClose,
   onFeedback,
+  onCheckUpdate,
+  checkUpdateLabel,
   version,
   t,
 }: AboutModalProps) {
@@ -93,6 +97,7 @@ export function AboutModal({
           </div>
 
           <div className="about-actions">
+            <button type="button" onClick={onCheckUpdate}><RotateCcw size={15} />{checkUpdateLabel}</button>
             <button type="button" onClick={onFeedback}>
               <MessageSquareText size={15} />
               {t("help.feedback")}

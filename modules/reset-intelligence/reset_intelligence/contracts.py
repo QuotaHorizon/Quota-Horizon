@@ -44,6 +44,15 @@ def canonical_url(value: str) -> str:
     return urlunsplit(("https", u.netloc.lower(), path, "", ""))
 
 
+def event_reference(value: str) -> str:
+    """Provider event fragments distinguish records on the same status page."""
+    canonical = canonical_url(value)
+    original = urlsplit(value)
+    if canonical.startswith("https://x.com/i/status/"):
+        return canonical
+    return canonical + ("?" + original.query if original.query else "") + ("#" + original.fragment if original.fragment else "")
+
+
 def digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 

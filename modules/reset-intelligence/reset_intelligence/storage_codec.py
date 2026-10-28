@@ -10,6 +10,7 @@ from collections import OrderedDict
 import hashlib
 import json
 import sqlite3
+import time
 import zlib
 
 
@@ -42,6 +43,8 @@ def retain_raw_cache(db, now, *, maximum_rows=256):
     ballot, coverage clock or event correction. Blobs are self-contained so
     retirement releases pages without a shared-body garbage-collection pass.
     """
+    if not retention_ready(db):
+        return 0
     columns = {r[1] for r in db.execute("PRAGMA table_info(observations)")}
     if {"source", "normalized"} <= columns:
         source, success = "source", "normalized"
@@ -98,7 +101,16 @@ def reclaim_pages(db, *, minimum_bytes=16 * 1024 * 1024, maximum_pages=256):
     before = db.execute("PRAGMA freelist_count").fetchone()[0]
     if before * page_size < minimum_bytes:
         return 0
-    db.execute(f"PRAGMA incremental_vacuum({int(maximum_pages)})").fetchall()
+    # Some SQLite versions reclaim only one page per call even when N is larger.
+    # Bound actual pages/time instead of silently reclaiming one page per hour.
+    deadline = time.monotonic() + 0.2
+    remaining = before
+    while before - remaining < maximum_pages and time.monotonic() < deadline:
+        db.execute(f"PRAGMA incremental_vacuum({int(maximum_pages - (before - remaining))})").fetchall()
+        current = db.execute("PRAGMA freelist_count").fetchone()[0]
+        if current >= remaining:
+            break
+        remaining = current
     after = db.execute("PRAGMA freelist_count").fetchone()[0]
     return (before - after) * page_size
 
@@ -264,3 +276,24 @@ def configure_storage(db, read_only=False):
     db.row_factory = codec.row_factory
     db.create_function("qh_json", 1, codec.expand_json, deterministic=True)
     return codec
+
+
+def prepare_upgrade(db, new_database=False):
+    """Durable automatic-upgrade checkpoint, separate from historical ledgers."""
+    with db:
+        db.execute("CREATE TABLE IF NOT EXISTS qh_storage_upgrade(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+        if db.execute("SELECT 1 FROM qh_storage_upgrade WHERE key='phase'").fetchone():
+            return
+        phase = "done" if new_database else "compress"
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='qh_storage_jobs'").fetchone():
+            row = db.execute("SELECT version,status FROM qh_storage_jobs ORDER BY id DESC LIMIT 1").fetchone()
+            if row and row[0] == "lossless-json-2" and row[1] in ("complete", "vacuumed"):
+                phase = "retire"
+        db.execute("INSERT INTO qh_storage_upgrade VALUES ('phase',?)", (phase,))
+
+
+def retention_ready(db):
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='qh_storage_upgrade'").fetchone():
+        return True
+    row = db.execute("SELECT value FROM qh_storage_upgrade WHERE key='phase'").fetchone()
+    return row is None or row[0] != "compress"

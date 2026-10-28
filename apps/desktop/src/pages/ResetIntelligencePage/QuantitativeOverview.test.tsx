@@ -12,6 +12,17 @@ import type { PublicResetTimeline } from "./types";
 const now = Date.parse("2026-10-04T02:10:00Z");
 const timeline = (): PublicResetTimeline => ({sources:[],entries:[],revisionCount:0,evidenceFamilyCount:0,quantitative:quantitativeFixture(now)});
 describe("independent quantitative integration", () => {
+  it("shows only 24h history with a distinct Observatory color and stronger Horizon line", () => {
+    const view = quantitativeFixture(now, true);
+    const original = view.evaluation!.curves[0];
+    view.evaluation!.curves.push({...original, hours:48});
+    const html = renderToStaticMarkup(<QuantitativeTrend view={view} language="zh" now={now} />);
+    expect(html).toContain("24h 概率");
+    expect(html).not.toMatch(/data-series="[^"]+-48"/);
+    expect(html).toContain("--series-width:3");
+    expect(html).toContain("var(--quant-slate)");
+    expect(html).not.toContain("48h");
+  });
   it.each(["zh", "en"] as const)("propagates completion revisions without changing the forecast or losing the statement in %s", language => {
     const t = timeline(), f = forecastFor(t.quantitative)!;
     const postId = "2115297093879472332", published = now / 1000 - 60;
@@ -82,7 +93,7 @@ describe("independent quantitative integration", () => {
       renderToStaticMarkup(<QuantitativeTrend view={view} language={language} now={now} />),
       renderToStaticMarkup(<QuantitativeEvaluation view={view} language={language} now={now} />),
     ];
-    const waiting=language === "zh" ? ["等待评估器的首个整点观测", "等待独立评估器输出"] : ["Awaiting the evaluator’s first hourly observation", "Waiting for the independent evaluator"];
+    const waiting=language === "zh" ? ["等待首条预测记录", "等待独立评估器输出"] : ["Awaiting the first forecast record", "Waiting for the independent evaluator"];
     const error=language === "zh" ? "评估报告读取失败，后台会自动重试。" : "The evaluation report could not be read. Retrying automatically in the background.";
     render().forEach((html,i)=>{ expect(html).toContain(waiting[i]);expect(html).not.toContain(error); });
     view.evaluationIssue="invalid";
@@ -295,7 +306,7 @@ describe("independent quantitative integration", () => {
     expect(html).toContain("Tibo");expect(html).toContain("Collecting the first forward results");
     expect(html).not.toContain("horizon-pool-v3");
     expect(html).toContain('data-series="monitor-automatic_reset-24"');
-    expect(html).toContain('data-series="monitor-automatic_reset-48"');
+    expect(html).not.toContain('data-series="monitor-automatic_reset-48"');
     expect(renderToStaticMarkup(<ResetNoticeChip timeline={t} now={now} language="en" onOpen={()=>{}} />)).toContain("Horizon 24h 62%");
   });
   it("retains saved values with a stale label and never silently falls back to the old estimate", () => {

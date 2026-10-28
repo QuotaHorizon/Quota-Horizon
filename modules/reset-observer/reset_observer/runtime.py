@@ -15,11 +15,11 @@ import time
 
 from .benchmark import freeze_grid, initialize, settle_all
 from .contracts import Policy, digest, iso
-from .evidence import ACTIVE_FEEDS, FEEDS, collect, reconcile, reinterpret_latest
+from .evidence import ACTIVE_FEEDS, FEEDS, collect, reconcile, reinterpret_latest, completion_export
 from .diagnostics import runtime_gap
 from .importers import intelligence_database, json_lines
 from .reporting import build_report, html_report
-from .store import Store
+from .store import Store, storage_upgrade_step
 
 
 def atomic_write(path, text):
@@ -144,6 +144,15 @@ def run_once(args, config, refresh=False, evaluator=None):
         initialize(store, time.time(), policy)
         from .reaction import initialize as initialize_reaction
         initialize_reaction(store, time.time())
+        phase = time.monotonic()
+        collected = collect(store, policy, refresh=True) if refresh else collect(store, policy)
+        now = round(time.time(), 3)
+        reinterpret_latest(store, now)
+        evidence = reconcile(store, now, policy)
+        completion_path = str(Path(args.db).resolve()) + ".completions.json"
+        atomic_write(completion_path, json.dumps(completion_export(evidence, now)))
+        timings["outcome_collection"] = time.monotonic() - phase
+        phase = time.monotonic()
         producer = {"status": "external"}
         last_producer = store.get("last_producer")
         if last_producer:
@@ -173,6 +182,8 @@ def run_once(args, config, refresh=False, evaluator=None):
                 for i in range(len(command) - 1)
             ):
                 command = [*command, "--refresh"]
+            if any(command[i : i + 2] == ["-m", "reset_intelligence"] for i in range(len(command) - 1)):
+                command = [*command, "--completion-input", completion_path]
             try:
                 result = subprocess.run(
                     command,
@@ -194,12 +205,7 @@ def run_once(args, config, refresh=False, evaluator=None):
                 producer = {"status": "unavailable", "error": type(exc).__name__}
             store.put("last_producer", {"at": time.time(), "result": producer})
             store.put("producer_signature", producer_signature)
-        timings["producer"] = time.monotonic() - began
-        phase = time.monotonic()
-        collected = (
-            collect(store, policy, refresh=True) if refresh else collect(store, policy)
-        )
-        timings["outcome_collection"] = time.monotonic() - phase
+        timings["producer"] = time.monotonic() - phase
         phase = time.monotonic()
         now = round(time.time(), 3)
         outcomes = outcome_status(store, policy, time.time(), collected)
@@ -210,7 +216,6 @@ def run_once(args, config, refresh=False, evaluator=None):
             if outcomes["state"] == "cached"
             else "refreshed"
         )
-        reinterpret_latest(store, now)
         imported = {}
         if args.producer_db:
             try:
@@ -222,7 +227,6 @@ def run_once(args, config, refresh=False, evaluator=None):
         timings["import"] = time.monotonic() - phase
         phase = time.monotonic()
         freeze_grid(store, now, policy)
-        evidence = reconcile(store, now, policy)
         from .preferences import current_features, freeze as freeze_preferences
 
         # Both consumers use this exact capture cutoff. Carry the small feature
@@ -373,6 +377,28 @@ class BackgroundEvaluation:
         self.poll()
 
 
+def maintain_storage(args):
+    """The capture and evaluation connections are idle during this step."""
+    def retire():
+        from .retention import retain_reports, retain_auxiliary_forecasts
+        store = Store(args.db)
+        try:
+            now = time.time()
+            return (retain_reports(store, now) or 0) + retain_auxiliary_forecasts(store, now)
+        finally:
+            store.close()
+    result = {"observer": storage_upgrade_step(args.db, retire=retire)}
+    if getattr(args, "producer_db", None):
+        result["producer"] = storage_upgrade_step(args.producer_db)
+    store = Store(args.db)
+    try:
+        if store.get("storage_maintenance") != result:
+            store.put("storage_maintenance", result)
+    finally:
+        store.close()
+    return result
+
+
 def stop_path(db):
     return Path(str(Path(db).resolve()) + ".stop")
 
@@ -457,6 +483,7 @@ def watch(args, config):
         store.close()
         previous_wall, previous_mono = now, time.monotonic()
         evaluator = BackgroundEvaluation()
+        next_maintenance = 0.0
         try:
             while not marker.exists():
                 # An app replacement can change the runtime on disk while this
@@ -524,6 +551,10 @@ def watch(args, config):
                     and not refresh_request(args.db)
                 ):
                     evaluator.poll()
+                    if evaluator.future is None and evaluator.pending is None and time.monotonic() >= next_maintenance:
+                        maintenance = maintain_storage(args)
+                        quiet = all(r["phase"] == "done" or r.get("state") in ("deferred", "retry_later", "waiting_for_disk_space") for r in maintenance.values())
+                        next_maintenance = time.monotonic() + (3600 if quiet else 2)
                     time.sleep(min(2.0, max(0.0, until - time.monotonic())))
         except KeyboardInterrupt:
             pass

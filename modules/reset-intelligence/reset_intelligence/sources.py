@@ -118,6 +118,41 @@ def scheduled_status_facts(raw, source, received_at):
     if isinstance(latest, dict) and latest.get("kind") == "reset_scheduled":
         records[str(latest.get("source", {}).get("postId"))] = latest
     facts = []
+    # Explicit upstream completion records are outcome evidence, not another
+    # probability vote. Preserve linked schedule identities and the notice clock.
+    links = {str(item.get("completionPostId")): item.get("schedule", {})
+             for item in timeline.get("fulfilledSchedules", [])}
+    suppressed = {str(value) for value in timeline.get("suppressedPostIds", [])}
+    for row in raw["events"]:
+        if not isinstance(row, dict) or row.get("kind") != "reset_completed":
+            continue
+        src = row.get("source") or {}
+        identifier = str(src.get("postId", ""))
+        url = src.get("url", "")
+        if identifier in suppressed or not identifier.isdigit() or not url:
+            continue
+        if canonical_url(url) != f"https://x.com/i/status/{identifier}":
+            continue
+        if not any(url.startswith(f"https://x.com/{handle}/status/") for handle in ("thsottiaux", "sama", "OpenAI")):
+            continue
+        target = {"global": AUTOMATIC, "global_and_banked": AUTOMATIC, "banked": RELIEF}.get(row.get("resetType"))
+        schedule = links.get(identifier, {})
+        same_kind = schedule.get("resetType") == row.get("resetType")
+        plans = (row.get("scope") or {}).get("plans", [])
+        if not plans and same_kind:
+            plans = (schedule.get("scope") or {}).get("plans", [])
+        if target is None or "all" not in plans or not row.get("announcedAt"):
+            continue
+        at = stamp(row["announcedAt"])
+        if at > min(generated, received_at):
+            continue
+        refs = [canonical_url(url)]
+        if same_kind and schedule.get("source", {}).get("url"):
+            refs.append(canonical_url(schedule["source"]["url"]))
+        facts.append({"kind": "structured_completion", "id": identifier, "url": refs[0],
+            "references": refs, "at": at, "target": target, "population": "broad",
+            "stage": "completed", "source": source, "generated_at": generated,
+            "expires_at": min(generated, checked) + 3600})
     for identifier, row in records.items():
         if not identifier.isdigit() or not row.get("announcedAt") or not row.get("source", {}).get("url"):
             continue

@@ -697,9 +697,9 @@ class ImportAndReportTests(TemporaryStore):
         for curve in curves:
             cadence = int(curve["source"])
             minutes = list(range(55, 181, cadence // 60))
-            latest = {}
+            buckets = {}
             for minute in minutes:
-                latest[int((T + minute * 60) // 3600)] = minute
+                buckets.setdefault(int((T + minute * 60) // 3600), []).append(minute)
             self.assertEqual(
                 curve["points"],
                 [
@@ -707,7 +707,7 @@ class ImportAndReportTests(TemporaryStore):
                         "at": iso(T + m * 60),
                         "p": m / (1000 if curve["hours"] == 24 else 500),
                     }
-                    for m in latest.values()
+                    for m in sorted({m for bucket in buckets.values() for m in (bucket[0], bucket[-1])})
                 ],
             )
 
@@ -748,7 +748,7 @@ class ImportAndReportTests(TemporaryStore):
         for curve in publication_curves(self.store, T + 140 * 60):
             self.assertEqual(
                 [p["at"] for p in curve["points"]],
-                [iso(T + 59 * 60), iso(T + 119 * 60)],
+                [iso(T + 60), iso(T + 59 * 60), iso(T + 119 * 60)],
             )
             self.assertTrue(all(p["p"] is not None for p in curve["points"]))
         for curve in publication_curves(self.store, T + 160 * 60):
@@ -786,7 +786,7 @@ class ImportAndReportTests(TemporaryStore):
                 )
         for curve in publication_curves(self.store, T + 31 * 60):
             if curve["source"] == "unsupported" and curve["hours"] == 24:
-                self.assertEqual(len(curve["points"]), 1)
+                self.assertEqual([p["at"] for p in curve["points"]], [iso(T+60), iso(T+1800)])
             else:
                 self.assertEqual(
                     [p["at"] for p in curve["points"]],

@@ -1,0 +1,8 @@
+.backdrop { position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center; background: #0006; padding: 24px; }
+.dialog { width: min(520px, 100%); max-height: 75vh; display: flex; flex-direction: column; background: var(--panel, var(--panel)); color: var(--ink); border: 1px solid var(--line); border-radius: 18px; padding: 24px; box-shadow: 0 20px 60px #0003; }
+.dialog h2 { margin: 0 0 8px; font-size: 20px; }
+.dialog p { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+.dialog pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13px; line-height: 1.7; margin: 0 0 20px; }
+.dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.dialog button { padding: 8px 12px; border-radius: 9px; border: 1px solid var(--line); color: inherit; background: var(--panel); cursor: pointer; }
+.dialog .primary { background: var(--ink); color: var(--panel); }

@@ -3,7 +3,7 @@ import type { PublicPost, PublicResetTimeline } from "./types";
 
 export const sourceNames: Record<string, string> = { horizon: "Horizon", codex_reset: "Codex Reset", monitor: "Reset Monitor", nextreset: "NextReset", observatory: "Reset Observatory", lunar: "Lunar", dreaife: "Dreaife" };
 export const sourceUrls: Record<string, string> = { codex_reset: "https://codex-reset.com/", monitor: "https://codexreset.org/", nextreset: "https://nextreset.ai/", observatory: "https://codex.gussuriworks.com/", lunar: "https://codex.lunarwerx.com/", dreaife: "https://codexreset.dreaife.tokyo/" };
-export const sourceColors: Record<string, string> = { horizon: "var(--radar-accent)", codex_reset: "var(--radar-amber)", monitor: "var(--radar-blue)", nextreset: "var(--radar-violet)", observatory: "var(--quant-cyan)", lunar: "var(--quant-rose)", community: "var(--quant-rose)", survival_baseline: "var(--muted)" };
+export const sourceColors: Record<string, string> = { horizon: "var(--radar-accent)", codex_reset: "var(--radar-amber)", monitor: "var(--radar-blue)", nextreset: "var(--radar-violet)", observatory: "var(--quant-slate)", lunar: "var(--quant-rose)", community: "var(--quant-rose)", survival_baseline: "var(--muted)" };
 export const percent = (p: number | null | undefined) => p == null || !Number.isFinite(p) ? "—" : `${(p * 100).toFixed(1)}%`;
 export const points = (p: number | null) => p == null ? "—" : `${p > 0 ? "+" : ""}${(p * 100).toFixed(1)}`;
 export const forecastFor = (v: QuantitativeView | undefined, target: ResetTarget = "broad_quota_relief") => v?.forecast?.forecasts.find(f => f.target === target);

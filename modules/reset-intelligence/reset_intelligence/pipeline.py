@@ -71,7 +71,7 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
     if config.apply_learned_weights:
         raise ValueError("increment model weights require a separately reviewed forward fit")
     config_hash = config_hash or digest(asdict(config))
-    observations = {k: v for k, v in store.observations(now).items() if source_ids is None or k in source_ids}
+    observations = {k: v for k, v in store.observations(now).items() if source_ids is None or k in source_ids or k == "completion_evidence"}
     ledger = observations.get("event_ledger")
     events = canonical_events(ledger, target, now)
     result = {"schema_version": "reset-intelligence/1", "module_version": VERSION,
@@ -82,6 +82,8 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
               "inputs_hash": digest({k: v.to_dict() for k, v in observations.items()})}
     attempts = {a["source"]: a for a in store.attempts(now) if source_ids is None or a["source"] in source_ids}
     for name in sorted(set(observations) | set(attempts)):
+        if name == "completion_evidence":
+            continue
         obs = observations.get(name)
         result["source_health"].append({"id": name, "last_attempt": attempts.get(name, {}).get("observed_at"),
                                         "error": attempts.get(name, {}).get("error"),

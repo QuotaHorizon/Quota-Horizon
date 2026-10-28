@@ -46,6 +46,7 @@ def main(argv=None) -> int:
     parser.add_argument("--config", help="Local JSON source and model configuration")
     parser.add_argument("--output", help="Atomic consumer JSON output, or evaluation report for evaluate")
     parser.add_argument("--audit-output", help="Separate source admission and issued-weight JSON")
+    parser.add_argument("--completion-input", help="Optional reset-completions/1 outcome inventory")
     parser.add_argument("--refresh", action="store_true", help="Request fresh public inputs with a five-second duplicate-read guard")
     parser.add_argument("--as-of", help="Timezone-qualified historical time (replay/evaluate only)")
     parser.add_argument("--target", choices=TARGETS, help="Default: both targets")
@@ -56,7 +57,7 @@ def main(argv=None) -> int:
         parser.error("replay requires --as-of")
     if args.command == "watch":
         run_args = ["run", "--db", args.db]
-        for flag, value in (("--config", args.config), ("--output", args.output), ("--target", args.target), ("--audit-output", args.audit_output)):
+        for flag, value in (("--config", args.config), ("--output", args.output), ("--target", args.target), ("--audit-output", args.audit_output), ("--completion-input", args.completion_input)):
             if value:
                 run_args.extend([flag, value])
         try:
@@ -84,6 +85,12 @@ def main(argv=None) -> int:
             return 0
         outcomes = collect(store, specs, minimum_interval=5 if args.refresh else None) if args.command in ("collect", "run") else []
         now = stamp(args.as_of) if args.as_of else round(time.time(), 3)
+        if args.completion_input and args.command in ("collect", "run", "forecast"):
+            from .completions import ingest
+            try:
+                ingest(store, args.completion_input, now)
+            except (OSError, ValueError, KeyError, TypeError):
+                store.save("completion_evidence", now, None, None, "completion_input_unavailable")
         if now > time.time() + 1:
             parser.error("cannot replay future observations")
         from .contracts import digest
@@ -141,6 +148,9 @@ def main(argv=None) -> int:
         return 0 if all(r["status"] == "current" for r in results) else 2
     finally:
         store.close()
+        if args.command in ("run", "forecast") and not args.completion_input:
+            from .automatic_storage import step
+            step(args.db)
 
 
 if __name__ == "__main__":

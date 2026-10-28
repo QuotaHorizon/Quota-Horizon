@@ -56,13 +56,50 @@ def scoring_progress(trials, settlements):
     return progress
 
 
+def thin_curve(points, tolerance=0.0025):
+    """Keep receipt times, gaps and turns; bound linear display error to 0.25pp.
+
+    Simplification never crosses an hour or a missing segment. Both sides of a
+    sharp step survive, instead of moving the change to the end of its hour.
+    Only the display projection is thinned; source and scoring rows are intact.
+    """
+    def segment(rows):
+        if len(rows) < 3:
+            return rows
+        keep, pending = {0, len(rows) - 1}, [(0, len(rows) - 1)]
+        while pending:
+            left, right = pending.pop()
+            a, b = rows[left], rows[right]
+            span = b["at"] - a["at"]
+            if right - left < 2:
+                continue
+            def error(i):
+                fraction = (rows[i]["at"] - a["at"]) / span if span else 0
+                return abs(rows[i]["p"] - (a["p"] + fraction * (b["p"] - a["p"])))
+            index = max(range(left + 1, right), key=error)
+            if error(index) > tolerance:
+                keep.add(index)
+                pending.extend(((left, index), (index, right)))
+        return [rows[i] for i in sorted(keep)]
+    result, batch = [], []
+    for point in points:
+        if point["p"] is None or (batch and int(point["at"] // 3600) != int(batch[0]["at"] // 3600)):
+            result.extend(segment(batch))
+            batch = []
+        if point["p"] is None:
+            result.append(point)
+        else:
+            batch.append(point)
+    return result + segment(batch)
+
+
 def publication_curves(store, now):
     """Plot what sources published when first received; scoring stays on trials.
 
     A 24h-only forecast remains a valid published 24h observation even if its
     receipt is a minute late. It cannot score a later, unsupported 24h window.
-    Determine continuity from every receipt before keeping the latest point per
-    hour/continuous segment. Recovery boundaries remain actual receipt points.
+    Determine continuity from every receipt before simplifying continuous
+    segments. Recovery boundaries and turning points remain actual receipts.
     """
     # The reaction index already holds the exact publication probabilities.
     # Reuse that compact projection instead of expanding large model metadata
@@ -78,7 +115,7 @@ def publication_curves(store, now):
         ORDER BY f.available_at,f.origin,f.id""",
         (now - 7 * 86400, now),
     )
-    curves, coverage_end, recovery = defaultdict(list), {}, {}
+    curves, coverage_end = defaultdict(list), {}
     for row in rows:
         if row["projection"] is not None:
             projection = json.loads(row["projection"])
@@ -115,17 +152,7 @@ def publication_curves(store, now):
                     values.append(point)
                 coverage_end.pop(key, None)
             else:
-                if values and values[-1]["p"] is None:
-                    recovery[key] = len(values)
-                    values.append(point)
-                elif (
-                    values
-                    and int(values[-1]["at"] // 3600) == int(row["available_at"] // 3600)
-                    and recovery.get(key) != len(values) - 1
-                ):
-                    values[-1] = point
-                else:
-                    values.append(point)
+                values.append(point)
                 # A newer short TTL must not erase still-valid coverage from
                 # earlier receipts in this same version/horizon/segment.
                 coverage_end[key] = max(
@@ -141,7 +168,7 @@ def publication_curves(store, now):
             "target": k[2],
             "track": k[3],
             "hours": k[4],
-            "points": [{"at": iso(p["at"]), "p": p["p"]} for p in v],
+            "points": [{"at": iso(p["at"]), "p": p["p"]} for p in thin_curve(v)],
         }
         for k, v in sorted(curves.items())
     ]
