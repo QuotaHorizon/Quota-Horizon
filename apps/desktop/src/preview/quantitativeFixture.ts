@@ -24,9 +24,21 @@ export function quantitativeFixture(now: number, mature = false): QuantitativeVi
       const {source,track,probabilities:p} = identity;
       report.latest.push({source,track,version,target:f.target,origin:stamp,received_at:stamp,valid_until:expiry,state:"current",probabilities_at_publication:{"6":p[5],"12":p[11],"24":p[23],"48":p[47]}});
       for (const hours of [24,48]) {
+        // Dense synthetic receipts let the documentation show real OHLC candles.
+        // The final value matches the forecast above; a sample source gap stays visible.
+        const count = hours === 24 ? 73 : 7;
+        const interval = hours === 24 ? 5 * 60_000 : 3600_000;
+        const end = Math.floor((now - 60_000) / interval) * interval;
         report.curves.push({source,track,version,target:f.target,hours,
           ...(source === "horizon" && hours === 24 ? {candle_interval_minutes:30} : {}),
-          points:Array.from({length:7},(_,i)=>({at:new Date(Math.floor(now/3600_000)*3600_000-(6-i)*3600_000).toISOString(),p:index===1&&i===3?null:Math.max(0,p[hours-1]-(6-i)*.027)}))});
+          points:Array.from({length:count},(_,i)=>{
+            const progress = i / (count - 1);
+            const wave = hours === 24 ? Math.sin(progress * Math.PI * 6) * (source === "horizon" ? .055 : .022)
+              + Math.sin(progress * Math.PI * 22) * (source === "horizon" ? .022 : .008) : 0;
+            const gap = index === 1 && (hours === 24 ? i >= 35 && i <= 37 : i === 3);
+            return {at:new Date(end - (count - 1 - i) * interval).toISOString(),
+              p:gap ? null : Math.max(0,Math.min(1,p[hours-1]-(1-progress)*.162+wave))};
+          })});
         const row: QuantScorecard = {source,track,version,target:f.target,hours,scheduled_windows:16,forecast_coverage:1,settlement_states:mature?{settled:8,pending:8}:{pending:16},
           scores:{n:mature?8:0,unique_events:mature?2:0,brier:mature?.184:null,log_loss:mature?.526:null,state:mature?"insufficient_events_or_windows":"awaiting_mature_windows",brier_interval:{mean:mature?.184:null,ci95:null,blocks:mature?2:0},calibration:mature?[{n:5,mean_probability:.2,event_frequency:.2},{n:3,mean_probability:.65,event_frequency:.67}]:[]},
           alerts:{threshold:.7,episodes:1,false_alerts:0,precision:mature?1:null,event_recall:mature?.5:null,median_lead_hours:mature?9.5:null}};

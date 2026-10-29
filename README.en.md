@@ -24,7 +24,7 @@ Both installers include the forecasting and evaluation modules; collection start
 - **Quota history**: trends and an activity heatmap, with dashed lines for quota increases.
 - **Work schedules**: set working and unavailable hours to allocate remaining quota across days.
 - **Session management**: search, read, resume, archive, restore and repair sessions.
-- **Reset radar**: compare 24/48-hour combined forecasts, source trends, community ballots, Tibo posts and reply context.
+- **Reset radar**: compare 24/48-hour combined forecasts, track 24h probabilities with Horizon candlesticks and source lines, and read community ballots, Tibo posts and reply context.
 - **Forecast evaluation**: track forecasts against actual resets and credit grants, with scores, calibration and source comparisons.
 - **Providers and CPA**: manage API connections and connect a configured CPA quota pool.
 
@@ -40,7 +40,7 @@ These previews use actual product components with synthetic data.
 
 ![Account overview](docs/images/accounts-preview.en.png)
 
-**Reset radar**: combined outlook, source trends, community inputs and full statements.
+**Reset radar**: combined outlook, 24h probability candlesticks and source comparisons, community inputs and full statements.
 
 ![Reset radar](docs/images/reset-radar-preview.en.png)
 

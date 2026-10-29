@@ -30,7 +30,9 @@ monitoring continues when the window closes. Use the menu-bar or tray quit comma
 
 ## Update
 
-Download the new installer for your platform from Releases, then quit QuotaHorizon from the menu bar or tray.
+The app checks stable releases after launch and every 6 hours, and shows a notice when a newer installer is available
+for your platform. You can also select “Check for updates” in About. Choose “View and download” to open the Release
+page and download your platform's installer, then quit QuotaHorizon from the menu bar or tray.
 
 - **macOS**: open the new DMG, drag the app into Applications, choose Replace, then open the app again.
 - **Windows**: run the new `.exe` installer, follow the wizard to update the app, then open it again.

@@ -106,6 +106,9 @@
   branch from the accepted `dev` commit, remove `AGENTS.md` on that candidate
   branch, and open the release PR from there. Verify that
   `git ls-tree --name-only <candidate> -- AGENTS.md` is empty before merging.
+  Squash the candidate into one aggregate release commit on `main`; keep the
+  development commits on `dev` and preserve existing published `main` history.
+  Delete the temporary release branch locally and remotely after delivery.
   Keep the file on `dev`; preserve it when bringing release fixes back from
   `main`. Never merge the unfiltered `dev` tree directly into `main`.
 - `npm run check:source` rejects a tracked `AGENTS.md` on local `main`, a push to
