@@ -1056,6 +1056,7 @@ export type ClaudeCodeWriteTarget = "all" | "codex" | "claudeCode";
 
 export type ThirdPartyAppId =
   | "claudeCode"
+  | "claudeDesktop"
   | "openCode"
   | "openClaw"
   | "hermesAgent"

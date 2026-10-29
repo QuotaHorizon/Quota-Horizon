@@ -19,9 +19,6 @@
 }
 
 .readingStatus {
-  position: sticky;
-  top: -16px;
-  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -247,3 +244,23 @@
     margin-left: 23px;
   }
 }
+
+.searchPanel { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.searchPanel :global(.ant-input-affix-wrapper) { flex: 1 1 200px; width: auto; }
+.searchPanel > span, .searchPanel > small { color: var(--text-secondary); font-size: 12px; }
+.searchPanel > small { flex-basis: 100%; }
+.timelineItem { min-width: 0; scroll-margin-block: 70px; }
+.timelineItem[data-search-active] { outline: 2px solid var(--primary, #1677ff); outline-offset: 2px; }
+.timelineItem mark { background: #ffe19a; color: #282014; border-radius: 2px; }
+.timelineItem h3, .timelineItem h4, .timelineItem h5, .timelineItem h6 { margin: 14px 0 8px; line-height: 1.5; overflow-wrap: anywhere; }
+.timelineItem h3 { font-size: 16px; }.timelineItem h4, .timelineItem h5, .timelineItem h6 { font-size: 14px; }
+.timelineItem ul, .timelineItem ol { margin: 10px 0; padding-left: 24px; }
+.timelineItem li { margin: 5px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.timelineItem blockquote { margin: 10px 0; padding: 5px 12px; border-left: 3px solid var(--line); color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.timelineItem code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .92em; background: rgba(127,127,127,.1); border-radius: 4px; padding: 1px 4px; }
+.timelineItem pre code { background: none; padding: 0; font-size: inherit; }
+.timelineItem pre[data-language]::before { content: attr(data-language); display: block; margin-bottom: 6px; color: var(--text-secondary); font-size: 10px; }
+.timelineItem a { color: var(--primary, #1677ff); overflow-wrap: anywhere; }
+.readerTools { position: sticky; top: -16px; z-index: 2; display: grid; gap: 8px; padding-block: 8px; background: var(--bg); }
+.timelineItem table { border-collapse: collapse; margin: 10px 0; font-size: 12px; }
+.timelineItem th, .timelineItem td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; white-space: pre-wrap; }

@@ -14,6 +14,7 @@ const THIRD_PARTY_APPS: ReadonlyArray<{
   labelKey: TranslationKey;
 }> = [
   { id: "claudeCode", labelKey: "thirdPartyApps.app.claudeCode" },
+  { id: "claudeDesktop", labelKey: "thirdPartyApps.app.claudeDesktop" },
   { id: "openCode", labelKey: "thirdPartyApps.app.openCode" },
   { id: "openClaw", labelKey: "thirdPartyApps.app.openClaw" },
   { id: "hermesAgent", labelKey: "thirdPartyApps.app.hermesAgent" },

@@ -1,9 +1,11 @@
+pub(crate) mod config_transaction;
 mod json_targets;
 pub(crate) mod runtime_paths;
 mod yaml_targets;
 
 use std::{fs, path::Path};
 
+use config_transaction::ConfigTransaction;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
 
@@ -15,7 +17,7 @@ use crate::{
         ProviderApiFormat, ProviderKind, ProviderProfile, ThirdPartyAppWriteSettings,
     },
     providers::DEFAULT_OFFICIAL_MODEL,
-    storage::{read_app_settings, read_state, resolve_paths, write_app_settings},
+    storage::{app_settings_path, read_app_settings, read_state, resolve_paths},
 };
 
 pub(crate) use runtime_paths::capture_running_app_paths;
@@ -34,6 +36,7 @@ pub(crate) enum ProviderProtocol {
 #[serde(rename_all = "camelCase")]
 pub(crate) enum ThirdPartyAppId {
     ClaudeCode,
+    ClaudeDesktop,
     OpenCode,
     OpenClaw,
     HermesAgent,
@@ -81,6 +84,7 @@ pub(crate) fn should_write_app(settings: &AppSettings, app: ThirdPartyAppId) -> 
     }
     match app {
         ThirdPartyAppId::ClaudeCode => settings.apps.claude_code,
+        ThirdPartyAppId::ClaudeDesktop => settings.apps.claude_desktop,
         ThirdPartyAppId::OpenCode => settings.apps.open_code,
         ThirdPartyAppId::OpenClaw => settings.apps.open_claw,
         ThirdPartyAppId::HermesAgent => settings.apps.hermes_agent,
@@ -98,51 +102,95 @@ pub(crate) async fn set_third_party_app_write_settings<R: Runtime + 'static>(
     settings: ThirdPartyAppWriteSettings,
 ) -> Result<AppSettings, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let previous = read_app_settings(&app)?;
-        let mut next = previous.clone();
-        next.third_party_app_write = Some(settings);
-        write_app_settings(&app, &next)?;
-        if let Err(error) = sync_after_switch(&app) {
-            write_app_settings(&app, &previous)?;
-            return Err(format!("无法保存三方 App 写入设置：{error}"));
-        }
-        Ok(next)
+        update_settings_and_sync(&app, |next| next.third_party_app_write = Some(settings))
     })
     .await
     .map_err(|error| format!("保存三方 App 写入设置失败：{error}"))?
 }
 
+pub(crate) fn update_settings_and_sync<R: Runtime>(
+    app: &AppHandle<R>,
+    update: impl FnOnce(&mut AppSettings),
+) -> Result<AppSettings, String> {
+    let mut transaction = ConfigTransaction::default();
+    let path = app_settings_path(app)?;
+    let original = transaction.read(&path)?;
+    let mut next: AppSettings = match original.as_deref() {
+        Some(bytes) => {
+            serde_json::from_slice(bytes).map_err(|_| "应用设置格式无效，未修改任何配置")?
+        }
+        None => AppSettings::default(),
+    };
+    let before_value = serde_json::to_value(&next).map_err(|_| "无法读取应用设置")?;
+    update(&mut next);
+    prepare_sync(app, &next, &mut transaction)?;
+    let after_value = serde_json::to_value(&next).map_err(|_| "无法序列化应用设置")?;
+    let mut value = match original {
+        Some(bytes) => {
+            serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|_| "应用设置格式无效")?
+        }
+        None => before_value.clone(),
+    };
+    let object = value.as_object_mut().ok_or("应用设置必须是 JSON 对象")?;
+    for (key, updated) in after_value.as_object().ok_or("应用设置必须是 JSON 对象")? {
+        if before_value.get(key) != Some(updated) {
+            object.insert(key.clone(), updated.clone());
+        }
+    }
+    transaction.write_json(&path, &value)?;
+    transaction.commit()?;
+    Ok(next)
+}
+
 pub(crate) fn sync_after_switch<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let settings = read_app_settings(app)?;
-    let provider = active_provider(app)?;
+    let mut transaction = ConfigTransaction::default();
+    prepare_sync(app, &settings, &mut transaction)?;
+    transaction.commit()
+}
+
+fn prepare_sync<R: Runtime>(
+    app: &AppHandle<R>,
+    settings: &AppSettings,
+    transaction: &mut ConfigTransaction,
+) -> Result<(), String> {
+    let provider = active_provider(app, settings)?;
     let official_context_window = settings.gpt_5_6_sol_context_window;
     let home = dirs::home_dir().ok_or_else(|| "无法定位用户主目录".to_string())?;
     let mut errors = Vec::new();
+    let state = read_state(&resolve_paths(app)?);
+
+    if should_write_app(&settings, ThirdPartyAppId::ClaudeDesktop) {
+        let result = if let Some(provider) = provider.as_ref() {
+            crate::claude_desktop::write_provider_proxy_settings(transaction, provider)
+        } else if state.local_proxy_enabled && state.active_account_id.is_some() {
+            crate::claude_desktop::write_official_proxy_settings(
+                transaction,
+                official_context_window,
+            )
+        } else {
+            crate::claude_desktop::clear_proxy_settings(transaction)
+        };
+        if let Err(error) = result {
+            errors.push(format!("Claude Desktop：{error}"));
+        }
+    }
 
     if should_write_app(&settings, ThirdPartyAppId::ClaudeCode) {
-        let state = read_state(&resolve_paths(app)?);
         let result = if let Some(provider) = provider.as_ref() {
-            if let Err(error) = crate::claude_desktop::write_provider_proxy_settings(provider) {
-                errors.push(format!("Claude Desktop：{error}"));
-            }
             claude_code::write_provider_settings(
+                transaction,
                 Some(provider),
                 &effective_settings(&settings).claude_subagent_model,
             )
         } else if state.local_proxy_enabled && state.active_account_id.is_some() {
-            if let Err(error) =
-                crate::claude_desktop::write_official_proxy_settings(official_context_window)
-            {
-                errors.push(format!("Claude Desktop：{error}"));
-            }
             claude_code::write_official_proxy_settings(
+                transaction,
                 &effective_settings(&settings).claude_subagent_model,
             )
         } else {
-            if let Err(error) = crate::claude_desktop::clear_proxy_settings() {
-                errors.push(format!("Claude Desktop：{error}"));
-            }
             claude_code::write_provider_settings(
+                transaction,
                 None,
                 &effective_settings(&settings).claude_subagent_model,
             )
@@ -151,8 +199,8 @@ pub(crate) fn sync_after_switch<R: Runtime>(app: &AppHandle<R>) -> Result<(), St
             errors.push(format!("Claude Code：{error}"));
         }
     }
-    sync_json_targets(&settings, &home, provider.as_ref(), &mut errors);
-    sync_yaml_targets(&settings, &home, provider.as_ref(), &mut errors);
+    sync_json_targets(settings, &home, provider.as_ref(), &mut errors, transaction);
+    sync_yaml_targets(settings, &home, provider.as_ref(), &mut errors, transaction);
     // TRAE currently exposes model configuration only through its UI and has no
     // stable documented local provider file, so enabling it is intentionally a no-op.
     if errors.is_empty() {
@@ -167,12 +215,14 @@ fn sync_json_targets(
     home: &Path,
     provider: Option<&ProviderProfile>,
     errors: &mut Vec<String>,
+    transaction: &mut ConfigTransaction,
 ) {
     let mut context = JsonSyncContext {
         settings,
         home,
         provider,
         errors,
+        transaction,
     };
     context.sync(ThirdPartyAppId::OpenCode, json_targets::sync_open_code);
     context.sync(ThirdPartyAppId::OpenClaw, json_targets::sync_open_claw);
@@ -186,14 +236,15 @@ fn sync_yaml_targets(
     home: &Path,
     provider: Option<&ProviderProfile>,
     errors: &mut Vec<String>,
+    transaction: &mut ConfigTransaction,
 ) {
     if should_write_app(settings, ThirdPartyAppId::HermesAgent) {
-        if let Err(error) = yaml_targets::sync_hermes(home, provider) {
+        if let Err(error) = yaml_targets::sync_hermes(home, provider, transaction) {
             errors.push(format!("Hermes Agent：{error}"));
         }
     }
     if should_write_app(settings, ThirdPartyAppId::DeepSeekHarness) {
-        if let Err(error) = yaml_targets::sync_deep_seek(home, provider) {
+        if let Err(error) = yaml_targets::sync_deep_seek(home, provider, transaction) {
             errors.push(format!("DeepSeek Harness：{error}"));
         }
     }
@@ -204,17 +255,18 @@ struct JsonSyncContext<'a> {
     home: &'a Path,
     provider: Option<&'a ProviderProfile>,
     errors: &'a mut Vec<String>,
+    transaction: &'a mut ConfigTransaction,
 }
 
 impl<'a> JsonSyncContext<'a> {
     fn sync<F>(&mut self, app: ThirdPartyAppId, sync: F)
     where
-        F: Fn(&Path, Option<&ProviderProfile>) -> Result<(), String>,
+        F: Fn(&Path, Option<&ProviderProfile>, &mut ConfigTransaction) -> Result<(), String>,
     {
         if !should_write_app(self.settings, app) {
             return;
         }
-        if let Err(error) = sync(self.home, self.provider) {
+        if let Err(error) = sync(self.home, self.provider, self.transaction) {
             self.errors.push(format!("{}：{error}", app_label(app)));
         }
     }
@@ -223,6 +275,7 @@ impl<'a> JsonSyncContext<'a> {
 fn app_label(app: ThirdPartyAppId) -> &'static str {
     match app {
         ThirdPartyAppId::ClaudeCode => "Claude Code",
+        ThirdPartyAppId::ClaudeDesktop => "Claude Desktop",
         ThirdPartyAppId::OpenCode => "OpenCode",
         ThirdPartyAppId::OpenClaw => "OpenClaw",
         ThirdPartyAppId::HermesAgent => "Hermes Agent",
@@ -234,7 +287,10 @@ fn app_label(app: ThirdPartyAppId) -> &'static str {
     }
 }
 
-fn active_provider<R: Runtime>(app: &AppHandle<R>) -> Result<Option<ProviderProfile>, String> {
+fn active_provider<R: Runtime>(
+    app: &AppHandle<R>,
+    settings: &AppSettings,
+) -> Result<Option<ProviderProfile>, String> {
     let paths = resolve_paths(app)?;
     let state = read_state(&paths);
     if let Some(id) = state.active_provider_id.as_deref() {
@@ -255,7 +311,7 @@ fn active_provider<R: Runtime>(app: &AppHandle<R>) -> Result<Option<ProviderProf
         && state.active_account_id.is_some()
         && crate::local_proxy::is_running()
     {
-        let context_window = read_app_settings(app)?.gpt_5_6_sol_context_window;
+        let context_window = settings.gpt_5_6_sol_context_window;
         let catalog = official_local_proxy_catalog(&paths.codex_home);
         return Ok(Some(official_local_proxy_profile(
             context_window,
@@ -402,6 +458,38 @@ pub(crate) mod tests {
         assert!(effective.enabled);
         assert!(effective.write_codex);
         assert!(effective.apps.claude_code);
+        assert!(!effective.apps.claude_desktop);
+    }
+
+    #[test]
+    fn desktop_and_code_writes_require_independent_selections() {
+        let mut choices = ThirdPartyAppWriteSettings::default();
+        choices.enabled = true;
+        choices.apps.claude_code = true;
+        let mut settings = AppSettings {
+            third_party_app_write: Some(choices.clone()),
+            ..AppSettings::default()
+        };
+        assert!(should_write_app(&settings, ThirdPartyAppId::ClaudeCode));
+        assert!(!should_write_app(&settings, ThirdPartyAppId::ClaudeDesktop));
+        choices.apps.claude_code = false;
+        choices.apps.claude_desktop = true;
+        settings.third_party_app_write = Some(choices.clone());
+        assert!(!should_write_app(&settings, ThirdPartyAppId::ClaudeCode));
+        assert!(should_write_app(&settings, ThirdPartyAppId::ClaudeDesktop));
+        choices.enabled = false;
+        settings.third_party_app_write = Some(choices);
+        assert!(!should_write_app(&settings, ThirdPartyAppId::ClaudeDesktop));
+    }
+
+    #[test]
+    fn older_saved_choices_do_not_implicitly_enable_desktop() {
+        let choices: ThirdPartyAppWriteSettings = serde_json::from_value(serde_json::json!({
+            "enabled":true, "apps":{"claudeCode":true}
+        }))
+        .unwrap();
+        assert!(choices.apps.claude_code);
+        assert!(!choices.apps.claude_desktop);
     }
 
     #[test]

@@ -3,7 +3,7 @@ import type { Language } from "../../i18n";
 import type { QuantitativeView } from "./quantitativeTypes";
 import { evaluationStale, percent, recentOutcomes, sourceNames } from "./quantitativeModel";
 import { publicEvidenceTime } from "./presentation";
-import { evaluationRows, evaluationPage, evaluationVersion, scorecardKey } from "./evaluationModel";
+import { currentHorizonProgress, evaluationRows, evaluationPage, evaluationVersion, scorecardKey } from "./evaluationModel";
 import { EvidenceLink } from "./ArchiveView";
 import { ReactionEvaluation } from "./ReactionEvaluation";
 import styles from "./quantitative.module.less";
@@ -18,6 +18,7 @@ export function QuantitativeEvaluation({ view, language, now, onOpenSource }: {
   const [page, setPage] = useState(0), [comparisonPage, setComparisonPage] = useState(0);
   if (!report) return <article id="forecast-evaluation" className={styles.card}><h2>{zh ? "预测评估" : "Forecast evaluation"}</h2><p className={styles.caption}>{view.evaluationIssue ? (zh ? "评估报告读取失败，后台会自动重试。" : "The evaluation report could not be read. Retrying automatically in the background.") : (zh ? "等待独立评估器输出。" : "Waiting for the independent evaluator.")}</p></article>;
   const stale = evaluationStale(view,now), s = report.summary;
+  const horizonProgress = currentHorizonProgress(view);
   const name = (id: string) => sourceNames[id] ?? ({ survival_baseline: zh ? "历史基准" : "Historical baseline", without_community: zh ? "移除社区" : "Without community", without_response_cohort: zh ? "移除消息响应分组" : "Without response grouping", without_comment_estimates: zh ? "移除独立承诺判断" : "Without separate commitment estimates", without_information: zh ? "移除来源修正" : "Without source revisions", without_radars: zh ? "移除雷达" : "Without radars", without_baseline: zh ? "移除历史基准" : "Without baseline", equal_components: zh ? "各分量等权" : "Equal component weights" }[id] ?? (zh ? "对照模型" : "Comparison model"));
   const scope = (t: string) => t === "automatic_reset" ? (zh ? "自动重置" : "Automatic reset") : (zh ? "重置或发卡" : "Reset or credit");
   const track = (t: string) => ({ native: zh ? "来源原值" : "Native", adapted: zh ? "转换输入" : "Aligned", model: zh ? "综合模型" : "Combined", shadow: zh ? "对照模型" : "Ablation" }[t]);
@@ -60,10 +61,22 @@ export function QuantitativeEvaluation({ view, language, now, onOpenSource }: {
     : (zh ? "预测已冻结。事件发生后自动核验，待对应窗口到期且观测覆盖充分后，显示 Brier、对数损失、校准与误报情况。" : "Forecasts are frozen. Events are checked automatically; Brier, log loss, calibration and false alerts appear after the corresponding windows mature with sufficient observation coverage.");
   return <article id="forecast-evaluation" className={styles.card}>
     <div className={styles.heading}><h2>{zh ? "预测评估" : "Forecast evaluation"}</h2><span>{stale ? (zh ? "评估输出待更新" : "Evaluation update due") : publicEvidenceTime(report.generated_at,language)}</span></div>
-    <div className={styles.evaluationStats}><div><strong>{s.forecast_snapshots}</strong><span>{zh ? "预测快照" : "Forecast snapshots"}</span></div><div><strong>{s.frozen_trials}</strong><span>{zh ? "已冻结检验" : "Frozen trials"}</span></div><div><strong>{s.scored_nonoverlapping_trials}</strong><span>{zh ? "已评分" : "Scored trials"}</span></div><div><strong>{unresolved}</strong><span>{zh ? "待补足证据" : "Evidence pending"}</span></div></div>
-    <p className={styles.caption}>{s.next_maturity ? (zh ? "下次可结算 " : "Next eligible settlement ") + publicEvidenceTime(s.next_maturity,language) : (zh ? "等待下一个检验窗。" : "Awaiting the next test window.")}</p>
+    <p className={styles.caption}>{zh ? "当前 Horizon · 各目标与期限分别检验" : "Current Horizon · Each target and horizon evaluated separately"}</p>
+    <div className={styles.evaluationStats} aria-label={zh ? "当前 Horizon 有效检验窗口" : "Current Horizon scored windows"}>
+      {horizonProgress.map(({ target, hours, card }) => <div key={`${target}:${hours}`}>
+        <span>{scope(target)} · {hours}h</span>
+        <strong>{card ? card.scores.n : "—"}<small>{zh ? " 有效窗口" : " scored windows"}</small></strong>
+        <span>{card ? `${card.scores.unique_events} ${zh ? "个独立事件" : "distinct events"}` : (zh ? "等待该版本的评估记录" : "Awaiting this version’s evaluation")}</span>
+        {card && !card.scores.n && <span>{(card.settlement_states.unresolved ?? 0) + (card.settlement_states.disputed ?? 0) > 0
+          ? (zh ? "部分窗口待补足证据" : "Some windows await outcome evidence")
+          : (card.settlement_states.pending ?? 0) > 0 ? (zh ? "等待窗口到期" : "Awaiting window maturity")
+            : (zh ? "等待完整有效窗口" : "Awaiting complete eligible windows")}</span>}
+      </div>)}
+    </div>
     {stale && <p className={styles.notice} role="status">{zh ? "评估器最近未更新，以下为保存的报告。" : "The evaluator has not updated recently. Showing the saved report."}</p>}
     <details className={styles.disclosure}><summary>{zh ? "成绩、事件与反应速度" : "Scores, events and response times"}</summary>
+    <p className={styles.caption}>{zh ? `全部历史：${s.forecast_snapshots} 份快照 · ${s.frozen_trials} 项冻结检验 · ${s.scored_nonoverlapping_trials} 条评分 · ${unresolved} 项待补足证据` : `All history: ${s.forecast_snapshots} snapshots · ${s.frozen_trials} frozen trials · ${s.scored_nonoverlapping_trials} scores · ${unresolved} awaiting evidence`}</p>
+    <p className={styles.caption}>{s.next_maturity ? (zh ? "下次可结算 " : "Next eligible settlement ") + publicEvidenceTime(s.next_maturity,language) : (zh ? "等待下一个检验窗。" : "Awaiting the next test window.")}</p>
     <p>{zh ? `窗口到期 ${report.policy.reporting_grace_seconds/3600}h 后开始结算。记录含不同来源和期限，独立事件数见各项成绩。` : `Settlement starts ${report.policy.reporting_grace_seconds/3600}h after each window ends. Records span multiple sources and horizons; each score lists its distinct events.`}</p>
     {progress && <details className={styles.disclosure}><summary>{zh ? `${s.scored_nonoverlapping_trials} 条评分，覆盖 ${scoredWindows} 个目标时间窗` : `${s.scored_nonoverlapping_trials} scores across ${scoredWindows} target-time windows`}</summary>
       <p>{zh ? "不同来源与对照模型共享同一时间窗；按目标和起止时间去重，窗口数不等于实际重置次数。滚动核验包含主评分窗口。" : "Different sources and variants share the same windows. Windows are deduplicated by target and time, not counted as reset events. Rolling checks include headline scoring windows."}</p>

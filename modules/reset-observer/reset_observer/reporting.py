@@ -23,6 +23,35 @@ IMPLEMENTATION_HASH = digest(
 )
 
 
+class ReportCache:
+    """One bounded derived scoring snapshot, owned by the serial evaluator.
+
+    No ledger rows survive between runs. Serializing the small output both
+    bounds resident cache storage and prevents callers mutating a cached report.
+    Live forecasts, curves, ballots and reaction times are never cached here.
+    """
+
+    def __init__(self, maximum_bytes=8 * 1024 * 1024):
+        self.maximum_bytes = maximum_bytes
+        self.key = None
+        self.payload = None
+        self.at = None
+        self.until = None
+
+    def get(self, key, now):
+        if (self.key == key and self.payload is not None and now >= self.at
+                and (self.until is None or now < self.until)):
+            return json.loads(self.payload)
+        return None
+
+    def put(self, key, now, until, value):
+        payload = json.dumps(value, ensure_ascii=False, allow_nan=False,
+                             separators=(",", ":")).encode("utf-8")
+        self.key = self.payload = self.at = self.until = None
+        if len(payload) <= self.maximum_bytes:
+            self.key, self.payload, self.at, self.until = key, payload, now, until
+
+
 def source_name(source, private=False):
     return "internal_signal_" + digest(source)[:8] if private else source
 
@@ -223,22 +252,43 @@ def paired_comparisons(scored, policy, safe):
     return comparisons
 
 
-def build_report(store, now, policy, evidence, preference_features=None):
-    forecasts = store.forecasts(now, latest=True)
-    private = {f.source for f in forecasts if f.private}
+def scoring_snapshot(store, now, policy, evidence, latest, private, cache=None):
+    # Pin the key and its dependent reads to one SQLite snapshot. The capture
+    # connection may append while evaluation runs; an old key must never label
+    # newly committed data. Respect a caller's existing read transaction.
+    owned_transaction = not store.db.in_transaction
+    if owned_transaction:
+        store.db.execute("BEGIN")
+    try:
+        key = None
+        if cache is not None:
+            stat = store.path.stat()
+            key = digest([str(store.path), stat.st_dev, stat.st_ino, policy.hash,
+                          store.report_revision(now), store.get("last_grid"),
+                          sorted((f.source, f.version, f.target, f.track) for f in latest.values()),
+                          sorted(private),
+                          [(e["id"], e["status"], e["from"]) for e in evidence["events"]]])
+            saved = cache.get(key, now)
+            if saved is not None:
+                through = saved["coverage_through"]
+                revision = store.coverage_revision(min(now, through) if through is not None else None)
+                if saved["coverage_revision"] == (list(revision) if revision is not None else None):
+                    return saved
+        value, until = _scoring_snapshot(store, now, policy, evidence, latest, private)
+        through = value["coverage_through"]
+        revision = store.coverage_revision(min(now, through) if through is not None else None)
+        value["coverage_revision"] = list(revision) if revision is not None else None
+        if cache is not None:
+            cache.put(key, now, until, value)
+        return value
+    finally:
+        if owned_transaction:
+            store.db.rollback()
+
+
+def _scoring_snapshot(store, now, policy, evidence, latest, private):
+    private = set(private)
     safe = lambda source: source_name(source, source in private)
-    latest = {}
-    for f in forecasts:
-        # The report only needs the reset anchor for cycle eligibility. Keep
-        # full input provenance in its immutable forecast row, not beside every
-        # historical trial while the report is assembled.
-        f.metadata = {"last_reset_at": f.metadata.get("last_reset_at")}
-        key = f.source, f.target, f.track
-        if key not in latest or (f.origin, f.available_at) >= (
-            latest[key].origin,
-            latest[key].available_at,
-        ):
-            latest[key] = f
     trials = store.trials(now, compact=True)
     private.update(r["source"] for r in trials if r.get("private"))
     settlements = store.settled(now, compact=True)
@@ -294,6 +344,54 @@ def build_report(store, now, policy, evidence, preference_features=None):
     # Every pair uses the intersection of identical origin/deadline/target windows.
     # All results are descriptive until enough independent time blocks accumulate.
     comparisons = paired_comparisons(scored, policy, safe)
+    pending = [s["matures_at"] for s in settlements.values() if s["status"] == "pending"]
+    next_maturity = min(pending, default=store.get("last_grid") + policy.grid_seconds
+                        + min(HORIZONS) * 3600 + policy.reporting_grace_seconds)
+    # Coverage diagnostics consult whether a window has ended. Do not reuse a
+    # pre-deadline projection merely because no new ledger row has arrived yet.
+    until = min((r["origin"] + r["hours"] * 3600 for r in trials
+                 if r["origin"] + r["hours"] * 3600 > now), default=None)
+    diagnostics = window_diagnostics(store, now, policy, trials, settlements)
+    diagnostics.pop("runtime_events")
+    # Only backfilled observations within an unresolved window's evidence range
+    # can change its coverage detail. New live healthy receipts must not force
+    # decoding and rescoring every historical trial once a minute.
+    through = max((stamp(w["deadline"]) + policy.maximum_coverage_gap_seconds
+                   for w in diagnostics["windows"] if w["coverage"] is not None), default=None)
+    return {
+        "private": sorted(private),
+        "frozen_trials": len(trials),
+        "settlements": dict(Counter(s["status"] for s in settlements.values())),
+        "next_maturity": next_maturity,
+        "scoring_by_horizon": scoring_progress(trials, settlements),
+        "scorecards": rows,
+        "comparisons": comparisons,
+        "diagnostics": diagnostics,
+        "coverage_through": through,
+        "dependence": dependence(trials, safe),
+    }, until
+
+
+def build_report(store, now, policy, evidence, preference_features=None, cache=None):
+    forecasts = store.forecasts(now, latest=True)
+    private = {f.source for f in forecasts if f.private}
+    safe = lambda source: source_name(source, source in private)
+    latest = {}
+    for f in forecasts:
+        # The report only needs the reset anchor for cycle eligibility. Keep
+        # full input provenance in its immutable forecast row, not beside every
+        # historical trial while the report is assembled.
+        f.metadata = {"last_reset_at": f.metadata.get("last_reset_at")}
+        key = f.source, f.target, f.track
+        if key not in latest or (f.origin, f.available_at) >= (
+            latest[key].origin,
+            latest[key].available_at,
+        ):
+            latest[key] = f
+    scoring = scoring_snapshot(store, now, policy, evidence, latest, private, cache)
+    scoring["diagnostics"]["runtime_events"] = store.runtime_events(now, limit=30)
+    private.update(scoring["private"])
+    rows = scoring["scorecards"]
     latest_rows = []
     for key, f in sorted(latest.items()):
         latest_rows.append(
@@ -361,15 +459,8 @@ def build_report(store, now, policy, evidence, preference_features=None):
             }
         )
     providers = provider_health(store, now, policy)
-    counts = Counter(s["status"] for s in settlements.values())
     mature = sum(r["scores"]["n"] for r in rows)
-    next_maturity = min(
-        (s["matures_at"] for s in settlements.values() if s["status"] == "pending"),
-        default=store.get("last_grid")
-        + policy.grid_seconds
-        + min(HORIZONS) * 3600
-        + policy.reporting_grace_seconds,
-    )
+    next_maturity = scoring["next_maturity"]
     from .preferences import report as preference_report
     from .reaction import report as reaction_report
     return {
@@ -396,11 +487,11 @@ def build_report(store, now, policy, evidence, preference_features=None):
         },
         "summary": {
             "forecast_snapshots": store.forecast_count(now),
-            "frozen_trials": len(trials),
-            "settlements": dict(counts),
+            "frozen_trials": scoring["frozen_trials"],
+            "settlements": scoring["settlements"],
             "scored_nonoverlapping_trials": mature,
             "next_maturity": iso(next_maturity) if next_maturity else None,
-            "scoring_by_horizon": scoring_progress(trials, settlements),
+            "scoring_by_horizon": scoring["scoring_by_horizon"],
             "outcomes": dict(Counter(e["status"] for e in outcomes)),
             "settlement_revisions": store.db.execute(
                 "SELECT COUNT(*) FROM settlements WHERE at<=?", (now,)
@@ -413,9 +504,9 @@ def build_report(store, now, policy, evidence, preference_features=None):
         "outcome_providers": providers,
         "outcomes": outcomes,
         "scorecards": rows,
-        "comparisons": comparisons,
-        "diagnostics": window_diagnostics(store, now, policy, trials, settlements),
-        "dependence": dependence(trials, safe),
+        "comparisons": scoring["comparisons"],
+        "diagnostics": scoring["diagnostics"],
+        "dependence": scoring["dependence"],
         "weight_review": {
             "state": "human_review_required",
             "automatic_promotion": False,

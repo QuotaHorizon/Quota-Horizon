@@ -128,6 +128,8 @@ pub(crate) struct ThirdPartyAppWriteTargets {
     #[serde(default)]
     pub(crate) claude_code: bool,
     #[serde(default)]
+    pub(crate) claude_desktop: bool,
+    #[serde(default)]
     pub(crate) open_code: bool,
     #[serde(default)]
     pub(crate) open_claw: bool,

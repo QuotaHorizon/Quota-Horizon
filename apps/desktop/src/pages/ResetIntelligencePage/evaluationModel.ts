@@ -41,3 +41,11 @@ export function evaluationPage<T>(items: T[], requested: number, size = 20) {
   const page = Math.min(Math.max(0, requested), pages - 1);
   return { items: items.slice(page * size, (page + 1) * size), page, pages };
 }
+
+/** Keep targets and horizons separate: their windows and events overlap. */
+export function currentHorizonProgress(view: QuantitativeView) {
+  const cards = evaluationRows(view, false, "horizon").cards.filter(card => card.track === "model");
+  return (["broad_quota_relief", "automatic_reset"] as ResetTarget[]).flatMap(target =>
+    [24, 48].map(hours => ({ target, hours, card: cards.find(card => card.target === target && card.hours === hours) ?? null })),
+  );
+}

@@ -18,7 +18,7 @@ class RuntimeLatencyTests(TemporaryStore):
         started, release = threading.Event(), threading.Event()
         calls=[]
 
-        def slow(*args):
+        def slow(*args, **kwargs):
             calls.append(args[2]);started.set()
             if not release.wait(5):raise AssertionError("evaluation did not release")
             return {}

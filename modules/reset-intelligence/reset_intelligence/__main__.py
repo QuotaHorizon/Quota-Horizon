@@ -16,7 +16,7 @@ from .contracts import TARGETS, iso, stamp
 from .evaluation import canonical_events, forward_report, retrospective
 from .pipeline import consumer_export, forecast_all
 from .quant import ModelConfig
-from .sources import CATALOG, collect
+from .sources import collect, configured_sources
 from .store import Store
 from .audit import source_audit
 from .changes import explain_change, previous_forecast
@@ -70,7 +70,7 @@ def main(argv=None) -> int:
     config_data = json.loads(Path(args.config).read_text(encoding="utf-8")) if args.config else {}
     extra = config_data.get("sources", [])
     disabled = set(config_data.get("disabled_sources", []))
-    specs = [s for s in [*CATALOG, *extra] if s["id"] not in disabled]
+    specs = configured_sources(extra, disabled)
     config = ModelConfig(**config_data.get("model", {}))
     # Read commands must not silently create an empty data store.
     if args.command in ("replay", "evaluate", "forecast", "audit") and not Path(args.db).is_file():

@@ -25,9 +25,27 @@ CATALOG = [
     {"id": "didcodex_poll", "adapter": "calendar_preference", "url": "https://didcodexreset.com/api/oct28/votes",
      "calendar_url": "https://didcodexreset.com/zh-hk/oct28.html"},
     {"id": "didcodex_status", "adapter": "scheduled_status", "url": "https://didcodexreset.com/api/status.json"},
-    {"id": "statements", "adapter": "statements", "url": "https://codex-reset.pro/api/reset-feed"},
     {"id": "tibo_posts", "adapter": "tibo_posts", "url": "https://codex-reset.com/api/feed?locale=zh"},
 ]
+# The observer reads the replacement completion page. Keep the legacy parser
+# for historical receipts and custom feeds, without polling the retired API.
+RETIRED_ENDPOINTS = {"https://codex-reset.pro/api/reset-feed"}
+
+
+def source_retired(spec):
+    try:
+        endpoint = urlsplit(spec.get("url", ""))
+    except (ValueError, TypeError):
+        # Leave malformed custom URLs to fetch's per-source error isolation.
+        return False
+    return endpoint._replace(query="", fragment="").geturl().rstrip("/") in RETIRED_ENDPOINTS
+
+
+def configured_sources(extra=(), disabled=()):
+    return [s for s in [*CATALOG, *extra]
+            if s["id"] not in disabled and not source_retired(s)]
+
+
 USER_AGENT = "ResetIntelligence/0.1 (+https://github.com/QuotaHorizon/Quota-Horizon)"
 SOURCE_INTERVALS = {s["id"]: 60 for s in CATALOG}
 SOURCE_INTERVALS.update(lunar=300, observatory=300, dreaife=300)
@@ -526,6 +544,8 @@ def collect(store, specs: list[dict] | None = None, minimum_interval: float | No
     specs = CATALOG if specs is None else specs
     if len({s["id"] for s in specs}) != len(specs):
         raise ValueError("duplicate source id")
+    retired = [s for s in specs if source_retired(s)]
+    specs = [s for s in specs if not source_retired(s)]
     latest = {a["source"]: a for a in store.attempts(time.time())}
     observations = store.observations(time.time())
     outdated = {s["id"] for s in specs if s.get("adapter") == "codex_reset"
@@ -575,7 +595,7 @@ def collect(store, specs: list[dict] | None = None, minimum_interval: float | No
         return normal
 
     due = [s for s in specs if time.time() - latest.get(s["id"], {}).get("observed_at", 0) >= interval(s)]
-    outcomes = []
+    outcomes = [{"source": s["id"], "status": "retired"} for s in retired]
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = [pool.submit(fetch, s) for s in due]
         for future in as_completed(futures):

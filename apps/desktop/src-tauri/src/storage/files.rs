@@ -100,7 +100,7 @@ pub(crate) fn write_text_atomic(path: &Path, value: &str) -> Result<(), String> 
     write_bytes_atomic(path, value.as_bytes())
 }
 
-fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Target path has no parent directory".to_string())?;

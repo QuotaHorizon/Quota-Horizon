@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { quantitativeFixture } from "../../preview/quantitativeFixture";
-import { evaluationPage, evaluationRows, evaluationVersion } from "./evaluationModel";
+import { currentHorizonProgress, evaluationPage, evaluationRows, evaluationVersion } from "./evaluationModel";
 import { QuantitativeEvaluation } from "./QuantitativeEvaluation";
 
 const now = Date.parse("2026-10-22T14:00:00Z");
@@ -72,5 +72,40 @@ describe("version-specific evaluation", () => {
     expect(evaluationPage([], 5)).toEqual({ items: [], page: 0, pages: 1 });
     expect(evaluationVersion("reset-intelligence-source-signals-10:0123456789abc")).toBe("v10 · 01234567");
     expect(evaluationVersion("native-source-v3")).toBe("native-source-v3");
+  });
+});
+
+describe("current Horizon evidence", () => {
+  it("keeps the four target/horizon counts separate from all-history score totals", () => {
+    const view = quantitativeFixture(now, true);
+    view.evaluation!.summary.scored_nonoverlapping_trials = 99999;
+    const cards = view.evaluation!.scorecards.filter(card => card.source === "horizon" && card.track === "model");
+    cards.forEach((card, index) => { card.scores = { ...card.scores, n: index + 1, unique_events: 1 }; });
+    const progress = currentHorizonProgress(view);
+    expect(progress).toHaveLength(4);
+    for (const item of progress) expect(item.card).toBe(cards.find(card => card.target === item.target && card.hours === item.hours));
+    const html = renderToStaticMarkup(<QuantitativeEvaluation view={view} language="en" now={now} />);
+    expect(html.indexOf("Current Horizon scored windows")).toBeLessThan(html.indexOf("<details"));
+    expect(html.indexOf("99999")).toBeGreaterThan(html.indexOf("<details"));
+    expect(html.match(/1 distinct events/g)).toHaveLength(4);
+  });
+
+  it("does not attribute the retired model's results to a forecast awaiting its own report", () => {
+    const view = quantitativeFixture(now, true);
+    view.forecast!.forecasts.forEach(forecast => { forecast.evaluation_version = "new-version:identity"; });
+    expect(currentHorizonProgress(view).every(item => item.card === null)).toBe(true);
+    const html = renderToStaticMarkup(<QuantitativeEvaluation view={view} language="zh" now={now} />);
+    expect(html).toContain("等待该版本的评估记录");
+  });
+
+  it("distinguishes no scored windows from an absent report and keeps evidence gaps visible", () => {
+    const view = quantitativeFixture(now);
+    const first = view.evaluation!.scorecards.find(card => card.source === "horizon" && card.target === "broad_quota_relief" && card.hours === 24)!;
+    first.settlement_states = { pending: 5, unresolved: 2 };
+    expect(currentHorizonProgress(view)[0].card?.scores.n).toBe(0);
+    const html = renderToStaticMarkup(<QuantitativeEvaluation view={view} language="en" now={now} />);
+    expect(html).toContain("Some windows await outcome evidence");
+    expect(html).toContain("Awaiting window maturity");
+    expect(html).not.toContain("Awaiting this version’s evaluation");
   });
 });

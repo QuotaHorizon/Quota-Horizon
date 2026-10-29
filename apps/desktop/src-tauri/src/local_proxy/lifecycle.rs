@@ -6,33 +6,16 @@ pub(crate) fn restore_local_proxy_if_enabled<R: Runtime>(
         return Ok(false);
     }
 
-    let started = match start_server(app.clone()) {
-        Ok(started) => started,
+    match start_server(app.clone()) {
+        Ok(_) => (),
         Err(error) => {
             let _ = set_local_proxy_enabled(&paths, false);
             return Err(error);
         }
-    };
-    let write_codex = crate::claude_code::should_write_codex_for_app(app)?;
-    let config_result = if write_codex {
-        providers::apply_local_proxy_config_for_state(app)
-    } else {
-        Ok(())
-    };
-    if let Err(error) = config_result {
-        if started {
-            stop_server();
-        }
-        let _ = set_local_proxy_enabled(&paths, false);
-        return Err(error);
     }
-    if let Err(error) = crate::third_party_apps::sync_after_switch(app) {
-        if started {
-            stop_server();
-        }
-        let _ = set_local_proxy_enabled(&paths, false);
-        return Err(error);
-    }
+    // Reopening Horizon restores the listener, not client configuration. The
+    // user may have edited a client while Horizon was closed; only an explicit
+    // proxy start or account/provider switch may synchronize those files.
     Ok(true)
 }
 

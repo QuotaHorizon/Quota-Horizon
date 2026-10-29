@@ -121,9 +121,12 @@ class Store:
         with self.db:
             self.db.execute("INSERT INTO runtime_events(at,payload) VALUES (?,?)", (now, packed(payload)))
 
-    def runtime_events(self, now):
+    def runtime_events(self, now, limit=None):
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_events'").fetchone():
             return []
+        if limit is not None:
+            rows = self.db.execute("SELECT payload FROM runtime_events WHERE at<=? ORDER BY at DESC,id DESC LIMIT ?", (now, limit))
+            return list(reversed([json.loads(r[0]) for r in rows]))
         return [json.loads(r[0]) for r in self.db.execute("SELECT payload FROM runtime_events WHERE at<=? ORDER BY at,id", (now,))]
 
     def get(self, key):
@@ -316,6 +319,31 @@ class Store:
                         value[key] = symbols.setdefault(value[key], value[key])
             output[row["trial"]] = {"at": row["at"], **value}
         return output
+
+    def report_revision(self, now):
+        """Small as-of watermarks for the append-only scoring/coverage ledger.
+
+        Count as well as the last row: preloaded future rows can become visible
+        out of rowid order. No forecast, ballot or reaction cache is covered by
+        this signature; those remain live reads on every report.
+        """
+        output = []
+        for table, clock in (("trials", "frozen_at"), ("trial_revisions", "at"),
+                             ("settlements", "at")):
+            row = self.db.execute(
+                f"SELECT COUNT(*),COALESCE(MAX(rowid),0) FROM {table} WHERE {clock}<=?",
+                (now,),
+            ).fetchone()
+            output.append(tuple(row))
+        return output
+
+    def coverage_revision(self, through):
+        if through is None:
+            return None
+        return tuple(self.db.execute(
+            "SELECT COUNT(*),COALESCE(MAX(rowid),0) FROM observations WHERE observed_at<=?",
+            (through,),
+        ).fetchone())
 
     def raw_payload(self, payload_hash):
         row = self.db.execute("SELECT body FROM payloads WHERE hash=?", (payload_hash,)).fetchone()

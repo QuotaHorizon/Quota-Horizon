@@ -18,7 +18,7 @@ from .contracts import Policy, digest, iso
 from .evidence import ACTIVE_FEEDS, FEEDS, collect, reconcile, reinterpret_latest, completion_export
 from .diagnostics import runtime_gap
 from .importers import intelligence_database, json_lines
-from .reporting import build_report, html_report
+from .reporting import ReportCache, build_report, html_report
 from .store import Store, storage_upgrade_step
 
 
@@ -274,7 +274,7 @@ def run_once(args, config, refresh=False, evaluator=None):
         store.close()
 
 
-def evaluate(args, policy, now, evidence, runtime, preference_features=None):
+def evaluate(args, policy, now, evidence, runtime, preference_features=None, report_cache=None):
     """One evaluator per locked worker; collection owns a separate connection.
 
     Capture and forecast publication continue while historical scoring runs.
@@ -292,7 +292,8 @@ def evaluate(args, policy, now, evidence, runtime, preference_features=None):
         timings = dict(runtime["phase_seconds"])
         timings["settlement"] = time.monotonic() - phase
         phase = time.monotonic()
-        report = build_report(store, now, policy, evidence, preference_features=preference_features)
+        report = build_report(store, now, policy, evidence,
+                              preference_features=preference_features, cache=report_cache)
         timings["report"] = time.monotonic() - phase
         report["runtime"] = {
             **runtime,
@@ -345,6 +346,7 @@ class BackgroundEvaluation:
         self.future = None
         self.pending = None
         self.database = None
+        self.report_cache = ReportCache()
 
     def submit(self, *job):
         self.pending = job
@@ -368,7 +370,7 @@ class BackgroundEvaluation:
                     store.close()
             self.future = None
         if self.pending is not None:
-            self.future = self.pool.submit(evaluate, *self.pending)
+            self.future = self.pool.submit(evaluate, *self.pending, report_cache=self.report_cache)
             self.pending = None
 
     def close(self):

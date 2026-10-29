@@ -7,6 +7,7 @@ import type {
 
 export const THIRD_PARTY_APP_IDS = [
   "claudeCode",
+  "claudeDesktop",
   "openCode",
   "openClaw",
   "hermesAgent",
@@ -29,6 +30,7 @@ export function createThirdPartyAppSelection(
 ): Record<ThirdPartyAppId, boolean> {
   return {
     claudeCode,
+    claudeDesktop: false,
     openCode: false,
     openClaw: false,
     hermesAgent: false,

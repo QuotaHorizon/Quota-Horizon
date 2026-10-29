@@ -1,12 +1,13 @@
 use std::path::PathBuf;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 use tauri::{AppHandle, Runtime};
 
 use crate::{
     codex_config::LOCAL_PROXY_BASE_URL,
     models::{AppSettings, ClaudeCodeWriteTarget, ProviderProfile},
-    storage::{read_app_settings, read_json, write_app_settings, write_json_atomic},
+    storage::read_app_settings,
+    third_party_apps::config_transaction::ConfigTransaction,
 };
 
 const CLAUDE_SETTINGS_FILE: &str = "settings.json";
@@ -46,22 +47,10 @@ pub(crate) async fn set_claude_code_write_target<R: Runtime + 'static>(
     target: ClaudeCodeWriteTarget,
 ) -> Result<AppSettings, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut settings = read_app_settings(&app)?;
-        let previous_target = settings.claude_code_write_target;
-        let previous_third_party = settings.third_party_app_write;
-        settings.claude_code_write_target = target;
-        settings.third_party_app_write = Some(target.into());
-        write_app_settings(&app, &settings)?;
-        if let Err(error) = crate::third_party_apps::sync_after_switch(&app) {
-            eprintln!("Claude Code configuration sync failed: {error}");
-            settings.claude_code_write_target = previous_target;
-            settings.third_party_app_write = previous_third_party;
-            write_app_settings(&app, &settings)?;
-            return Err(
-                "无法更新 Claude Code 配置，写入目标未更改。请检查配置文件后重试。".to_string(),
-            );
-        }
-        Ok(settings)
+        crate::third_party_apps::update_settings_and_sync(&app, |settings| {
+            settings.claude_code_write_target = target;
+            settings.third_party_app_write = Some(target.into());
+        })
     })
     .await
     .map_err(|_| "保存写入目标失败，请重试。".to_string())?
@@ -85,14 +74,14 @@ fn claude_settings_path() -> Result<PathBuf, String> {
 }
 
 pub(crate) fn write_provider_settings(
+    transaction: &mut ConfigTransaction,
     provider: Option<&ProviderProfile>,
     subagent_model: &str,
 ) -> Result<(), String> {
     let path = claude_settings_path()?;
-    let mut settings = match read_json(&path) {
+    let mut settings = match transaction.read_json(&path) {
         Ok(value) if value.is_object() => value,
         Ok(_) => return Err("Claude Code settings.json 必须是 JSON 对象".to_string()),
-        Err(_) if !path.exists() => json!({}),
         Err(error) => return Err(error),
     };
     let object = settings
@@ -109,17 +98,19 @@ pub(crate) fn write_provider_settings(
         None => clear_provider_environment(env),
     }
 
-    write_json_atomic(&path, &settings)
+    transaction.write_json(&path, &settings)
 }
 
 /// Writes the local proxy endpoint used when the selected route is an official
 /// account rather than a third-party Provider.
-pub(crate) fn write_official_proxy_settings(subagent_model: &str) -> Result<(), String> {
+pub(crate) fn write_official_proxy_settings(
+    transaction: &mut ConfigTransaction,
+    subagent_model: &str,
+) -> Result<(), String> {
     let path = claude_settings_path()?;
-    let mut settings = match read_json(&path) {
+    let mut settings = match transaction.read_json(&path) {
         Ok(value) if value.is_object() => value,
         Ok(_) => return Err("Claude Code settings.json 必须是 JSON 对象".to_string()),
-        Err(_) if !path.exists() => json!({}),
         Err(error) => return Err(error),
     };
     let object = settings
@@ -131,7 +122,7 @@ pub(crate) fn write_official_proxy_settings(subagent_model: &str) -> Result<(), 
         .as_object_mut()
         .ok_or_else(|| "Claude Code settings.json 的 env 必须是 JSON 对象".to_string())?;
     apply_official_proxy_environment(env, subagent_model);
-    write_json_atomic(&path, &settings)
+    transaction.write_json(&path, &settings)
 }
 
 fn apply_official_proxy_environment(env: &mut Map<String, Value>, subagent_model: &str) {
@@ -235,6 +226,7 @@ fn clear_provider_environment(env: &mut Map<String, Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn claude_base_url_removes_only_the_standard_v1_suffix() {
