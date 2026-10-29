@@ -6,7 +6,16 @@ from test_observer import T, TemporaryStore, claim, forecast, trial
 from reset_observer.benchmark import initialize, settle_all
 from reset_observer.contracts import AUTOMATIC, RELIEF, iso
 from reset_observer.diagnostics import coverage_details, dependence, provider_health, runtime_gap, window_diagnostics
-from reset_observer.evidence import parse, population, reconcile, reported_stage, retry_delay, text_stage, reinterpret_latest
+from reset_observer.evidence import (
+    INTERPRETATION_VERSION,
+    parse,
+    population,
+    reconcile,
+    reported_stage,
+    retry_delay,
+    text_stage,
+    reinterpret_latest,
+)
 from reset_observer.importers import fixed_weight_variants, import_model
 from reset_observer.reporting import build_report, html_report
 from reset_observer.statistics import paired
@@ -18,13 +27,13 @@ class DiagnosticsTests(TemporaryStore):
         c = claim(observed_at=T)
         for at in (T, T+900):
             self.store.observation("quota_events", at, T-7200, False, [dict(c, observed_at=at)], {})
-            self.store.observation("completion_feed", at, at, True, [dict(c, observed_at=at)], {})
+            self.store.observation("didcodex_status", at, at, True, [dict(c, observed_at=at)], {})
         self.store.observation("public_catalogue", T+900, None, False, None, None, "TimeoutError")
         rows = {r["provider"]: r for r in provider_health(self.store, T+901, self.policy)}
         self.assertEqual(rows["quota_events"]["state"], "stale_source_content")
         self.assertEqual(rows["public_catalogue"]["state"], "request_or_decode_failure")
-        self.assertEqual(rows["completion_feed"]["state"], "healthy")
-        self.assertTrue(rows["completion_feed"]["content_unchanged"])
+        self.assertEqual(rows["didcodex_status"]["state"], "healthy")
+        self.assertTrue(rows["didcodex_status"]["content_unchanged"])
 
     def test_retry_backoff_recovers_and_respects_rate_limit(self):
         for i, delay in enumerate((60,120,240,480,900,900)):
@@ -114,6 +123,186 @@ class DiagnosticsTests(TemporaryStore):
 
 
 class EventScopeTests(TemporaryStore):
+    def quota_raw(self, cohort, text):
+        return {
+            "meta": {"generatedAt": iso(T)},
+            "data": [
+                {
+                    "provider": "openai",
+                    "type": "hard_reset",
+                    "slug": "synthetic",
+                    "source": {
+                        "url": "https://x.com/i/status/123",
+                        "kind": "authorized_social",
+                        "excerpt": text,
+                    },
+                    "cohort": cohort,
+                    "state": "confirmed",
+                    "announcedAt": iso(T - 60),
+                    "confirmedAt": iso(T),
+                }
+            ],
+        }
+
+    def test_cohort_is_independent_and_targeted_overrides_conflicting_text(self):
+        cases = [
+            (
+                "all accounts of our Plus, Pro and Business users.",
+                "The reset has been processed. Enjoy!",
+                "broad",
+            ),
+            ("All paid accounts.", "The reset has been processed. Enjoy!", "broad"),
+            ("Pro 500.", "Reset all propagated.", "targeted"),
+            ("all users", "We have reset affected users.", "targeted"),
+            ("specific accounts", "We have reset all users.", "targeted"),
+            ("unspecified", "The reset has been processed. Enjoy!", "unspecified"),
+            ("unknown", "All fixed.", "unspecified"),
+        ]
+        for cohort, text, expected in cases:
+            with self.subTest(cohort=cohort, text=text):
+                raw = self.quota_raw(cohort, text)
+                raw["data"][0].update(scope="global", archive=True)
+                self.assertEqual(
+                    parse("quota_events", raw, T)[2][0]["population"], expected
+                )
+
+    def test_population_current_event_context_and_bare_all(self):
+        for text, expected in [
+            ("All fixed.", "unspecified"),
+            ("All paid accounts. The reset has been processed. Enjoy!", "broad"),
+            ("Pro 500. Reset all propagated.", "targeted"),
+            (
+                "We have reset affected users. We will reset all users tomorrow.",
+                "targeted",
+            ),
+            (
+                "The reset has been processed. We will reset all users tomorrow.",
+                "unspecified",
+            ),
+            (
+                "We have reset all users. We will reset affected users tomorrow.",
+                "broad",
+            ),
+            ("The reset has been processed. Enjoy!", "unspecified"),
+            ("Reset has been completed.", "unspecified"),
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(population(text), expected)
+        text = "We will either ship an improvement or a full reset every day."
+        self.assertEqual(text_stage(text), "conditional")
+        self.assertEqual(reported_stage("completed", text), "conditional")
+
+    def test_explicit_product_and_plan_populations_from_saved_originals(self):
+        originals = [
+            "Never slept better and feeling reseted. Brand new me and brand new usage for all ChatGPT Work and Codex users. Regaining my youth one button press at a time.\n\nHappy Thursday",
+            "Brand new me and brand new usage for all ChatGPT Work and Codex users.",
+            "Usage limits have been reset for all paid ChatGPT Work and Codex users.",
+            "I've reset usage limits for all ChatGPT Work and Codex users.",
+            "We have reset usage limits for all Codex and ChatGPT Work users.",
+            "another usage limit reset for all our ChatGPT Work and Codex users.",
+            "We are giving all Codex users a usage reset on the house.",
+            "The Codex usage limits have been reset for all paid ChatGPT subscriptions.",
+            "Codex usage limits have now been reset across all paid plans.",
+            "I have reset Codex rate limits for ALL paid plans to celebrate a good week.",
+            "I have allowed Codex to reset its own rate limits across all plans.",
+            "I have made the cautious decision of resetting the usage limits for all plans.",
+            "We have now fixed this issue and are reseting the rate limit for all plus and pro users to compensate.",
+            "We will do the full banked reset today too for all Plus, Pro and Business users. Lands end of day.",
+            "Second of all, this is cause for celebration and during the day we will credit every Codex and ChatGPT Work user with a BANKED reset",
+            "We have reset rate limits for all Codex users to compensate for the unusual high latencies in or near the US in the previous hours.",
+        ]
+        for text in originals:
+            with self.subTest(text=text):
+                self.assertEqual(population(text), "broad")
+        for text in (
+            "All fixed.",
+            "We are once again resetting the usage limits for all.",
+            "For Codex users, to thank you all for the fun we've had, we have reset rate limits.",
+            "We have reset affected users. We will reset all ChatGPT Work and Codex users tomorrow.",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    population(text),
+                    "targeted" if "affected users" in text else "unspecified",
+                )
+        self.assertEqual(
+            population(
+                "The reset has been processed. We will reset all Codex users tomorrow."
+            ),
+            "unspecified",
+        )
+        self.assertEqual(population("We have reset not all Codex users."), "targeted")
+
+    def test_new_usage_phrase_does_not_complete_or_widen_an_earlier_reset(self):
+        for text, expected in (
+            (
+                "The reset has been processed. Brand new usage for all Codex users tomorrow.",
+                "unspecified",
+            ),
+            (
+                "We have reset affected users. Brand new usage for all Codex users tomorrow.",
+                "targeted",
+            ),
+            (
+                "We are resetting affected users. We will reset all Codex users tomorrow.",
+                "targeted",
+            ),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(population(text), expected)
+        self.assertEqual(
+            text_stage("Brand new usage for all Codex users."), "announced"
+        )
+        self.assertEqual(
+            text_stage("We will reset all Codex users tomorrow."), "announced"
+        )
+
+    def test_rolling_out_is_started_without_completion_time(self):
+        raw = {
+            "generatedAt": iso(T),
+            "posts": [
+                {
+                    "eventType": "usage_reset",
+                    "url": "https://x.com/i/status/123",
+                    "id": "1",
+                    "original": "Reset for all users.",
+                    "stage": "rolling_out",
+                    "at": iso(T),
+                }
+            ],
+        }
+        c = parse("completion_feed", raw, T)[2][0]
+        self.assertEqual(c["stage"], "started")
+        self.assertIsNone(c["completed_at"])
+
+    def test_cohort_revision_appends_current_knowledge_without_rewriting_health(self):
+        raw = self.quota_raw("Pro 500", "Reset all propagated.")
+        raw["meta"]["generatedAt"] = T + 0.05
+        c = dict(parse("quota_events", raw, T)[2][0], population="broad")
+        self.store.observation("quota_events", T, T + 0.05, False, [c], raw)
+        self.store.put("claim_interpretation", "event-scoped-claims-v4")
+        self.store.freeze(trial())
+        self.store.report(T, {"frozen": "original"})
+        tables = ("observations", "claims", "trials", "reports", "payloads")
+        before = {
+            t: [tuple(r) for r in self.store.db.execute(f"SELECT * FROM {t}")]
+            for t in tables
+        }
+        old_event = reconcile(self.store, T, self.policy)
+        reinterpret_latest(self.store, T+7200)
+        self.assertNotEqual(INTERPRETATION_VERSION, "event-scoped-claims-v4")
+        for table in tables:
+            after = [tuple(r) for r in self.store.db.execute(f"SELECT * FROM {table}")]
+            self.assertEqual(after[: len(before[table])], before[table])
+            self.assertEqual(len(after), len(before[table]) + (table == "claims"))
+        self.assertEqual(reconcile(self.store, T, self.policy), old_event)
+        current = reconcile(self.store, T + 7200, self.policy)["events"][0]
+        self.assertEqual(current["status"], "targeted")
+        self.assertEqual(current["known_at"], T + 7200)
+        self.assertFalse(self.store.observations(T + 7200)[0]["healthy"])
+        reinterpret_latest(self.store, T+10800)
+        self.assertEqual(self.store.claims(T+10800)[0]["observed_at"], T+7200)
+
     def test_parser_revision_preserves_observation_and_original_knowledge(self):
         raw = {"generatedAt": iso(T), "posts": [{"eventType":"reset_card", "url":"https://x.com/i/status/123", "id":"1",
                 "original":"Added a banked reset to 500k users.", "stage":"completed", "at":iso(T), "handle":"thsottiaux"}]}

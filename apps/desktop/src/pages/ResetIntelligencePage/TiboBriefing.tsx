@@ -10,10 +10,10 @@ import type { UpcomingResetNotice } from "./upcomingResetModel";
 import styles from "./resetBriefing.module.less";
 import { activeForecastAnnouncement, combinedStatements } from "./quantitativeModel";
 
-export function TiboBriefing({ timeline, language, notice, now, failed, onOpenSource, onRead, className = "", children }: {
+export function TiboBriefing({ timeline, language, notice, now, failed, onOpenSource, onRead, className = "", bodyClassName = "", children }: {
   timeline: PublicResetTimeline; language: Language; notice: UpcomingResetNotice | null; now: number; failed?: boolean;
   onOpenSource?: (url: string) => void; onRead?: (receipts: PublicReadReceipt[]) => void;
-  className?: string; children?: ReactNode;
+  className?: string; bodyClassName?: string; children?: ReactNode;
 }) {
   const zh = language === "zh";
   const posts = combinedStatements(timeline);
@@ -27,14 +27,15 @@ export function TiboBriefing({ timeline, language, notice, now, failed, onOpenSo
   const fetched = [timeline.insights?.posts?.fetchedAt, checked != null ? new Date(checked*1000).toISOString() : undefined].filter((s): s is string => !!s).sort().at(-1);
   const stale = failed || !!source?.issue || !fetched || now - Date.parse(fetched) >= 30 * 60_000;
   const active = other.find(p => p.id === selected);
-  return <article className={`${styles.card} ${styles.tiboCard} ${className}`} tabIndex={0} aria-label={zh ? "Tibo 发言与互动" : "Tibo statements and interactions"}>
+  return <article className={`${styles.card} ${styles.tiboCard} ${className}`} aria-label={zh ? "Tibo 发言与互动" : "Tibo statements and interactions"}>
     <div className={styles.cardHeading}><h2><MessageCircle size={17} aria-hidden="true" /> Tibo · {zh ? "发言与互动" : "Statements & interactions"}</h2>
       <div className={styles.tiboLinks}><EvidenceLink url="https://x.com/thsottiaux" label={zh ? "X 主页" : "X profile"} onOpen={onOpenSource} />
         <EvidenceLink url="https://x.com/thsottiaux/with_replies" label={zh ? "X 上的全部回复" : "All replies on X"} onOpen={onOpenSource} /></div>
     </div>
+    <div className={`${styles.tiboBody} ${bodyClassName}`} tabIndex={0} aria-label={zh ? "发言正文与互动列表" : "Post text and interactions"}>
     {stale && <p className={styles.correction}>{zh ? "发言来源待更新，保留完整正文与原发布时间。" : "Post source update due; complete text and original publication times are retained."}</p>}
     <div className={styles.tiboGrid}>
-      <div className={styles.tiboLead}><div className={styles.sectionLabel}>{zh ? "重置最新进展" : "Latest reset development"}</div>
+      <div className={styles.tiboLead}>
         {lead ? <PostConversation key={lead.id} post={lead} timeline={timeline} language={language} onOpenSource={onOpenSource} onRead={onRead} />
           : <p className={styles.meta}>{zh ? "正在获取公开发言…" : "Fetching public statements…"}</p>}
       </div>
@@ -50,5 +51,6 @@ export function TiboBriefing({ timeline, language, notice, now, failed, onOpenSo
     </div>
     {active && <div className={styles.selectedConversation}><PostConversation key={active.id} post={active} timeline={timeline} language={language} onOpenSource={onOpenSource} onRead={onRead} /></div>}
     {children}
+    </div>
   </article>;
 }

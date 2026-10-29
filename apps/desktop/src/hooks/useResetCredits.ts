@@ -11,14 +11,15 @@ function cachedCreditFrom(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { issuedAt: null, expiresAt: null };
   }
-  const credit = value as { issuedAt?: unknown; expiresAt?: unknown };
+  const credit = value as { issuedAt?: unknown; expiresAt?: unknown; available?: unknown };
   return {
     issuedAt: typeof credit.issuedAt === "string" ? credit.issuedAt : null,
     expiresAt: typeof credit.expiresAt === "string" ? credit.expiresAt : null,
+    available: typeof credit.available === "boolean" ? credit.available : null,
   };
 }
 
-function cachedStateFrom(value: unknown): LoadedResetCreditsState | null {
+export function cachedStateFrom(value: unknown): LoadedResetCreditsState | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const state = value as Partial<LoadedResetCreditsState>;
   if (state.status !== "loaded" || typeof state.fetchedAt !== "string") return null;
@@ -26,7 +27,7 @@ function cachedStateFrom(value: unknown): LoadedResetCreditsState | null {
   return {
     status: "loaded",
     data: {
-      credits: state.data.credits.map(cachedCreditFrom),
+      credits: state.data.credits.map(cachedCreditFrom).filter((credit) => credit.available !== false),
     },
     fetchedAt: state.fetchedAt,
   };

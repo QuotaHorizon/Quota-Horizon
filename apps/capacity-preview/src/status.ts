@@ -64,6 +64,9 @@ export interface DesktopStatus {
     summaryStatus: "available" | "partial" | "unavailable";
     availableCount: number | null;
     detailsStatus: "complete" | "partial" | "unavailable";
+    nextExpiresAt?: string | null;
+    knownExpiryCount?: number;
+    expiryDetailsComplete?: boolean;
   };
   usage: {
     availability: Availability;

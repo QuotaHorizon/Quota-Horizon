@@ -46,15 +46,26 @@ function LeadCard({ entry, language, onOpenSource }: {
   </article>;
 }
 
-export function LiveSourcesView({ state, archive = null, archiveContent, language, now, onRefresh, onOpenSource, onMarkRead, onRead, initialSection = "overview" }: {
+export function LiveSourcesView({ state, archive = null, archiveContent, language, now, onRefresh, onOpenSource, onMarkRead, onRead, onPresented, initialSection = "overview" }: {
   state: PublicSourcesState; archive?: PublicResetArchive | null; archiveContent?: ReactNode; language: Language; now: number; onRefresh?: () => void; onOpenSource?: (url: string) => void;
   onMarkRead?: () => void; onRead?: (receipts: PublicReadReceipt[]) => void;
+  onPresented?: (receivedAt: number, at: number, visible: boolean) => void;
   initialSection?: "overview" | "history" | "details";
 }) {
   const zh = language === "zh";
   const { timeline, busy, failed } = state;
   const unreadCount = unreadResetProgress(timeline, now).length;
   const [section, setSection] = useState(initialSection);
+  const receipt = timeline?.quantitative?.connected && section === "overview"
+    ? timeline.quantitative.presentation?.receivedAt : undefined;
+  useEffect(() => {
+    if (receipt == null || !onPresented) return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => onPresented(receipt, Date.now(), document.visibilityState === "visible"));
+    });
+    return () => { cancelAnimationFrame(first); cancelAnimationFrame(second); };
+  }, [receipt, onPresented]);
   const [filter, setFilter] = useState<"leads" | "context" | "all">("leads");
   const [limit, setLimit] = useState(6);
   const entries = (timeline?.entries ?? []).filter((entry) => filter === "all"
@@ -142,7 +153,7 @@ export function LiveSourcesPanel({ archive, archiveContent, language, onOpenSour
       document.removeEventListener("visibilitychange", check);
     };
   }, []);
-  return <LiveSourcesView state={state} archive={archive} archiveContent={archiveContent} language={language} now={Math.max(now, Date.now())} onOpenSource={onOpenSource}
+  return <LiveSourcesView state={state} archive={archive} archiveContent={archiveContent} language={language} now={Math.max(now, Date.now())} onOpenSource={onOpenSource} onPresented={store.markPresented}
     onMarkRead={() => { if (state.timeline) void store.markRead(state.timeline); }}
     onRead={(receipts) => { void store.markReceipts(receipts); }}
     onRefresh={() => { setNow(Date.now()); void store.refresh(true); }} />;

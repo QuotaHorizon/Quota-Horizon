@@ -85,7 +85,6 @@ import {
   CopyableAccountEmail,
   GlobalAutoSwitchThresholdControl,
   needsAccountAttention,
-  resetCreditsCount,
   ResetCreditsModal,
   tokenUsageMatchesAccount,
   totalsForAccount,
@@ -658,7 +657,8 @@ export function AccountTable({
             <div className="account-email-row">
               <CopyableAccountEmail email={account.email}
                 displayEmail={privacyMode ? maskAccountEmail(account.email) : account.email} t={t} />
-              <AccountResetCreditCount count={resetCreditsCount(resetCredits[account.id])} language={language} />
+              <AccountResetCreditCount state={resetCredits[account.id]} language={language}
+                onOpen={() => setResetCreditsAccount(account)} />
             </div>
             <AccountNoteEditButton account={account} hideAccountNotes={hideAccountNotes}
               onEdit={() => openAccountDetails(account)} t={t} />
@@ -1285,8 +1285,8 @@ export function AccountTable({
                 <div className="identity-line">
                   <CopyableAccountEmail email={account.email}
                     displayEmail={privacyMode ? maskAccountEmail(account.email) : account.email} t={t} />
-                  <AccountResetCreditCount count={resetCreditsCount(resetCredits[account.id])}
-                    language={language} />
+                  <AccountResetCreditCount state={resetCredits[account.id]}
+                    language={language} onOpen={() => setResetCreditsAccount(account)} />
                   <Tooltip title={account.accountId ? t("table.workspace", { id: account.accountId }) : t("table.personal")}>
                     <Tag className="plan-tag">{account.plan || "ChatGPT"}</Tag>
                   </Tooltip>

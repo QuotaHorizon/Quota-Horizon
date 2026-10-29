@@ -91,6 +91,7 @@ export interface SafeRollbackPreview {
 export interface ResetCredit {
   issuedAt?: string | null;
   expiresAt?: string | null;
+  available?: boolean | null;
 }
 
 export interface ResetCreditsSummary {
@@ -109,6 +110,15 @@ export interface AppInfo {
   accountStore: string;
   providerStore: string;
   version: string;
+  build?: AppBuildInfo;
+}
+
+export interface AppBuildInfo {
+  commit: string | null;
+  dirty: boolean | null;
+  builtAtMs: number | null;
+  platform: string;
+  arch: string;
 }
 
 export type ProviderApiFormat = "openaiResponses" | "openaiChat";
@@ -1056,6 +1066,7 @@ export type ClaudeCodeWriteTarget = "all" | "codex" | "claudeCode";
 
 export type ThirdPartyAppId =
   | "claudeCode"
+  | "claudeDesktop"
   | "openCode"
   | "openClaw"
   | "hermesAgent"

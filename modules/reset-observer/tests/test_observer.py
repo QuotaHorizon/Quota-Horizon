@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import json
 from contextlib import closing
 import math
 from pathlib import Path
+import random
 import sqlite3
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+import zlib
 
 import numpy as np
 
@@ -27,6 +30,7 @@ from reset_observer.contracts import (
     Forecast,
     Policy,
     iso,
+    packed,
     url_key,
 )
 from reset_observer.evidence import coverage, parse, population, reconcile, text_stage
@@ -39,6 +43,7 @@ from reset_observer.importers import (
 from reset_observer.reporting import build_report, html_report, publication_curves
 from reset_observer.runtime import (
     atomic_write,
+    evaluate,
     exclusive,
     producer_due,
     run_once,
@@ -143,6 +148,168 @@ class TemporaryStore(unittest.TestCase):
         for provider in providers:
             for t in np.arange(start, end + 901, 900):
                 self.store.observation(provider, float(t), float(t), True, [], {})
+
+
+class ReportStorageTests(TemporaryStore):
+    original_query = (
+        "SELECT id,payload FROM reports WHERE at<=? ORDER BY at DESC,id DESC LIMIT 1"
+    )
+
+    def assert_report_selection(self, at, expected_id):
+        statements = []
+        self.store.db.set_trace_callback(statements.append)
+        try:
+            actual = self.store.report_at(at)
+        finally:
+            self.store.db.set_trace_callback(None)
+        query = next(
+            q for q in statements if q.startswith("SELECT payload FROM reports")
+        )
+        selected = self.store.db.execute(
+            query.replace("SELECT payload", "SELECT id,payload", 1)
+        ).fetchone()
+        original = self.store.db.execute(self.original_query, (at,)).fetchone()
+        self.assertEqual(
+            tuple(selected) if selected else None, tuple(original) if original else None
+        )
+        self.assertEqual(selected["id"] if selected else None, expected_id)
+        self.assertEqual(
+            actual,
+            json.loads(zlib.decompress(original["payload"]) if isinstance(original["payload"], bytes) else original["payload"]) if original else None,
+        )
+        return query
+
+    def test_report_at_boundaries_out_of_order_and_ties(self):
+        self.assert_report_selection(T, None)
+        for at, name in (
+            (30, "later"),
+            (10, "earlier"),
+            (20, "中间"),
+            (20, "tie winner"),
+        ):
+            report = {
+                "name": name,
+                "nullable": None,
+                "p": 0.125,
+                "pairs": [["b", "a"], ["a", "c"]],
+            }
+            self.store.report(T + at, report)
+            blob = self.store.db.execute(
+                "SELECT payload FROM reports ORDER BY id DESC LIMIT 1"
+            ).fetchone()[0]
+            self.assertEqual(json.loads(blob), report)
+        for at, expected in (
+            (9, None),
+            (10, 2),
+            (15, 2),
+            (20, 4),
+            (25, 4),
+            (30, 1),
+            (40, 1),
+        ):
+            with self.subTest(at=at):
+                self.assert_report_selection(T + at, expected)
+
+    def test_report_at_corrupt_latest_keeps_original_exception(self):
+        self.store.report(T, {"valid": True})
+        for offset, blob, error in (
+            (1, b"broken zlib", zlib.error),
+            (2, zlib.compress(b"not json"), json.JSONDecodeError),
+        ):
+            with self.subTest(error=error.__name__):
+                with self.store.db:
+                    self.store.db.execute(
+                        "INSERT INTO reports(at,payload) VALUES (?,?)",
+                        (T + offset, blob),
+                    )
+                original = self.store.db.execute(
+                    self.original_query, (T + offset,)
+                ).fetchone()
+                self.assertEqual(original["payload"], blob)
+                with self.assertRaises(error) as old:
+                    json.loads(zlib.decompress(original["payload"]))
+                with self.assertRaises(error) as new:
+                    self.store.report_at(T + offset)
+                self.assertEqual(str(new.exception), str(old.exception))
+        self.assert_report_selection(T, 1)
+
+    def test_report_at_synthetic_growth_preserves_all_rows(self):
+        # Row-count growth only: bounded synthetic payloads, never a live DB copy.
+        rng = random.Random(17)
+        blobs = [
+            zlib.compress(
+                packed(
+                    {
+                        "source": f"来源-{i}",
+                        "p": i / 16,
+                        "nullable": None,
+                        "comparisons": [
+                            {"left": a, "right": b, "n": 0, "difference": None}
+                            for a in range(4)
+                            for b in range(a + 1, 4)
+                        ],
+                        "provenance": rng.randbytes(512).hex(),
+                    }
+                ).encode()
+            )
+            for i in range(16)
+        ]
+
+        def fingerprint(limit):
+            result = hashlib.sha256()
+            for row in self.store.db.execute(
+                "SELECT id,at,payload FROM reports WHERE id<=? ORDER BY id", (limit,)
+            ):
+                result.update(packed([row["id"], row["at"]]).encode())
+                result.update(row["payload"])
+            return result.digest()
+
+        previous_count, previous_digest = 0, fingerprint(0)
+        for count in (8600, 8600 + 719, 8600 + 5033):
+            with self.subTest(rows=count):
+                with self.store.db:
+                    self.store.db.executemany(
+                        "INSERT INTO reports(at,payload) VALUES (?,?)",
+                        (
+                            (T + i // 2, blobs[i % len(blobs)])
+                            for i in range(previous_count, count)
+                        ),
+                    )
+                self.assertEqual(fingerprint(previous_count), previous_digest)
+                before = fingerprint(count)
+                self.assertEqual(
+                    self.store.db.execute("SELECT COUNT(*) FROM reports").fetchone()[0],
+                    count,
+                )
+                for cutoff, expected in (
+                    (T - 1, None),
+                    (T, 2),
+                    (T + 100.5, 202),
+                    (T + count, count),
+                ):
+                    query = self.assert_report_selection(cutoff, expected)
+                plan = [
+                    row[3]
+                    for row in self.store.db.execute("EXPLAIN QUERY PLAN " + query)
+                ]
+                old_plan = [
+                    row[3]
+                    for row in self.store.db.execute(
+                        "EXPLAIN QUERY PLAN " + self.original_query, (T + count,)
+                    )
+                ]
+                self.assertTrue(
+                    any("INTEGER PRIMARY KEY" in step for step in plan), plan
+                )
+                self.assertTrue(any("SCAN reports" in step for step in plan), plan)
+                self.assertEqual(fingerprint(count), before)
+                self.assertEqual(
+                    list(self.store.db.execute("PRAGMA index_list(reports)")), []
+                )
+                print(
+                    f"synthetic reports={count}; old_plan={old_plan}; id_first_plan={plan}"
+                )
+                previous_count, previous_digest = count, before
 
 
 class ContractTests(unittest.TestCase):
@@ -510,6 +677,161 @@ class StatisticalTests(unittest.TestCase):
 
 
 class ImportAndReportTests(TemporaryStore):
+    def test_publication_continuity_precedes_hourly_sampling(self):
+        for cadence in (60, 300):
+            for minute in range(55, 181, cadence // 60):
+                at = T + minute * 60
+                self.store.add_forecast(
+                    forecast(
+                        source=str(cadence),
+                        origin=at,
+                        generated_at=at,
+                        available_at=at,
+                        expires_at=at + cadence + 30,
+                        points=[[24, minute / 1000], [48, minute / 500]],
+                    )
+                )
+        now = T + 180 * 60
+        curves = publication_curves(self.store, now)
+        self.assertEqual(curves, publication_curves(self.store, now))
+        for curve in curves:
+            cadence = int(curve["source"])
+            minutes = list(range(55, 181, cadence // 60))
+            buckets = {}
+            for minute in minutes:
+                buckets.setdefault(int((T + minute * 60) // 3600), []).append(minute)
+            self.assertEqual(
+                curve["points"],
+                [
+                    {
+                        "at": iso(T + m * 60),
+                        "p": m / (1000 if curve["hours"] == 24 else 500),
+                    }
+                    for m in sorted({m for bucket in buckets.values() for m in (bucket[0], bucket[-1])})
+                ],
+            )
+
+    def test_publication_same_hour_gap_keeps_recovery_and_latest_receipts(self):
+        for minute, expiry in ((1, 5), (10, 30), (20, 40)):
+            at = T + minute * 60
+            self.store.add_forecast(
+                forecast(
+                    origin=at,
+                    generated_at=at,
+                    available_at=at,
+                    expires_at=T + expiry * 60,
+                )
+            )
+        for curve in publication_curves(self.store, T + 21 * 60):
+            p = 0.2 if curve["hours"] == 24 else 0.36
+            self.assertEqual(
+                curve["points"],
+                [
+                    {"at": iso(T + 60), "p": p},
+                    {"at": iso(T + 300), "p": None},
+                    {"at": iso(T + 600), "p": p},
+                    {"at": iso(T + 1200), "p": p},
+                ],
+            )
+
+    def test_publication_shorter_ttl_does_not_shorten_existing_coverage(self):
+        for minute, expiry in ((1, 150), (59, 65), (119, 125)):
+            at = T + minute * 60
+            self.store.add_forecast(
+                forecast(
+                    origin=at,
+                    generated_at=at,
+                    available_at=at,
+                    expires_at=T + expiry * 60,
+                )
+            )
+        for curve in publication_curves(self.store, T + 140 * 60):
+            self.assertEqual(
+                [p["at"] for p in curve["points"]],
+                [iso(T + 60), iso(T + 59 * 60), iso(T + 119 * 60)],
+            )
+            self.assertTrue(all(p["p"] is not None for p in curve["points"]))
+        for curve in publication_curves(self.store, T + 160 * 60):
+            self.assertEqual(curve["points"][-1], {"at": iso(T + 150 * 60), "p": None})
+
+    def test_publication_invalid_receipts_break_only_their_horizon(self):
+        for kind in ("issues", "unsupported", "expired", "future_origin"):
+            for minute in (1, 10, 20, 30):
+                at = T + minute * 60
+                changes = {}
+                if minute == 10:
+                    changes = (
+                        {"issues": ["unusable"]}
+                        if kind == "issues"
+                        else (
+                            {"points": [[24, 0.2]]}
+                            if kind == "unsupported"
+                            else (
+                                {"origin": at - 60, "expires_at": at}
+                                if kind == "expired"
+                                else {"origin": at + 1}
+                            )
+                        )
+                    )
+                self.store.add_forecast(
+                    replace(
+                        forecast(
+                            source=kind,
+                            origin=at,
+                            generated_at=at,
+                            available_at=at,
+                        ),
+                        **changes,
+                    )
+                )
+        for curve in publication_curves(self.store, T + 31 * 60):
+            if curve["source"] == "unsupported" and curve["hours"] == 24:
+                self.assertEqual([p["at"] for p in curve["points"]], [iso(T+60), iso(T+1800)])
+            else:
+                self.assertEqual(
+                    [p["at"] for p in curve["points"]],
+                    [iso(T + 60), iso(T + 600), iso(T + 1200), iso(T + 1800)],
+                )
+                self.assertIsNone(curve["points"][1]["p"])
+
+    def test_publication_bounds_tracks_versions_and_repeat_imports(self):
+        first = forecast(available_at=T + 60, expires_at=T + 120)
+        self.store.add_forecast(first)
+        self.store.add_forecast(replace(first, available_at=T + 90))
+        for changes in (
+            {"version": "v2"},
+            {"target": AUTOMATIC},
+            {"track": "model"},
+            {"source": "second"},
+        ):
+            self.store.add_forecast(forecast(available_at=T + 180, **changes))
+        self.store.add_forecast(forecast(available_at=T + 1000, source="future"))
+        self.store.add_forecast(
+            forecast(
+                origin=T - 8 * 86400,
+                generated_at=T - 8 * 86400,
+                available_at=T - 8 * 86400,
+                source="old",
+            )
+        )
+        self.store.add_forecast(forecast(track="shadow", source="shadow"))
+        curves = publication_curves(self.store, T + 300)
+        self.assertEqual(len(curves), 10)
+        base = next(
+            c
+            for c in curves
+            if c["source"] == "radar"
+            and c["version"] == "v1"
+            and c["target"] == RELIEF
+            and c["track"] == "native"
+            and c["hours"] == 24
+        )
+        self.assertEqual(
+            base["points"],
+            [{"at": iso(T + 60), "p": 0.2}, {"at": iso(T + 120), "p": None}],
+        )
+        self.assertEqual(curves, publication_curves(self.store, T + 300))
+
     def test_published_24h_trend_survives_late_receipt_without_relaxing_scoring(self):
         f = forecast(points=[[6,.1],[24,.4]], available_at=T+60, expires_at=T+3600)
         self.store.add_forecast(f)
@@ -821,6 +1143,145 @@ class ImportAndReportTests(TemporaryStore):
         self.assertEqual(rows[RELIEF]["without_community"]["points"],[.55])
         self.assertEqual(rows[AUTOMATIC]["without_community"]["points"],[.55])
 
+    def calendar_html_report(self, latest=None, settlement=None):
+        initialize(self.store, T, self.policy)
+        self.store.add_forecast(
+            forecast(
+                source="SECRET_PLATFORM",
+                private=True,
+                metadata={"rule_reference": "https://private.example/contract"},
+            )
+        )
+        report = build_report(
+            self.store, T + 10, self.policy, {"events": [], "estimand": "test"}
+        )
+        report["calendar_sentiment"] = {
+            "latest": latest or [],
+            "scored_days": int(bool(settlement and settlement.get("score_eligible"))),
+            "trials": [
+                {
+                    "features": {"date": "2026-10-13"},
+                    "candidates": {
+                        "raw_click_share": 0.4,
+                        "repeat_sensitive_share": 0.3,
+                    },
+                    "comparisons": [
+                        {"source": "horizon", "version": "v8", "probability": 0.5}
+                    ],
+                    "settlement": settlement,
+                }
+            ],
+        }
+        return report
+
+    def test_calendar_html_preserves_history_without_latest_samples(self):
+        report = self.calendar_html_report()
+        html = html_report(report)
+        self.assertIn("2026-10-13", html)
+        self.assertIn("已冻结 1 个活动日窗", html)
+        self.assertIn("等待结算记录", html)
+        self.assertNotIn("独立日样本", html)
+        self.assertNotIn("SECRET_PLATFORM", html)
+        self.assertNotIn("private.example", html)
+
+    def test_calendar_html_explains_settlement_reasons_and_unknown_labels(self):
+        cases = [
+            (T, True, [], "待成熟", None),
+            (T + 20 * 3600, False, [], "结果覆盖不足", None),
+            (
+                T + 20 * 3600,
+                False,
+                [event(status="disputed")],
+                "证据冲突或适用人群未知",
+                None,
+            ),
+            (T + 20 * 3600, True, [], "已记分", 0),
+        ]
+        for now, covered, events, expected, label in cases:
+            with self.subTest(expected=expected):
+                settlement = label_window(trial(), events, now, self.policy, covered)
+                self.assertEqual(settlement["label"], label)
+                settlement["candidate_losses"] = {"raw_click_share": {"brier": 0.16}}
+                report = self.calendar_html_report(settlement=settlement)
+                html = html_report(report)
+                section = html.split("<h2>Did Codex Reset", 1)[-1].split(
+                    "<h2>近期事件核验", 1
+                )[0]
+                self.assertIn(expected, section)
+                if settlement["status"] == "pending":
+                    self.assertIn(iso(settlement["matures_at"]), section)
+                elif label is None:
+                    self.assertNotIn("待成熟", section)
+                self.assertEqual("0.1600" in section, label is not None)
+                self.assertEqual("已记分</td>" in section, label is not None)
+
+    def test_calendar_html_distinguishes_weighted_candidate_from_unweighted_share(self):
+        latest = [
+            {
+                "date": "2026-10-13",
+                "window_start": T,
+                "window_end": T + 86400,
+                "total_clicks": 100,
+                "recent_votes": 60,
+                "reset_share": 0.6,
+                "repeat_adjusted_units": 0.6,
+                "latest_vote_at": T,
+                "state": "ready_for_evaluation",
+            }
+        ]
+        report = self.calendar_html_report(latest=latest)
+        before = json.dumps(report, sort_keys=True)
+        html = html_report(report)
+        self.assertIn("时效加权点击候选", html)
+        self.assertIn("重复参与敏感性候选", html)
+        self.assertIn("新增重置占比（未加权）", html)
+        self.assertIn("40.0%", html)
+        self.assertIn("60.0%", html)
+        self.assertNotIn("raw_click_share", html)
+        self.assertEqual(json.dumps(report, sort_keys=True), before)
+
+    def test_calendar_html_groups_checkpoints_and_separates_activity_from_completion(self):
+        report = self.calendar_html_report(settlement={
+            "label": 0, "score_eligible": True, "candidate_losses": {"raw_click_share": {"brier": .16}},
+        })
+        first = report["calendar_sentiment"]["trials"][0]
+        first.update(source="didcodex_poll", round_id="didcodex:2026-10-13", origin=T,
+                     hours=24, sampling={"mode": "first_eligible"},
+                     activity_classification={"upstream_outcome": "reset", "label": 1,
+                                              "mismatch": "activity_reset_without_within_day_completion"})
+        later = json.loads(json.dumps(first))
+        later.update(origin=T+6*3600+30, hours=18-30/3600,
+                     sampling={"mode": "fixed_checkpoint", "local_hour": 6})
+        report["calendar_sentiment"].update(trials=[first, later], frozen_days=1, frozen_trials=2,
+                                            scored_days=1, scored_trials=2)
+        before = json.dumps(report, sort_keys=True)
+        html = html_report(report)
+        self.assertIn("已冻结 1 个活动日窗、2 个观察点", html)
+        self.assertIn("已记分 1 个活动日、2 个观察点", html)
+        self.assertIn("同日观察点相关", html)
+        self.assertIn("首次达标</td>", html)
+        self.assertIn("06:00 观察点</td>", html)
+        self.assertIn(iso(T+6*3600+30)+" → "+iso(T+24*3600), html)
+        self.assertIn("上游活动归类</th>", html)
+        self.assertIn("重置</td><td>窗口内未发现完成", html)
+        self.assertIn("活动归类与窗口完成不同", html)
+        self.assertIn("表中 Brier 对应窗口完成", html)
+        self.assertNotIn("每一天只冻结一次", html)
+        self.assertEqual(json.dumps(report, sort_keys=True), before)
+
+    def test_calendar_html_unknown_activity_or_completion_stays_unknown(self):
+        report = self.calendar_html_report(settlement={"label": None, "reason": "incomplete_outcome_coverage"})
+        trial = report["calendar_sentiment"]["trials"][0]
+        trial["activity_classification"] = {"upstream_outcome": None, "label": None, "mismatch": None}
+        html = html_report(report)
+        section = html.split("<h2>Did Codex Reset", 1)[-1].split("<h2>近期事件核验", 1)[0]
+        self.assertIn("待上游归类</td><td>待核验", section)
+        self.assertNotIn("窗口内未发现完成", section)
+        self.assertNotIn("活动归类与窗口完成不同", section)
+        for value, expected in [("improvement", "改进"), ("both", "重置与改进")]:
+            trial["activity_classification"]["upstream_outcome"] = value
+            self.assertIn(expected+"</td><td>待核验", html_report(report))
+
     def test_private_provenance_does_not_leave_report(self):
         initialize(self.store, T, self.policy)
         self.store.add_forecast(
@@ -891,9 +1352,117 @@ class ImportAndReportTests(TemporaryStore):
         atomic_write(output, '{"value":2}')
         self.assertEqual(json.loads(output.read_text())["value"], 2)
         self.assertEqual(list(self.root.glob(".observer-*")), [])
+        old = output.read_bytes()
+        for operation in ("write", "flush", "fsync", "replace"):
+            with self.subTest(operation=operation):
+                if operation in ("write", "flush"):
+                    import os
+
+                    fdopen = os.fdopen
+
+                    def failing_stream(*args, **kwargs):
+                        stream = fdopen(*args, **kwargs)
+                        wrapper = Mock(wraps=stream)
+                        getattr(wrapper, operation).side_effect = OSError(
+                            "synthetic failure"
+                        )
+                        return closing(wrapper)
+
+                    failure = patch(
+                        "reset_observer.runtime.os.fdopen", side_effect=failing_stream
+                    )
+                else:
+                    failure = patch(
+                        f"reset_observer.runtime.os.{operation}",
+                        side_effect=OSError("synthetic failure"),
+                    )
+                with failure, self.assertRaises(OSError):
+                    atomic_write(output, '{"value":3}')
+                self.assertEqual(output.read_bytes(), old)
+                self.assertEqual(list(self.root.glob(".observer-*")), [])
         initialize(self.store, T, self.policy)
         with self.assertRaises(ValueError):
             initialize(self.store, T + 1, replace(self.policy, alert_threshold=0.8))
+
+    def test_compact_export_preserves_complete_report_and_order(self):
+        initialize(self.store, T, self.policy)
+        for source in ("radar", "另一来源", "third"):
+            self.store.add_forecast(forecast(source=source))
+            self.store.freeze(
+                trial(source=source, origin=T + (6 * 3600 if source == "third" else 0))
+            )
+        freeze_grid(self.store, T + 10, self.policy)
+        self.cover(T, T + 20 * 3600)
+        evidence = {"events": [], "estimand": "test"}
+        settle_all(self.store, T + 20 * 3600, self.policy, evidence)
+        report = build_report(self.store, T + 20 * 3600, self.policy, evidence)
+        self.assertTrue(report["comparisons"])
+        output = self.root / "report.json"
+        args = SimpleNamespace(db=self.store.path, output=output, html=None)
+        with (
+            patch("reset_observer.runtime.build_report", return_value=report),
+            patch("reset_observer.runtime.settle_all", return_value=0),
+            patch("reset_observer.preferences.settle"),
+        ):
+            evaluate(
+                args,
+                self.policy,
+                T + 10,
+                {},
+                {
+                    "phase_seconds": {},
+                    "note": "中文 🌅",
+                    "nullable": None,
+                    "fraction": 0.125,
+                },
+            )
+        pretty = (
+            json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2) + "\n"
+        )
+        compact = output.read_text(encoding="utf-8")
+        self.assertEqual(
+            compact,
+            json.dumps(
+                report, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+            )
+            + "\n",
+        )
+        self.assertEqual(json.loads(pretty), json.loads(compact))
+        self.assertEqual(
+            json.loads(pretty, object_pairs_hook=list),
+            json.loads(compact, object_pairs_hook=list),
+        )
+        self.assertEqual(json.loads(compact)["comparisons"], report["comparisons"])
+        self.assertIn("中文 🌅", compact)
+        self.assertLess(len(compact.encode()), len(pretty.encode()))
+        self.assertEqual(self.store.report_at(T + 10), report)
+
+    def test_export_rejects_nonfinite_numbers_without_replacing_file(self):
+        output = self.root / "report.json"
+        atomic_write(output, '{"old":"完整"}\n')
+        old = output.read_bytes()
+        args = SimpleNamespace(db=self.store.path, output=output, html=None)
+        for value in (math.nan, math.inf, -math.inf):
+            with self.subTest(value=value):
+                report = {"latest": [], "state": "test", "summary": {}}
+                # Keep the nonfinite value in runtime (outside the semantic hash),
+                # and bypass DB encoding to exercise the export encoder itself.
+                with (
+                    patch("reset_observer.runtime.build_report", return_value=report),
+                    patch("reset_observer.runtime.settle_all", return_value=0),
+                    patch("reset_observer.preferences.settle"),
+                    patch.object(Store, "report"),
+                    self.assertRaises(ValueError),
+                ):
+                    evaluate(
+                        args,
+                        self.policy,
+                        T,
+                        {},
+                        {"phase_seconds": {}, "invalid": value},
+                    )
+                self.assertEqual(output.read_bytes(), old)
+                self.assertEqual(list(self.root.glob(".observer-*")), [])
 
 
 if __name__ == "__main__":

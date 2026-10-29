@@ -21,7 +21,7 @@ NOW = stamp("2026-10-03T14:00:00Z")
 
 def history(now=NOW):
     return [Event(str(i), now - (20 - i) * 96 * 3600, now, "automatic",
-                  [f"https://example.com/event/{i}"]) for i in range(20)]
+                  [f"https://example.com/event/{i}"], precision="observed") for i in range(20)]
 
 
 class MathTests(unittest.TestCase):
@@ -222,6 +222,15 @@ class LedgerTests(unittest.TestCase):
         self.store.save("private_vendor", NOW, None, None, "http_503")
         f = forecast(self.store, NOW, RELIEF, private_source_ids={"private_vendor"})
         self.assertNotIn("private_vendor", json.dumps(consumer_export([f])))
+
+    def test_consumer_evaluation_identity_distinguishes_configuration_changes(self):
+        first = forecast(self.store, NOW, RELIEF, config_hash="config-one")
+        second = forecast(self.store, NOW, RELIEF, config_hash="config-two")
+        exported = consumer_export([first, second])["forecasts"]
+        self.assertEqual(exported[0]["model_version"], exported[1]["model_version"])
+        self.assertEqual(exported[0]["evaluation_version"], first["model_version"] + ":config-one")
+        self.assertEqual(exported[1]["evaluation_version"], second["model_version"] + ":config-two")
+        self.assertNotIn("config_hash", exported[0])
 
     def test_retrospective_is_labelled_and_has_real_holdouts(self):
         r = retrospective(history(), NOW)

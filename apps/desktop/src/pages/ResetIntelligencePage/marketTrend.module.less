@@ -1,0 +1,32 @@
+.candlestick { --candle-up: #c94b58; --candle-down: #218373; position: relative; min-width: 0; }
+:global(:root[data-theme="dark"]) .candlestick { --candle-up: #ef858c; --candle-down: #71cbb4; }
+.quote { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; margin: 12px 0 8px; font-variant-numeric: tabular-nums; }
+.identity { color: var(--muted); font-size: 11px; display: block; margin-bottom: 4px; }
+.quote strong { font-size: 32px; font-weight: 600; line-height: 1.15; letter-spacing: -.8px; }
+.quote strong small { font-size: 17px; font-weight: 400; margin-left: 3px; }
+.change { font-size: 12px; padding-bottom: 3px; color: var(--muted); }
+.change[data-direction="up"] { color: var(--candle-up); }.change[data-direction="down"] { color: var(--candle-down); }
+.change span { color: var(--muted); font-size: 11px; margin-left: 6px; }
+.recorded { margin-left: auto; color: var(--muted); font-size: 11px; padding-bottom: 4px; }
+.ohlc { display: flex; flex-wrap: wrap; gap: 5px 16px; min-height: 18px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ohlc b { color: var(--ink); font-weight: 500; margin-left: 5px; }.ohlc time { margin-left: auto; }
+.plot { min-width: 0; position: relative; margin-top: 7px; }.plot > svg { display: block; width: 100%; height: 278px; touch-action: pan-y; cursor: crosshair; }
+.candlestick .plot svg text { fill: var(--muted); font-size: 11px; font-family: inherit; font-variant-numeric: tabular-nums; }
+.candlestick .plot .grid { stroke: var(--line); stroke-width: .7; opacity: .75; }
+.sourceLine { fill: none; stroke: var(--series-color); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; opacity: .9; }.sourceDot { fill: var(--series-color); }
+.candle { --candle-color: var(--muted); fill: var(--candle-color); }.candle[data-direction="up"] { --candle-color: var(--candle-up); }.candle[data-direction="down"] { --candle-color: var(--candle-down); }
+.candlestick .plot .wick { stroke: var(--candle-color); stroke-width: 1; }
+.candlestick .plot .lastLine { stroke: var(--muted); stroke-width: .8; stroke-dasharray: 3 5; opacity: .55; }
+.priceTag { fill: var(--panel); stroke: var(--line); stroke-width: .6; }.candlestick .plot .priceText { fill: var(--ink); font-weight: 550; }
+.candlestick .crosshair line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; }.crosshair circle { stroke: var(--panel); stroke-width: 1.3; }
+.legend { display: grid; grid-template-columns: repeat(auto-fit,minmax(115px,1fr)); gap: 8px 16px; margin-top: 8px; }
+.legend button { font: inherit; color: var(--ink); text-align: left; padding: 4px 0; border: 0; background: none; min-width: 0; }
+.legend button[aria-pressed="false"] { opacity: .4; }.legend button > span { display: flex; gap: 6px; align-items: center; font-size: 11px; }
+.legend button i { width: 12px; height: 3px; border-radius: 1px; flex: 0 0 12px; }.legend .candleKey { height: 10px; background: linear-gradient(90deg,var(--candle-up) 0 35%,transparent 35% 60%,var(--candle-down) 60%); }
+.legend b { display: inline-block; font-size: 14px; font-weight: 550; margin: 4px 6px 0 18px; font-variant-numeric: tabular-nums; }.legend small { color: var(--muted); display: block; margin: 3px 0 0 18px; font-size: 10px; }
+.footer { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px 16px; border-top: 1px solid var(--line); padding-top: 10px; margin-top: 12px; color: var(--muted); font-size: 11px; }.footer > div { display: flex; gap: 12px; }
+.upKey::before, .downKey::before { content: ""; display: inline-block; width: 5px; height: 8px; margin-right: 4px; background: var(--candle-up); }.downKey::before { background: var(--candle-down); }
+.notes { margin-left: auto; max-width: 100%; }.notes summary { cursor: pointer; color: var(--muted); }.notes p { max-width: 70ch; line-height: 1.7; margin: 8px 0 0; }
+.tooltip { position: absolute; top: 15px; z-index: 3; pointer-events: none; width: 214px; max-width: 100%; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 6px 20px #00000016; padding: 11px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.tooltip > time { display: block; color: var(--muted); margin-bottom: 7px; }.tooltip > div { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 6px; align-items: center; margin-top: 5px; }.tooltip > div > span { display: flex; gap: 5px; align-items: center; }.tooltip i { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }.tooltip b { font-weight: 550; }.tooltip small { color: var(--muted); font-size: 10px; }.tooltip footer { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line); color: var(--muted); }.tooltip footer strong { display: block; font-weight: 500; color: var(--ink); margin: 4px 0; }.tooltip footer span { font-size: 10px; }
+@container radar (max-width:520px) { .recorded { width: 100%; margin-left: 0; }.legend { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }.quote { gap: 7px 12px; }.ohlc { gap: 5px 10px; }.ohlc time { margin-left: 0; }.notes { margin-left: 0; } }

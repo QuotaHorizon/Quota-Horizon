@@ -6,13 +6,15 @@ import json
 import math
 
 from .contracts import digest, iso
-from .evidence import FEEDS
+from .evidence import FEEDS, POSITIVE_ONLY_FEEDS, RETIRED_FEEDS, SOURCE_FAMILIES
 
 
 def coverage_details(store, start, end, known_by, policy):
     providers = []
     gap = policy.maximum_coverage_gap_seconds
     for provider in FEEDS:
+        if provider in POSITIVE_ONLY_FEEDS:
+            continue
         rows = [dict(r) for r in store.db.execute(
             "SELECT observed_at,generated_at,healthy,error FROM observations WHERE provider=? AND observed_at BETWEEN ? AND ? ORDER BY observed_at,id",
             (provider, start - gap, min(end + gap, known_by)))]
@@ -48,11 +50,11 @@ def coverage_details(store, start, end, known_by, policy):
         # that coverage. Preserve failures as diagnostics, not a second gate.
         qualifies = not reasons and end <= known_by
         reasons.extend(sorted(counts))
-        providers.append({"provider": provider, "qualifies": qualifies,
+        providers.append({"provider": provider, "source_family": SOURCE_FAMILIES.get(provider, provider), "qualifies": qualifies,
                           "reasons": reasons, "gaps": spans, "failed_attempts": dict(counts),
                           "first_failure": iso(failed[0]["observed_at"]) if failed else None,
                           "last_failure": iso(failed[-1]["observed_at"]) if failed else None})
-    healthy = sum(p["qualifies"] for p in providers)
+    healthy = len({p["source_family"] for p in providers if p["qualifies"]})
     return {"covered": end <= known_by and healthy >= policy.minimum_coverage_providers,
             "qualified_providers": healthy, "required_providers": policy.minimum_coverage_providers,
             "providers": providers}
@@ -61,6 +63,8 @@ def coverage_details(store, start, end, known_by, policy):
 def provider_health(store, now, policy):
     output = []
     for row in store.observations(now):
+        if row["provider"] in RETIRED_FEEDS:
+            continue
         previous = store.db.execute("SELECT claims FROM observations WHERE provider=? AND observed_at<? AND claims IS NOT NULL ORDER BY observed_at DESC,id DESC LIMIT 1",
                                     (row["provider"], row["observed_at"])).fetchone()
         def fingerprint(value):
@@ -71,9 +75,16 @@ def provider_health(store, now, policy):
             state = "collector_overdue"
         elif row["error"]:
             state = "request_or_decode_failure"
+        elif row["provider"] == "completion_page":
+            # This page publishes event clocks, not a monitoring heartbeat.
+            # An old event is still evidence; a successful request does not
+            # certify that no later event happened.
+            state = "positive_evidence"
         elif not row["healthy"]:
             state = "stale_source_content" if row["generated_at"] is not None and row["observed_at"] - row["generated_at"] > 3600 else "incomplete_source_evidence"
         output.append({"provider": row["provider"], "last_attempt": iso(row["observed_at"]),
+                       "source_family": SOURCE_FAMILIES.get(row["provider"], row["provider"]),
+                       "coverage_role": "positive_only" if row["provider"] in POSITIVE_ONLY_FEEDS else "complete_inventory",
                        "generated_at": iso(row["generated_at"]) if row["generated_at"] is not None else None,
                        "healthy": bool(row["healthy"]), "error": row["error"], "state": state,
                        "content_unchanged": unchanged})

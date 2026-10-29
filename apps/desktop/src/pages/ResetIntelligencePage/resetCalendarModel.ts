@@ -1,11 +1,13 @@
 import type { Language } from "../../i18n";
 import { broadGrantDeliveryExcerpt } from "./resetDelivery";
 import { isPublicWithdrawal, sameResetSubject } from "./publicCorrections";
+import { publicEvidenceUrl } from "./presentation";
+import type { QuantReport } from "./quantitativeTypes";
 import type { PublicResetArchiveEntry, PublicTimelineEntry } from "./types";
 
 export type CalendarKind = "reset" | "grant" | "notice";
 export type CalendarMode = "events" | "announcements";
-type TimeBasis = "occurred" | "tracker_confirmation" | "reported_effective" | "grant_announcement" | "published" | "unknown";
+type TimeBasis = "occurred" | "tracker_confirmation" | "reported_effective" | "grant_announcement" | "completion_report" | "published" | "unknown";
 export interface ResetCalendarRecord {
   key: string;
   kind: CalendarKind;
@@ -21,9 +23,42 @@ export interface ResetCalendarRecord {
   sources: { url: string; time: number | null; basis: TimeBasis }[];
   conflictingTimes: boolean;
   withdrawn: boolean;
+  completionStatus?: "scope_pending" | "reported";
 }
 
 type Input = { entry: PublicResetArchiveEntry | PublicTimelineEntry; archive: boolean };
+type Completion = QuantReport["outcomes"][number];
+
+function referenceKey(value: string): string | null {
+  const safe = publicEvidenceUrl(value);
+  if (!safe) return null;
+  const url = new URL(safe);
+  const post = ["x.com", "twitter.com"].includes(url.hostname) && url.pathname.match(/^\/(?:i|[^/]+)\/status\/(\d+)(?:\/|$)/u);
+  return post ? `https://x.com/i/status/${post[1]}` : safe;
+}
+
+function completionRecord(outcome: Completion, language: Language, now: number): ResetCalendarRecord | null {
+  const scopePending = outcome.status === "pending" && outcome.reason === "population_unspecified";
+  const time = outcome.to == null ? NaN : outcome.to * 1000;
+  if ((!scopePending && outcome.status !== "confirmed") || outcome.reason === "conditional_pledge"
+    || !["automatic", "banked"].includes(outcome.kind) || !Number.isFinite(outcome.completion_reports) || outcome.completion_reports <= 0
+    || outcome.from == null || !Number.isFinite(outcome.from) || outcome.from > outcome.to!
+    || !Number.isFinite(new Date(time).getTime()) || time > now
+    || !Number.isFinite(outcome.known_at) || outcome.known_at * 1000 > now) return null;
+  const references = [...new Set(outcome.references.flatMap(url => publicEvidenceUrl(url) ?? []))];
+  if (!references.length) return null;
+  const zh = language === "zh";
+  return {
+    key: `outcome:${outcome.id}`, kind: outcome.kind === "banked" ? "grant" : "reset", mode: "events",
+    reviewed: false, time, timeBasis: "completion_report", completionStatus: scopePending ? "scope_pending" : "reported",
+    title: zh ? "公开完成报告" : "Public completion report",
+    summary: scopePending ? (zh ? "来源已报告完成，适用范围仍待核验。" : "Completion has been reported; the affected population remains under review.")
+      : (zh ? "已保存来源的完成报告。" : "Source completion reports are retained."),
+    url: references[0], publishedAt: null, reportedAt: null,
+    sources: references.map(url => ({ url, time, basis: "completion_report" })),
+    conflictingTimes: false, withdrawn: false,
+  };
+}
 
 /** A date or a zone-less time is not an instant. Never assume midnight, UTC or
  * the local zone to turn incomplete public evidence into a precise event. */
@@ -113,59 +148,92 @@ function record(input: Input, language: Language, now: number): ResetCalendarRec
 /** Group mirror families and explicit event identities transitively, without
  * inferring identity from similar text or nearby dates. A reviewed document
  * without an occurrence time cannot lend its authority to a tracker's time. */
-export function resetCalendarRecords(archive: PublicResetArchiveEntry[], live: PublicTimelineEntry[], language: Language, now: number) {
+export function resetCalendarRecords(archive: PublicResetArchiveEntry[], live: PublicTimelineEntry[], language: Language, now: number,
+  outcomes: QuantReport["outcomes"] = []) {
   const inputs = latestInputs([...archive.map((entry) => ({ entry, archive: true })), ...live.map((entry) => ({ entry, archive: false }))]);
   // A denial is not a calendar event, but must still suppress a mirrored old
   // occurrence. Do this before filtering negatives out of calendar records.
   const withdrawals = inputs.filter((input) => isPublicWithdrawal(input.entry));
+  const completionWithdrawals = new Set(outcomes.filter(outcome => outcome.status === "pending"
+    && outcome.reason === "completion_withdrawn" && Number.isFinite(outcome.known_at)
+    && outcome.known_at * 1000 <= now).flatMap(outcome => outcome.references.map(referenceKey).filter(Boolean)));
+  const completions = outcomes.flatMap(outcome => {
+    const value = completionRecord(outcome, language, now);
+    if (!value) return [];
+    const kind = value.kind === "grant" ? "global_banked_reset_grant" : "global_full_reset";
+    const references = new Set(value.sources.map(source => referenceKey(source.url)));
+    if (withdrawals.some(({ entry: { signal } }) => (signal.kind === kind || signal.kind === "unclassified")
+      && references.has(referenceKey(signal.source.canonicalUrl)))) return [];
+    return [{ value, kind, recordedAt: outcome.known_at * 1000 }];
+  });
   const familyKinds = new Map<string, Set<string>>();
+  const referenceKinds = new Map<string, Set<string>>();
+  const addReferenceKind = (url: string, kind: string) => {
+    const key = referenceKey(url);
+    if (!key) return;
+    const kinds = referenceKinds.get(key) ?? new Set<string>();
+    kinds.add(kind); referenceKinds.set(key, kinds);
+  };
   for (const { entry: { signal } } of inputs) {
     if (signal.kind === "unclassified") continue;
     const kinds = familyKinds.get(signal.evidenceFamilyId) ?? new Set<string>();
     kinds.add(signal.kind); familyKinds.set(signal.evidenceFamilyId, kinds);
+    addReferenceKind(signal.source.canonicalUrl, signal.kind);
   }
-  const groups: { input: Input; value: ResetCalendarRecord }[][] = [];
+  completions.forEach(({ value, kind }) => value.sources.forEach(source => addReferenceKind(source.url, kind)));
+  type Item = { input?: Input; value: ResetCalendarRecord; recordedAt: number; keys: string[] };
+  const items: Item[] = inputs.flatMap(input => {
+    const value = record(input, language, now);
+    if (!value) return [];
+    const { signal } = input.entry;
+    const reference = referenceKey(signal.source.canonicalUrl);
+    const knownKinds = familyKinds.get(signal.evidenceFamilyId) ?? referenceKinds.get(reference ?? "");
+    const kind = signal.kind === "unclassified" && knownKinds?.size === 1 ? [...knownKinds][0] : signal.kind;
+    const keys = [`family:${kind}:${signal.evidenceFamilyId}`];
+    if (signal.eventId) keys.push(`event:${kind}:${signal.eventId}`);
+    if (reference) keys.push(`reference:${kind}:${reference}`);
+    return [{ input, value, recordedAt: exactPublicTime(signal.recordedAt) ?? 0, keys }];
+  });
+  items.push(...completions.map(({ value, kind, recordedAt }) => ({ value, recordedAt,
+    keys: [`${kind}:${value.key}`, ...value.sources.map(source => `reference:${kind}:${referenceKey(source.url)}`)] })));
+  const groups: Item[][] = [];
   const aliases = new Map<string, number>();
   const roots: number[] = [];
   const root = (id: number): number => {
     while (roots[id] !== id) { roots[id] = roots[roots[id]]; id = roots[id]; }
     return id;
   };
-  for (const input of inputs) {
-    const value = record(input, language, now);
-    if (!value) continue;
-    const { signal } = input.entry;
+  for (const item of items) {
     // Group by topic identity, not current visual status, so a withdrawal still
     // suppresses an older occurrence mirrored by another source.
-    const knownKinds = familyKinds.get(signal.evidenceFamilyId);
-    const groupKind = signal.kind === "unclassified" && knownKinds?.size === 1 ? [...knownKinds][0] : signal.kind;
-    const keys = [`family:${groupKind}:${signal.evidenceFamilyId}`];
-    if (signal.eventId) keys.push(`event:${groupKind}:${signal.eventId}`);
+    const { keys } = item;
     const matches = [...new Set(keys.flatMap((key) => aliases.has(key) ? [root(aliases.get(key)!)] : []))];
     const id = matches[0] ?? groups.length;
     if (id === groups.length) { groups.push([]); roots.push(id); }
     for (const other of matches.slice(1)) { roots[other] = id; groups[id].push(...groups[other]); groups[other] = []; }
-    groups[id].push({ input, value });
+    groups[id].push(item);
     keys.forEach((key) => aliases.set(key, id));
   }
-  const rank = (item: ResetCalendarRecord) => (item.mode === "events" ? item.timeBasis === "grant_announcement" ? 8 : 10 : 0)
+  const rank = (item: ResetCalendarRecord) => (item.mode === "events" ? item.timeBasis === "grant_announcement" ? 8 : item.timeBasis === "completion_report" ? 9 : 10 : 0)
     + (item.reviewed ? 5 : 0) + (item.time != null ? 1 : 0);
   return groups.filter((group) => group.length).map((group) => {
     group.sort((a, b) => rank(b.value) - rank(a.value)
-      || (exactPublicTime(b.input.entry.signal.recordedAt) ?? 0) - (exactPublicTime(a.input.entry.signal.recordedAt) ?? 0)
+      || b.recordedAt - a.recordedAt
       || a.value.key.localeCompare(b.value.key));
     const selected = group[0].value;
     const withdrawn = group.some((item) => item.value.withdrawn
-      || withdrawals.some((other) => sameResetSubject(item.input.entry.signal, other.entry.signal)));
+      || item.value.sources.some(source => completionWithdrawals.has(referenceKey(source.url)))
+      || (item.input != null && withdrawals.some((other) => sameResetSubject(item.input!.entry.signal, other.entry.signal))));
     const sources = group.flatMap((item) => item.value.sources).filter((source, index, all) => all.findIndex((other) => other.url === source.url && other.time === source.time && other.basis === source.basis) === index);
     // Announcement and delivery/confirmation can legitimately have different
     // times. Only competing occurrence times constitute a time conflict.
     const occurrenceTimes = new Set(group.filter((item) => item.value.mode === "events"
-      && item.value.timeBasis !== "grant_announcement").map((item) => item.value.time));
+      && !["grant_announcement", "completion_report"].includes(item.value.timeBasis)).map((item) => item.value.time));
     const announcementTimes = new Set(group.filter((item) => item.value.timeBasis === "grant_announcement").map((item) => item.value.time));
     const conflictingTimes = occurrenceTimes.size > 1 || (occurrenceTimes.size === 0 && announcementTimes.size > 1);
     return { ...selected, key: group.map((item) => item.value.key).sort()[0],
       sources, withdrawn, conflictingTimes,
+      completionStatus: group.find(item => item.value.completionStatus)?.value.completionStatus,
       // A correction/withdrawal from a mirror is a review task, not an event.
       ...(withdrawn || conflictingTimes ? { time: null, reviewed: false } : {}),
     };
@@ -186,6 +254,7 @@ export function calendarTimeLabel(basis: TimeBasis, language: Language) {
     tracker_confirmation: ["追踪站报告时间", "Tracker report time"],
     reported_effective: ["来源标注的生效时间", "Source-reported effective time"],
     grant_announcement: ["发放公告时间", "Rollout announcement time"],
+    completion_report: ["完成报告时间", "Completion report time"],
     published: ["消息发布时间", "Publication time"],
     unknown: ["缺少可换算的确切时间", "No exact time available for conversion"],
   };

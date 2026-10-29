@@ -10,6 +10,9 @@ fn forward_chat_bridge(
     }
     let mut responses_body: Value = serde_json::from_slice(&body)
         .map_err(|error| format!("Responses request body is not valid JSON: {error}"))?;
+    if let Some(error) = provider_model_error(&responses_body, provider) {
+        return Ok(error);
+    }
     let selected_model = selected_provider_model(&responses_body, provider);
     responses_body["model"] = Value::String(selected_model.clone());
     let tool_context = build_codex_tool_context_from_request(&responses_body);
@@ -111,12 +114,43 @@ fn selected_provider_model(body: &Value, provider: &ProviderProfile) -> String {
     if !provider.model_selection_controlled_by_codex {
         return provider.model.clone();
     }
-    body.get("model")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|model| provider.models.iter().any(|allowed| allowed == model))
+    requested_model(body)
         .unwrap_or(&provider.model)
         .to_string()
+}
+
+fn provider_model_error(body: &Value, provider: &ProviderProfile) -> Option<UpstreamPayload> {
+    if !provider.model_selection_controlled_by_codex
+        || providers::uses_upstream_official_models(provider)
+    {
+        return None;
+    }
+    let model = requested_model(body)?;
+    if model == provider.model || provider.models.iter().any(|allowed| allowed == model) {
+        return None;
+    }
+    Some(json_payload(400, json!({
+        "error": {
+            "type": "invalid_request_error",
+            "code": "model_not_configured",
+            "param": "model",
+            "message": format!("Model '{model}' is not configured for this provider. Refresh the model list or select an available model.")
+        }
+    })))
+}
+
+fn provider_request_model_error(
+    method: &Method,
+    url: &str,
+    body: &[u8],
+    provider: &ProviderProfile,
+) -> Option<UpstreamPayload> {
+    if *method != Method::Post || !is_responses_endpoint(request_path(url)) {
+        return None;
+    }
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|value| provider_model_error(&value, provider))
 }
 
 fn requested_model(body: &Value) -> Option<&str> {

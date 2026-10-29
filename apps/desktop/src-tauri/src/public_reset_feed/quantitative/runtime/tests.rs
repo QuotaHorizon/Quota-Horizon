@@ -2,6 +2,89 @@ use super::*;
 use std::cell::Cell;
 
 #[test]
+fn actual_progress_and_storage_are_projected_without_trusting_process_presence() {
+    let wire = serde_json::json!({"health":"stalled", "issue":"evaluation_stalled",
+        "last_capture_at":"2026-10-30T10:00:00Z", "last_report_at":"2026-10-30T09:00:00Z",
+        "storage":{"observer_bytes":1000,"producer_bytes":2000,"log_bytes":400,
+            "log_limit_bytes":5242880,"maintenance":[{"module":"observer","phase":"done"},
+                {"module":"producer","phase":"vacuum","state":"waiting_for_disk_space"}]}});
+    let progress: Progress = serde_json::from_value(wire).unwrap();
+    let mut status = Status {
+        state: "running".into(),
+        ..Status::default()
+    };
+    progress.apply(&mut status);
+    assert_eq!(status.health.as_deref(), Some("stalled"));
+    assert_eq!(status.issue.as_deref(), Some("evaluation_stalled"));
+    let value = serde_json::to_value(status).unwrap();
+    assert_eq!(value["storage"]["logLimitBytes"], 5242880);
+    assert_eq!(
+        value["storage"]["maintenance"][1]["state"],
+        "waiting_for_disk_space"
+    );
+    assert!(value["lastReportAt"].as_str().is_some());
+}
+
+#[test]
+fn historical_catch_up_is_exposed_as_progress() {
+    let progress: Progress =
+        serde_json::from_value(serde_json::json!({"health":"catching_up"})).unwrap();
+    let mut status = Status::default();
+    progress.apply(&mut status);
+    assert_eq!(status.health.as_deref(), Some("catching_up"));
+    assert!(status.issue.is_none());
+}
+
+#[test]
+fn telemetry_does_not_expose_unknown_errors_or_local_paths() {
+    let progress: Progress = serde_json::from_value(serde_json::json!({
+        "health":"/private/config", "issue":"secret", "last_report_at":"private-path",
+        "storage":{"observer_bytes":10,"producer_bytes":null,"log_bytes":2,"log_limit_bytes":5242880,
+        "maintenance":[{"module":"observer","phase":"/private/db","error":"sqlite error /private/db","state":"secret"}]}
+    })).unwrap();
+    let mut status = Status::default();
+    progress.apply(&mut status);
+    let text = serde_json::to_string(&status).unwrap();
+    assert!(!text.contains("private"));
+    assert!(!text.contains("secret"));
+    assert!(status.health.is_none());
+    assert!(status.last_report_at.is_none());
+}
+
+#[test]
+fn refresh_feedback_does_not_claim_cache_or_pending_collection_completed() {
+    assert!(refresh_receipt(Ok("refreshed")).is_ok());
+    assert!(refresh_receipt(Ok("partial")).is_ok());
+    assert!(refresh_receipt(Ok("cached")).unwrap_err().contains("缓存"));
+    assert!(refresh_receipt(Err("refresh_failed"))
+        .unwrap_err()
+        .contains("数据更新失败"));
+    for state in ["refreshing", "starting", "running"] {
+        assert!(refresh_receipt(Ok(state)).unwrap_err().contains("未完成"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn refresh_receipts_distinguish_collection_cache_failure_and_process_start() {
+    for (state, expected) in [
+        ("refreshed", Ok("refreshed")),
+        ("partial", Ok("partial")),
+        ("cached", Ok("cached")),
+        ("failed", Err("refresh_failed")),
+        ("refreshing", Ok("refreshing")),
+        ("already_running", Ok("running")),
+        ("starting", Ok("starting")),
+        ("restarting", Ok("starting")),
+        ("unavailable", Err("start_failed")),
+    ] {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &format!("printf '{{\"state\":\"{state}\"}}'")]);
+        assert_eq!(invoke(command, Duration::from_secs(1)), expected, "{state}");
+    }
+}
+
+#[test]
 fn bundled_install_starts_without_developer_configuration_and_respects_external_connection() {
     let root = tempfile::tempdir().unwrap();
     let resources = root.path().join("resources");

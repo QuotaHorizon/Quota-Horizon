@@ -55,6 +55,7 @@ import {
   updateWebProxyPort,
 } from "../../api/backend";
 import { AboutModal } from "../modals/AboutModal";
+import { ReleaseUpdates } from "../ReleaseUpdates";
 import { HelpModal } from "../modals/HelpModal";
 import { FeedbackModal } from "../modals/FeedbackModal";
 import { TokenUsageHeatmap } from "../TokenUsageHeatmap";
@@ -250,6 +251,8 @@ export function DashboardApp() {
   const [cloudSessionExpired, setCloudSessionExpired] = useState(false);
   const [showCloudAccount, setShowCloudAccount] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  const [updateCheckRequest, setUpdateCheckRequest] = useState(0);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showMenuSearch, setShowMenuSearch] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
@@ -1603,8 +1606,11 @@ export function DashboardApp() {
             answer: language === "zh" ? item.answerZh : item.answerEn,
           }))} t={t} />}
         {showAbout && <AboutModal logoUrl={APP_LOGO_URL} onClose={() => setShowAbout(false)}
-          onFeedback={() => setShowFeedback(true)} version={manager.info?.version ?? "0.1.0"}
+          onFeedback={() => setShowFeedback(true)} version={manager.info?.version ?? "—"}
+          build={manager.info?.build} language={language} checkingUpdate={checkingUpdate}
+          onCheckUpdate={() => setUpdateCheckRequest(value => value + 1)} checkUpdateLabel={language === "zh" ? "检查更新" : "Check for updates"}
           t={t} />}
+        <ReleaseUpdates language={language} manualRequest={updateCheckRequest} notify={notify} onCheckingChange={setCheckingUpdate} />
         {showFeedback && <FeedbackModal signedInEmail={cloud.state.authenticated ? cloud.state.userEmail : null}
           onClose={() => setShowFeedback(false)} onSubmit={sendFeedback} t={t} />}
         <LanAccessModal open={showLanAccess}

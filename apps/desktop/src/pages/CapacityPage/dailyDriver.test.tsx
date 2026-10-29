@@ -104,4 +104,32 @@ describe("daily-driver priority and reset-card clarity", () => {
     expect(details).toContain("部分可用");
     expect(details).not.toContain(">完整<");
   });
+
+  it.each(["zh", "en"] as const)("renders the nearest credit expiry in the existing capacity card in %s", (language) => {
+    const value = envelope();
+    value.status!.resetCredits = { summaryStatus: "available", availableCount: 2, detailsStatus: "complete",
+      nextExpiresAt: "2099-11-01T00:00:00Z", knownExpiryCount: 2, expiryDetailsComplete: true };
+    vi.mocked(getCapacityStatusSnapshot).mockReturnValue(value);
+    const html = renderToStaticMarkup(<CapacityPage language={language} notify={() => undefined} />);
+    expect(html).toContain(language === "zh" ? "2 张" : ">2<");
+    expect(html).toContain(language === "zh" ? "到期" : "Expires");
+    expect(html).toContain(language === "zh" ? "最近到期" : "Next expiry");
+    expect(html).toContain("2099");
+  });
+
+  it("marks stale expiry readings and rechecks elapsed deadlines without changing captured counts", () => {
+    const value = envelope();
+    value.status!.resetCredits = { summaryStatus: "available", availableCount: 2, detailsStatus: "complete",
+      nextExpiresAt: "2026-10-31T00:00:00Z", knownExpiryCount: 1, expiryDetailsComplete: false };
+    value.lifecycle = "stale";
+    const now = Date.parse("2026-10-30T00:00:00Z");
+    const saved = resetCreditPresentation(value, "zh", now);
+    expect(saved.label).toBe("上次读数");
+    expect(saved.expiry?.text).toContain("记录");
+    expect(saved.expiry?.text).toContain("已知");
+    expect(saved.expiry?.title).toContain("2 张中 1 张");
+    const elapsed = resetCreditPresentation(value, "en", Date.parse("2026-11-01T00:00:00Z"));
+    expect(elapsed.expiry?.text).toBe("Saved · Expiry needs refresh");
+    expect(elapsed.count).toBe(2);
+  });
 });

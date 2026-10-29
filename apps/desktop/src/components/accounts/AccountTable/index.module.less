@@ -369,8 +369,12 @@
   .account-email-copy:hover .account-email, .account-email-copy.copied .account-email { color: var(--green-dark); }
   .account-email-copy.copied svg { color: var(--green); }
   .account-email { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
-  .account-reset-credit-count { flex: 0 0 auto; color: var(--green-dark); font-size: 10px; font-weight: 700; white-space: nowrap; }
-  .account-reset-credit-count > span { margin-right: 4px; color: #9aa69f; }
+  .account-reset-credit-count { min-width: 0; max-width: 160px; padding: 0; border: 0; display: inline-flex; flex-direction: column; align-items: flex-start; color: var(--green-dark); background: transparent; cursor: pointer; font-size: 10px; font-weight: 700; text-align: left; }
+  .account-reset-credit-label { white-space: nowrap; }
+  .account-reset-credit-label > span { margin-right: 4px; color: #9aa69f; }
+  .account-reset-credit-count small { max-width: 100%; color: var(--muted); font-size: 9px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .account-reset-credit-count:hover { text-decoration: underline; }
+  .account-reset-credit-count:focus-visible { outline: 2px solid var(--green-accent); outline-offset: 2px; border-radius: 3px; }
   .account-note-edit { min-width: 0; max-width: 220px; padding: 0; border: 0; display: inline-flex; align-items: center; gap: 4px; color: #53675a; background: transparent; cursor: pointer; font: inherit; font-size: 10px; text-align: left; }
   .account-note-edit svg { flex: 0 0 auto; }
   .account-note-edit span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -10,6 +10,12 @@ struct StreamingToolCall {
     done: bool,
 }
 
+#[derive(Clone, Copy)]
+enum ChatStreamTermination {
+    Complete,
+    Incomplete(&'static str),
+}
+
 struct ChatSseReader<R> {
     upstream: R,
     model: String,
@@ -18,6 +24,7 @@ struct ChatSseReader<R> {
     pending: Vec<u8>,
     pending_offset: usize,
     data_lines: Vec<String>,
+    event_name: Option<String>,
     text: String,
     reasoning_content: String,
     reasoning_id: String,
@@ -28,6 +35,7 @@ struct ChatSseReader<R> {
     tool_context: CodexToolContext,
     continuation_scope: Option<chat_bridge_continuation::ContinuationScope>,
     usage: Option<Value>,
+    termination: Option<ChatStreamTermination>,
     completed: bool,
 }
 
@@ -50,6 +58,7 @@ impl<R: BufRead> ChatSseReader<R> {
             pending,
             pending_offset: 0,
             data_lines: Vec::new(),
+            event_name: None,
             text: String::new(),
             reasoning_content: String::new(),
             reasoning_id,
@@ -60,6 +69,7 @@ impl<R: BufRead> ChatSseReader<R> {
             tool_context,
             continuation_scope,
             usage: None,
+            termination: None,
             completed: false,
         }
     }
@@ -101,23 +111,44 @@ impl<R: BufRead> ChatSseReader<R> {
         }
         if let Some(data) = line.trim_start().strip_prefix("data:") {
             self.data_lines.push(data.trim_start().to_string());
+        } else if let Some(name) = line.strip_prefix("event:") {
+            self.event_name = Some(name.trim().to_string());
         }
     }
 
     fn process_event_block(&mut self) {
         if self.data_lines.is_empty() || self.completed {
             self.data_lines.clear();
+            self.event_name = None;
             return;
         }
         let data = self.data_lines.join("\n");
         self.data_lines.clear();
+        let event_name = self.event_name.take();
+        if data.trim().is_empty() {
+            return;
+        }
         if data.trim() == "[DONE]" {
             self.finish();
             return;
         }
         let Ok(value) = serde_json::from_str::<Value>(&data) else {
+            self.fail("Chat bridge received an invalid upstream stream event".to_string());
             return;
         };
+        if event_name.as_deref() == Some("error")
+            || value.get("error").is_some_and(|error| !error.is_null())
+            || value.get("type").and_then(Value::as_str) == Some("error")
+        {
+            // Preserve the upstream message, without treating text as a quota signal.
+            let message = value
+                .pointer("/error/message")
+                .or_else(|| value.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("The upstream returned an error during generation");
+            self.fail(message.to_string());
+            return;
+        }
         if let Some(usage) = value
             .get("usage")
             .filter(|usage| !usage.is_null())
@@ -142,10 +173,43 @@ impl<R: BufRead> ChatSseReader<R> {
                 }
             }
         }
+        if let Some(reason) = value
+            .pointer("/choices/0/finish_reason")
+            .and_then(Value::as_str)
+            .filter(|_| self.termination.is_none())
+        {
+            self.termination = Some(match reason {
+                "stop" | "tool_calls" | "function_call" => ChatStreamTermination::Complete,
+                "length" => ChatStreamTermination::Incomplete("max_output_tokens"),
+                "content_filter" => ChatStreamTermination::Incomplete("content_filter"),
+                _ => {
+                    self.fail(
+                        "Chat bridge received an unsupported upstream finish reason".to_string(),
+                    );
+                    return;
+                }
+            });
+        }
     }
 
     fn finish(&mut self) {
         if self.completed {
+            return;
+        }
+        if let Some(ChatStreamTermination::Incomplete(reason)) = self.termination {
+            self.terminate_partial(
+                "incomplete",
+                json!({ "incomplete_details": { "reason": reason } }),
+            );
+            return;
+        }
+        if self.tools.values().any(|tool| {
+            tool.name.trim().is_empty()
+                || (!tool.arguments.trim().is_empty()
+                    && !serde_json::from_str::<Value>(&tool.arguments)
+                        .is_ok_and(|value| value.is_object()))
+        }) {
+            self.fail("Chat bridge received incomplete or invalid tool arguments".to_string());
             return;
         }
         let (tool_events, tool_items) = self.finalize_tools();
@@ -188,14 +252,64 @@ impl<R: BufRead> ChatSseReader<R> {
     }
 
     fn fail(&mut self, message: String) {
+        self.terminate_partial("failed", json!({ "error": { "message": message } }));
+    }
+
+    fn terminate_partial(&mut self, status: &str, details: Value) {
         if self.completed {
             return;
         }
-        self.push_pending(response_failed_sse(
-            &self.response_id,
-            &self.model,
-            &message,
-        ));
+        // Received deltas and the final snapshot remain available to the client.
+        // Never finalize/capture a partial tool call as an executable continuation.
+        let mut items = Vec::new();
+        if let Some(index) = self.reasoning_output_index {
+            items.push((index, json!({
+                "id": self.reasoning_id, "type": "reasoning", "status": "incomplete",
+                "summary": [{ "type": "summary_text", "text": self.reasoning_content }]
+            })));
+        }
+        if let Some(index) = self.message_output_index {
+            items.push((index, json!({
+                "id": self.message_id, "type": "message", "status": "incomplete", "role": "assistant",
+                "content": [{ "type": "output_text", "text": self.text, "annotations": [] }]
+            })));
+        }
+        for tool in self.tools.values() {
+            if let Some(index) = tool.output_index {
+                items.push((
+                    index,
+                    response_tool_call_item_from_chat_name(
+                        &tool.item_id,
+                        "incomplete",
+                        &tool.call_id,
+                        &tool.name,
+                        &tool.arguments,
+                        &self.tool_context,
+                    ),
+                ));
+            }
+        }
+        items.sort_by_key(|(index, _)| *index);
+        let mut response = json!({
+            "id": self.response_id, "object": "response", "created_at": unix_now(),
+            "status": status, "model": self.model,
+            "output": items.into_iter().map(|(_, item)| item).collect::<Vec<_>>()
+        });
+        if let Some(usage) = self.usage.as_ref() {
+            response["usage"] = usage.clone();
+        }
+        if let Some(details) = details.as_object() {
+            response.as_object_mut().unwrap().extend(details.clone());
+        }
+        let event = format!("response.{status}");
+        let mut output = String::new();
+        push_sse(
+            &mut output,
+            &event,
+            json!({ "type": event, "response": response }),
+        );
+        output.push_str("data: [DONE]\n\n");
+        self.push_pending(output);
         self.completed = true;
     }
 
@@ -490,7 +604,11 @@ impl<R: BufRead> Read for ChatSseReader<R> {
             match self.upstream.read_line(&mut line) {
                 Ok(0) => {
                     self.process_event_block();
-                    self.finish();
+                    if self.termination.is_some() {
+                        self.finish();
+                    } else {
+                        self.fail("Chat bridge upstream stream ended before completion".to_string());
+                    }
                 }
                 Ok(_) => self.process_line(&line),
                 Err(error) => self.fail(format!("Chat bridge upstream stream failed: {error}")),

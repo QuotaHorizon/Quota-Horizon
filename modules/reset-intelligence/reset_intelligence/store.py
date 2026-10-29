@@ -4,8 +4,39 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
+import zlib
 
 from .contracts import Observation, digest
+from .storage_codec import configure_storage, RETIRED_RAW, prepare_upgrade
+
+
+_COMPRESSED_JSON = b"QHJSON\x01ZLIB\x00"
+
+
+def _json_text(value: object) -> str:
+    # These columns are also read directly by the observer and replay tools.
+    # Keep them ordinary JSON, without the per-row whitespace/ASCII overhead.
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+
+
+def _payload_body(value: object) -> str | bytes:
+    text = _json_text(value)
+    raw = text.encode("utf-8")
+    compressed = _COMPRESSED_JSON + zlib.compress(raw)
+    # Tiny payloads cost less as text; the marker identifies compressed rows
+    # without changing content hashes or rewriting any historical evidence.
+    return compressed if len(compressed) < len(raw) else text
+
+
+def _read_payload(body: str | bytes) -> object:
+    if body == RETIRED_RAW:
+        return None
+    if isinstance(body, bytes) and body.startswith(_COMPRESSED_JSON):
+        try:
+            body = zlib.decompress(body[len(_COMPRESSED_JSON):])
+        except zlib.error as error:
+            raise ValueError("invalid compressed source payload") from error
+    return json.loads(body)
 
 
 class Store:
@@ -13,10 +44,13 @@ class Store:
         self.path = Path(path)
         if read_only:
             self.db = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
-            self.db.row_factory = sqlite3.Row
+            self.json_storage = configure_storage(self.db, read_only=True)
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        new_database = not self.path.exists()
         self.db = sqlite3.connect(self.path, timeout=30)
+        if new_database:
+            self.db.execute("PRAGMA auto_vacuum=INCREMENTAL")
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript("""
@@ -35,19 +69,36 @@ class Store:
           CREATE TABLE IF NOT EXISTS source_config(
             hash TEXT PRIMARY KEY, first_seen_at REAL NOT NULL, payload TEXT NOT NULL);
         """)
+        self.json_storage = configure_storage(self.db)
+        prepare_upgrade(self.db, new_database)
+        from .automatic_storage import recover_rowids
+        recover_rowids(self.db)
 
     def close(self):
         self.db.close()
+
+    def pack_json(self, value, volatile_fields=()):
+        return self.json_storage.pack_json(value, volatile_fields)
 
     def save(self, source: str, at: float, raw: object | None, observation: Observation | None,
              error: str | None = None) -> None:
         with self.db:
             h = digest(raw) if raw is not None else None
             if raw is not None:
-                self.db.execute("INSERT OR IGNORE INTO payloads VALUES (?,?)", (h, json.dumps(raw, ensure_ascii=False, allow_nan=False)))
+                saved = self.db.execute("SELECT body=? FROM payloads WHERE hash=?", (RETIRED_RAW, h)).fetchone()
+                if saved is None:
+                    self.db.execute("INSERT OR IGNORE INTO payloads VALUES (?,?)", (h, _payload_body(raw)))
+                elif saved[0]:
+                    # A source can legitimately publish an old content hash again.
+                    self.db.execute("UPDATE payloads SET body=? WHERE hash=? AND body=?", (_payload_body(raw), h, RETIRED_RAW))
             self.db.execute("INSERT INTO observations(source,observed_at,generated_at,payload_hash,normalized,error) VALUES (?,?,?,?,?,?)",
                             (source, at, observation.generated_at if observation else None, h,
-                             json.dumps(observation.to_dict(), ensure_ascii=False, allow_nan=False) if observation else None, error))
+                             self.pack_json(observation.to_dict(), ("observed_at", "generated_at")) if observation else None, error))
+
+    def raw_payload(self, payload_hash: str) -> object | None:
+        """Read original source content from either legacy JSON or compressed rows."""
+        row = self.db.execute("SELECT body FROM payloads WHERE hash=?", (payload_hash,)).fetchone()
+        return _read_payload(row[0]) if row else None
 
     def observations(self, as_of: float) -> dict[str, Observation]:
         # Select the last successfully decoded observation as it was known then.
@@ -66,7 +117,7 @@ class Store:
     def record_config(self, config: dict, at: float) -> str:
         h = digest(config)
         with self.db:
-            self.db.execute("INSERT OR IGNORE INTO source_config VALUES (?,?,?)", (h, at, json.dumps(config, sort_keys=True)))
+            self.db.execute("INSERT OR IGNORE INTO source_config VALUES (?,?,?)", (h, at, _json_text(config)))
         return h
 
     def config_at(self, at: float) -> dict | None:
@@ -85,7 +136,7 @@ class Store:
         h = digest(result)
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO forecasts VALUES (?,?,?,?,?)",
-                            (h, result["issued_at"], result["target"], result["model_version"], json.dumps(result, allow_nan=False)))
+                            (h, result["issued_at"], result["target"], result["model_version"], self.pack_json(result)))
         return h
 
     def forecasts(self, before: float, target: str) -> list[dict]:

@@ -59,6 +59,19 @@ pub(crate) fn get_app_info<R: Runtime>(app: tauri::AppHandle<R>) -> Result<AppIn
         account_store: paths.accounts.display().to_string(),
         provider_store: paths.providers.display().to_string(),
         version: app.package_info().version.to_string(),
+        build: crate::models::AppBuildInfo {
+            commit: option_env!("QH_BUILD_COMMIT")
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+            dirty: match option_env!("QH_BUILD_DIRTY") {
+                Some("true") => Some(true),
+                Some("false") => Some(false),
+                _ => None,
+            },
+            built_at_ms: option_env!("QH_BUILD_AT_MS").and_then(|value| value.parse().ok()),
+            platform: std::env::consts::OS.into(),
+            arch: std::env::consts::ARCH.into(),
+        },
     })
 }
 

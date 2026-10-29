@@ -1,11 +1,9 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
-use crate::{models::ProviderProfile, storage::write_json_atomic};
+use super::config_transaction::ConfigTransaction;
+use crate::models::ProviderProfile;
 
 use super::{provider_context_window, provider_protocol, ProviderProtocol, MANAGED_PROVIDER_ID};
 
@@ -14,44 +12,52 @@ const WORK_BUDDY_MANAGED_MARKER: &str = "codexSwitchManaged";
 pub(super) fn sync_open_code(
     home: &Path,
     provider: Option<&ProviderProfile>,
+    transaction: &mut ConfigTransaction,
 ) -> Result<(), String> {
     let directory = home.join(".config").join("opencode");
     let path = preferred_json_path(&directory, "opencode");
-    let mut config = read_json_compatible(&path)?;
+    let mut config = read_json_compatible(&path, transaction)?;
     update_open_code_config(&mut config, provider)?;
-    write_json_atomic(&path, &config)
+    transaction.write_json(&path, &config)
 }
 
-pub(super) fn sync_z_code(home: &Path, provider: Option<&ProviderProfile>) -> Result<(), String> {
+pub(super) fn sync_z_code(
+    home: &Path,
+    provider: Option<&ProviderProfile>,
+    transaction: &mut ConfigTransaction,
+) -> Result<(), String> {
     let path = home.join(".zcode").join("v2").join("config.json");
-    let mut config = read_json_compatible(&path)?;
+    let mut config = read_json_compatible(&path, transaction)?;
     update_z_code_config(&mut config, provider)?;
-    write_json_atomic(&path, &config)
+    transaction.write_json(&path, &config)
 }
 
 pub(super) fn sync_open_claw(
     home: &Path,
     provider: Option<&ProviderProfile>,
+    transaction: &mut ConfigTransaction,
 ) -> Result<(), String> {
     let path = home.join(".openclaw").join("openclaw.json");
-    let mut config = read_json_compatible(&path)?;
+    let mut config = read_json_compatible(&path, transaction)?;
     update_open_claw_config(&mut config, provider)?;
-    write_json_atomic(&path, &config)
+    transaction.write_json(&path, &config)
 }
 
 pub(super) fn sync_work_buddy(
     home: &Path,
     provider: Option<&ProviderProfile>,
+    transaction: &mut ConfigTransaction,
 ) -> Result<(), String> {
     let path = home.join(".workbuddy").join("models.json");
-    let mut config = read_json_compatible(&path)?;
+    let mut config = read_json_compatible(&path, transaction)?;
     update_work_buddy_config(&mut config, provider)?;
-    write_json_atomic(&path, &config)
+    transaction.write_json(&path, &config)
 }
 
 pub(super) fn sync_open_viking(
     home: &Path,
     provider: Option<&ProviderProfile>,
+    transaction: &mut ConfigTransaction,
 ) -> Result<(), String> {
     let Some(provider) = provider else {
         return Ok(());
@@ -60,9 +66,9 @@ pub(super) fn sync_open_viking(
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| home.join(".openviking").join("ov.conf"));
-    let mut config = read_json_compatible(&path)?;
+    let mut config = read_json_compatible(&path, transaction)?;
     update_open_viking_config(&mut config, provider)?;
-    write_json_atomic(&path, &config)
+    transaction.write_json(&path, &config)
 }
 
 fn preferred_json_path(directory: &Path, stem: &str) -> PathBuf {
@@ -73,14 +79,14 @@ fn preferred_json_path(directory: &Path, stem: &str) -> PathBuf {
     directory.join(format!("{stem}.json"))
 }
 
-fn read_json_compatible(path: &Path) -> Result<Value, String> {
-    if !path.exists() {
+fn read_json_compatible(path: &Path, transaction: &mut ConfigTransaction) -> Result<Value, String> {
+    let Some(bytes) = transaction.read(path)? else {
         return Ok(json!({}));
-    }
-    let source = fs::read_to_string(path)
-        .map_err(|error| format!("无法读取 {}：{error}", path.display()))?;
-    json5::from_str::<Value>(&source)
-        .map_err(|error| format!("{} 的配置格式无效：{error}", path.display()))
+    };
+    let source =
+        std::str::from_utf8(&bytes).map_err(|_| format!("{} 的配置编码无效", path.display()))?;
+    json5::from_str::<Value>(source)
+        .map_err(|_| format!("{} 的配置格式无效", path.display()))
         .and_then(require_object)
 }
 

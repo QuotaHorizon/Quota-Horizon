@@ -75,7 +75,7 @@
 .post { min-width: 0; }
 .postHeading { display: grid; gap: 4px; }
 .postHeading time { color: var(--muted); font-size: 10px; }
-.parent, .reply { padding: 10px 12px; border-radius: 7px; }
+.parent, .reply { padding: 12px 14px; border-radius: 7px; }
 .parent { margin-bottom: 8px; background: rgba(127, 127, 127, .05); border-left: 2px solid var(--line); }
 .reply { background: rgba(var(--green-rgb), .05); border-left: 2px solid rgba(var(--green-rgb), .4); }
 .parent p, .reply p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; font-size: 12px; margin: 7px 0 0; }
@@ -228,7 +228,12 @@
 .sourceCell .track { width: 100%; height: 5px; }
 .sourceCell .track i { background: var(--series-color); }
 .sourceMatrixRow[data-muted] .track i { background: var(--muted); }
-.tiboCard { container: tibo / inline-size; border-top: 2px solid rgba(var(--green-rgb), .55); }
+.tiboCard { display: flex; flex-direction: column; padding: 20px; container: tibo / inline-size; border-radius: 15px; border-top-color: rgba(var(--green-rgb), .55); }
+.tiboCard > .cardHeading { margin-bottom: 10px; }
+.tiboBody { min-width: 0; padding: 2px; margin: -2px; }
+.tiboBody:focus-visible { outline: 2px solid var(--radar-accent); outline-offset: -2px; border-radius: 5px; }
+.tiboBody .periods { flex-wrap: wrap; }
+.tiboBody .periods button { flex: 1; min-width: 0; }
 .tiboCard > .cardHeading h2 { display: flex; align-items: center; gap: 6px; }
 .tiboCard > .cardHeading h2 svg { color: var(--radar-accent); }
 .tiboLinks { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 11px; }

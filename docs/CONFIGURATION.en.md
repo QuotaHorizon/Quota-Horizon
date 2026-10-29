@@ -20,8 +20,10 @@ See [CPA bridge](CPA_BRIDGE.en.md) for environment variables and response format
 
 ## Reset radar
 
-The overview shows the next 24 / 48-hour outlook side by side. An active explicit announcement takes
-precedence at 100% for each covered window, while retaining model estimates, scheduled times and subsequent completion reports.
+The overview shows the next 24 / 48-hour outlook side by side. The combined probability uses one historical
+anchor, each source's revisions above its own baseline, and a community supplement adjusted for shared information.
+Expand “Probability breakdown” for each component's percentage-point contribution. The statements panel
+shows announcement timing, original wording and subsequent completion reports.
 
 The macOS and Windows x64 installers include the [independent forecasting and evaluation modules](DEVELOPMENT.en.md#connect-the-desktop-radar).
 Opening the app starts background collection; no separate Python installation is needed.
@@ -31,12 +33,18 @@ retain each radar’s published values, event scope and issue time. Expand model
 and each source’s supported horizon. Sources awaiting quality or scope review remain in the details. Expired results
 retain their previous values and timestamps.
 
-The community panel shows its aggregate probability, actual group weight, recent votes and when they were detected, and the percentage-point difference between
-the full model and its community-removed counterpart. Probability inputs require at least 50 new ballots in the past 6 hours;
-collection continues for polls below that threshold. Original community ballots preserve Codex Reset’s timing
-histogram and NextReset’s daily probability votes, deadlines and counts. The history chart shows Horizon and all
-sources together: solid lines for 24h, dashed for 48h. It records on a shared clock from the evaluator’s actual receipt
-of forecasts and leaves missing windows blank. Hover for time and probability.
+The community panel shows its aggregate probability, actual supplement weight, recent votes and when they were detected,
+and the percentage-point difference between the full model and its community-removed counterpart.
+Probability inputs require at least 50 new ballots in the past 6 hours; collection continues below that threshold,
+with the reason for exclusion shown. Did Codex Reset's voting trend retains the activity day and original question scope,
+counts clicks and discounts repeated-click effects. “All ballots and date distributions” preserves Codex Reset’s timing
+histogram and NextReset’s daily probability votes, deadlines and counts.
+
+“How predictions change” charts the past day's records of 24h probabilities together: Horizon uses half-hour
+candlesticks, sources use distinct thin lines, and the automatic-reset reference uses a dashed line.
+Each candle shows the interval's first, highest, lowest and last value; red means a rise and green a fall.
+Hover or click to compare the same time, and click a legend item to hide its series. Records use the evaluator's actual
+receipt time, with breaks for missing observations and model-version changes.
 
 “Why the outlook changed” compares forecasts actually issued by the same model revision, with 24h / 48h changes
 and contributions from sources, community inputs and event-scope adjustments. Expand it for before-and-after
@@ -57,7 +65,17 @@ Installations without a connected independent module continue using the built-in
 Reset Monitor, NextReset, public discussions and polls, with source status and sampling details.
 Tibo’s lead statement is fully visible; the Chinese interface includes the original English and available translation.
 “Other posts and replies” includes unrelated activity: filter replies, open full text and available context, or visit X for more interactions.
-Conditional commitments such as a daily improvement or full reset stay prominent during their stated period, with the conditions and duration preserved.
+Conditional commitments retain their full conditions, duration and subsequent progress.
 
 Reset history uses a three-month calendar to distinguish quota resets, reset-card grants and announcements. Select a date to see event times in your computer’s timezone.
 A small dot marks new content, which is marked read when viewed; “Mark all read” is also available. Each source’s name and update time accompany its content, and failed connections retain the previous result.
+
+## Background activity and storage
+
+The bottom of the radar page shows collection, evaluation and recovery status. On first use or after downtime,
+historical evaluation catches up in batches while live collection continues. “Storage and maintenance” shows radar
+data usage, diagnostic log size and maintenance progress.
+
+Radar automatically removes expired full-response caches, dense older reports and intermediate trials unused by scoring,
+while retaining valid forecasts, ballots, events and scoring revisions. Existing data is maintained automatically after
+an update, and the diagnostic log is limited to 5 MiB. Quota history and account settings remain on the device.

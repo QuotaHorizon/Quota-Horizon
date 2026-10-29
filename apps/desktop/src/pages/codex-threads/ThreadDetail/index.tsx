@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Alert, Button, Drawer, Modal, Spin, Tag } from "antd";
-import { Bot, Copy, FolderCog, FolderOpen, Play, Terminal, User, Wrench } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Alert, Button, Drawer, Input, Modal, Spin, Tag } from "antd";
+import { ArrowDown, ArrowUp, Bot, Copy, FolderCog, FolderOpen, Play, Search, Terminal, User, Wrench } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   chooseCodexThreadDirectory, confirmCodexThreadRebind, loadCodexThreadDetail,
-  previewCodexThreadRebind, resumeCodexThread,
+  isDesktopApp, previewCodexThreadRebind, resumeCodexThread,
 } from "../../../api/backend";
 import type { Language } from "../../../i18n";
 import type {
@@ -12,6 +13,7 @@ import type {
 import type { ThreadCopy } from "../copy";
 import { formatSize, interpolate } from "../utils";
 import { mergeThreadDetailPage } from "../detailPages";
+import { highlightedText, matchingItems, nextMatch, ReadableMessage } from "./reading";
 import styles from "./index.module.less";
 
 const PAGE_SIZE = 100;
@@ -19,6 +21,7 @@ const PAGE_SIZE = 100;
 interface ThreadDetailDrawerProps {
   sessionId: string | null;
   liveVersion?: string;
+  initialQuery?: string;
   close: () => void;
   language: Language;
   text: ThreadCopy;
@@ -36,10 +39,14 @@ function formatTimestamp(value: string | null, language: Language) {
   }).format(parsed);
 }
 
-function TimelineItem({ item, language, text }: {
+export function TimelineItem({ item, language, text, query = "", active = false, onOpen, nodeRef }: {
   item: CodexThreadTimelineItem;
   language: Language;
   text: ThreadCopy;
+  query?: string;
+  active?: boolean;
+  onOpen?: (url: string) => void;
+  nodeRef?: (node: HTMLElement | null) => void;
 }) {
   const isUser = item.kind === "message:user";
   const isAssistant = item.kind === "message:assistant";
@@ -47,25 +54,25 @@ function TimelineItem({ item, language, text }: {
   const Icon = isUser ? User : isAssistant ? Bot : Wrench;
   const status = item.toolStatus ? text[item.toolStatus] : null;
   return (
-    <article className={`${styles.timelineItem} ${styles[item.kind.replace(":", "")] ?? ""}`}>
+    <article className={`${styles.timelineItem} ${styles[item.kind.replace(":", "")] ?? ""}`} ref={nodeRef} data-search-active={active || undefined}>
       <header>
         <Icon size={16} />
-        <strong>{label}{item.toolName ? ` · ${item.toolName}` : ""}</strong>
+        <strong>{label}{item.toolName ? <> · {highlightedText(item.toolName, query)}</> : ""}</strong>
         {status && <Tag color={item.toolStatus === "errored" ? "red" : undefined}>{status}</Tag>}
         {item.truncated && <Tag color="gold">{text.truncated}</Tag>}
         <time>{formatTimestamp(item.timestamp, language)}</time>
       </header>
-      {item.text && <p>{item.text}</p>}
+      {item.text && <ReadableMessage value={item.text} query={query} onOpen={onOpen} />}
       {item.kind === "tool_call" && item.toolInput && (
         <details>
           <summary>{text.toolInput}</summary>
-          <pre>{item.toolInput}</pre>
+          <pre>{highlightedText(item.toolInput, query)}</pre>
         </details>
       )}
       {item.kind === "tool_call" && item.toolOutput && (
         <details>
           <summary>{text.toolOutput}</summary>
-          <pre>{item.toolOutput}</pre>
+          <pre>{highlightedText(item.toolOutput, query)}</pre>
         </details>
       )}
     </article>
@@ -73,7 +80,9 @@ function TimelineItem({ item, language, text }: {
 }
 
 export function ThreadDetailDrawer(props: ThreadDetailDrawerProps) {
-  const { sessionId, liveVersion, close, language, text, notify, reportError } = props;
+  const { sessionId, liveVersion, initialQuery = "", close, language, text, notify, reportError } = props;
+  const [search, setSearch] = useState(initialQuery);
+  const [activeMatch, setActiveMatch] = useState<string | null>(null);
   const [detail, setDetail] = useState<CodexThreadDetailPage | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -87,9 +96,33 @@ export function ThreadDetailDrawer(props: ThreadDetailDrawerProps) {
   const versionRef = useRef(liveVersion);
   const generation = useRef(0);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const toolsRef = useRef<HTMLDivElement>(null);
   const pendingScroll = useRef<{ height: number; top: number } | "top" | null>(null);
+  const pendingSearchJump = useRef(false);
+  const itemNodes = useRef(new Map<string, HTMLElement>());
+  const visibleDetail = detail?.summary.sessionId === sessionId ? detail : null;
+  const matches = useMemo(() => matchingItems(visibleDetail?.items ?? [], search), [visibleDetail, search]);
   currentId.current = sessionId;
   versionRef.current = liveVersion;
+
+  useEffect(() => {
+    setSearch(initialQuery);
+    setActiveMatch(null);
+    pendingSearchJump.current = !!initialQuery.trim();
+  }, [sessionId, initialQuery]);
+
+  const jumpToMatch = useCallback((id: string | null) => {
+    setActiveMatch(id);
+    const node = id ? itemNodes.current.get(id) : null;
+    if (!node) return;
+    node.querySelectorAll("details").forEach(details => { details.open = true; });
+    const scroller = node.closest<HTMLElement>(".ant-drawer-body");
+    if (scroller) {
+      // The tool strip wraps on narrow windows; measure it instead of assuming a fixed offset.
+      const toolsHeight = toolsRef.current?.getBoundingClientRect().height ?? 0;
+      scroller.scrollTop += node.getBoundingClientRect().top - scroller.getBoundingClientRect().top - toolsHeight - 12;
+    } else node.scrollIntoView({ block: "start", behavior: "auto" });
+  }, []);
 
   const loadLatest = useCallback(async (id: string, version?: string) => {
     const request = ++generation.current;
@@ -131,6 +164,13 @@ export function ThreadDetailDrawer(props: ThreadDetailDrawerProps) {
     if (!scroller || previous == null) return;
     scroller.scrollTop = previous === "top" ? 0 : previous.top + scroller.scrollHeight - previous.height;
   }, [detail]);
+
+  useLayoutEffect(() => {
+    if (pendingSearchJump.current && visibleDetail && matches.length) {
+      pendingSearchJump.current = false;
+      jumpToMatch(matches[0]);
+    }
+  }, [visibleDetail, matches, jumpToMatch]);
 
   const loadMore = async (earlier = false) => {
     const offset = earlier ? detail?.previousOffset : detail?.nextOffset;
@@ -222,7 +262,6 @@ export function ThreadDetailDrawer(props: ThreadDetailDrawerProps) {
     }
   };
 
-  const visibleDetail = detail?.summary.sessionId === sessionId ? detail : null;
   const summary = visibleDetail?.summary;
   const hasUpdates = newerAvailable || Boolean(summary && liveVersion && loadedVersion !== liveVersion);
   return (
@@ -237,13 +276,34 @@ export function ThreadDetailDrawer(props: ThreadDetailDrawerProps) {
       {loading && !summary && <div className={styles.detailLoading}><Spin /><span>{text.detailLoading}</span></div>}
       {summary && visibleDetail && (
         <div className={styles.detailBody} ref={bodyRef}>
-          <div className={styles.readingStatus}>
-            <span>{hasUpdates
-              ? (language === "zh" ? "会话有更新 · 保留当前阅读位置" : "Updates available · Reading position retained")
-              : (language === "zh" ? "最新消息优先 · 向前加载更早记录" : "Latest messages first · Load earlier history above")}</span>
-            <Button size="small" loading={loading} onClick={() => sessionId && void loadLatest(sessionId, versionRef.current)}>
-              {language === "zh" ? "查看最新" : "View latest"}
-            </Button>
+          <div className={styles.readerTools} ref={toolsRef}>
+            <div className={styles.readingStatus}>
+              <span>{hasUpdates
+                ? (language === "zh" ? "会话有更新 · 保留当前阅读位置" : "Updates available · Reading position retained")
+                : (language === "zh" ? "最新消息优先 · 向前加载更早记录" : "Latest messages first · Load earlier history above")}</span>
+              <Button size="small" loading={loading} onClick={() => sessionId && void loadLatest(sessionId, versionRef.current)}>
+                {language === "zh" ? "查看最新" : "View latest"}
+              </Button>
+            </div>
+            <div className={styles.searchPanel} role="search" aria-label={language === "zh" ? "搜索已加载的会话内容" : "Search loaded conversation"}>
+              <Input value={search} prefix={<Search size={14} />} allowClear
+                aria-label={language === "zh" ? "在会话中查找" : "Find in conversation"}
+                placeholder={language === "zh" ? "在会话中查找" : "Find in conversation"}
+                onChange={event => { setSearch(event.target.value); setActiveMatch(null); pendingSearchJump.current = true; }}
+                onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); jumpToMatch(nextMatch(matches, activeMatch, event.shiftKey ? -1 : 1)); } }} />
+              <Button size="small" icon={<ArrowUp size={14} />} disabled={!matches.length}
+                aria-label={language === "zh" ? "上一处匹配记录" : "Previous matching record"}
+                onClick={() => jumpToMatch(nextMatch(matches, activeMatch, -1))} />
+              <Button size="small" icon={<ArrowDown size={14} />} disabled={!matches.length}
+                aria-label={language === "zh" ? "下一处匹配记录" : "Next matching record"}
+                onClick={() => jumpToMatch(nextMatch(matches, activeMatch, 1))} />
+              <span role="status">{search.trim()
+                ? `${Math.max(0, matches.indexOf(activeMatch ?? "") + 1)} / ${matches.length} ${language === "zh" ? "条匹配记录" : "matching records"}`
+                : (language === "zh" ? "Enter 下一处 · Shift+Enter 上一处" : "Enter next · Shift+Enter previous")}</span>
+              {(visibleDetail.previousOffset != null || visibleDetail.nextOffset != null) && <small>{language === "zh"
+                ? `已搜索加载的 ${visibleDetail.items.length} 条；可继续加载其余记录。`
+                : `Searched ${visibleDetail.items.length} loaded records. Load more to search the remaining history.`}</small>}
+            </div>
           </div>
           {(summary.skippedRecordCount ?? 0) > 0 && <Alert type="warning" showIcon message={language === "zh"
             ? `${summary.skippedRecordCount} 条过大或不完整的记录未展示，其余记录可正常阅读；原始历史未修改。`
@@ -300,7 +360,9 @@ export function ThreadDetailDrawer(props: ThreadDetailDrawerProps) {
             {visibleDetail.previousOffset != null && <Button loading={loadingMore} disabled={loading}
               onClick={() => void loadMore(true)}>{language === "zh" ? "加载更早记录" : "Load earlier history"}</Button>}
             {visibleDetail.items.length ? visibleDetail.items.map((item) => (
-              <TimelineItem key={item.id} item={item} language={language} text={text} />
+              <TimelineItem key={item.id} item={item} language={language} text={text} query={search} active={activeMatch === item.id}
+                onOpen={isDesktopApp ? url => { void openUrl(url).catch(reportError); } : undefined}
+                nodeRef={node => { if (node) itemNodes.current.set(item.id, node); else itemNodes.current.delete(item.id); }} />
             )) : <div className={styles.detailEmpty}>{text.detailEmpty}</div>}
             <footer>
               <span>{interpolate(text.timelineProgress, {

@@ -274,6 +274,9 @@ mod tests {
                     summary_status: SummaryStatus::Unavailable,
                     available_count: None,
                     details_status: ResetCreditDetailsStatus::Unavailable,
+                    next_expires_at: None,
+                    known_expiry_count: 0,
+                    expiry_details_complete: false,
                 },
                 usage: crate::DesktopUsageView {
                     availability: Availability::Complete,

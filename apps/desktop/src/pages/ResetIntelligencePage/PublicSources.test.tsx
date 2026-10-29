@@ -4,6 +4,7 @@ import { LiveSourcesView, publicSourceLabel } from "./LiveSourcesPanel";
 import { PublicResetArchiveView } from "./ArchiveView";
 import { createPublicSourcesStore } from "./publicSourcesStore";
 import type { PublicResetTimeline } from "./types";
+import { quantitativeFixture } from "../../preview/quantitativeFixture";
 
 vi.mock("../../api/backend", () => ({ getPublicResetTimeline: vi.fn(), refreshPublicResetTimeline: vi.fn() }));
 
@@ -31,6 +32,30 @@ function deferred<T>() {
 }
 
 describe("public-source page continuity", () => {
+  it("records actual first receipt and presentation without rewriting them on refresh", async () => {
+    const clock = vi.spyOn(Date, "now");
+    try {
+      const at = Date.parse("2026-10-24T01:00:00Z");
+      let data = { ...timeline(), quantitative: quantitativeFixture(at) };
+      const store = createPublicSourcesStore({ load: async () => data, refresh: async () => data });
+      clock.mockReturnValue(at);
+      await store.reload();
+      expect(store.getSnapshot().timeline?.quantitative?.presentation).toMatchObject({ receivedAt: at, presentedAt: null });
+      store.markPresented(at, at - 1, true);
+      store.markPresented(at + 1, at + 20, true);
+      expect(store.getSnapshot().timeline?.quantitative?.presentation?.presentedAt).toBeNull();
+      store.markPresented(at, at + 20, false);
+      clock.mockReturnValue(at + 60_000);
+      await store.refresh();
+      store.markPresented(at, at + 500, true);
+      expect(store.getSnapshot().timeline?.quantitative?.presentation).toMatchObject({ receivedAt: at, presentedAt: at + 20, visible: false });
+      data = { ...timeline(), quantitative: quantitativeFixture(at + 60_000) };
+      await store.reload();
+      expect(store.getSnapshot().timeline?.quantitative?.presentation).toMatchObject({ receivedAt: at + 60_000, presentedAt: null });
+      store.markPresented(at, at + 60_100, true);
+      expect(store.getSnapshot().timeline?.quantitative?.presentation?.presentedAt).toBeNull();
+    } finally { clock.mockRestore(); }
+  });
   it("receives native background updates without starting a second collection", async () => {
     const cache = timeline();
     let changed!: () => void;

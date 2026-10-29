@@ -191,6 +191,7 @@ export function CodexThreadsPage({ language, notify }: CodexThreadsPageProps) {
         />
         <ThreadDetailDrawer
           sessionId={detailSessionId}
+          initialQuery={list.appliedQuery}
           liveVersion={detailThread ? `${detailThread.updatedAt}:${detailThread.sizeBytes}` : undefined}
           close={() => setDetailSessionId(null)}
           language={language}

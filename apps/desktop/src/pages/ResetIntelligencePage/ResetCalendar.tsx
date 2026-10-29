@@ -20,6 +20,8 @@ function CalendarRecord({ record, language, onOpenSource }: {
       <strong>{record.kind === "reset" ? <RotateCcw size={14} aria-hidden="true" /> : record.kind === "grant" ? <Ticket size={15} aria-hidden="true" /> : <MessageCircle size={14} aria-hidden="true" />}{kindLabel(record.kind, zh)}</strong>
       <span className={shared.badge}>{record.withdrawn ? (zh ? "有更正、撤回或否定" : "Correction, retraction or denial") : record.conflictingTimes
         ? (zh ? "来源时间有分歧" : "Conflicting source times") : record.reviewed ? (zh ? "发生时间已核实" : "Reviewed occurrence")
+          : record.completionStatus === "scope_pending" ? (zh ? "已报告完成 · 范围待核验" : "Completion reported · scope under review")
+          : record.completionStatus === "reported" ? (zh ? "完成已有来源佐证" : "Completion evidenced by sources")
           : record.timeBasis === "grant_announcement" ? (zh ? "已宣布开始发放" : "Rollout announced")
           : record.mode === "events" ? (zh ? "追踪记录 · 待核实" : "Tracker record · unverified") : (zh ? "预告 / 线索" : "Announcement / lead")}</span>
     </div>
@@ -30,8 +32,12 @@ function CalendarRecord({ record, language, onOpenSource }: {
     {record.timeBasis === "grant_announcement" && !record.withdrawn && !record.conflictingTimes && <p>{zh
       ? "Tibo 宣布开始向订阅账号发放重置卡。"
       : "Tibo announced a reset-card rollout to subscription accounts."}</p>}
+    {record.timeBasis === "completion_report" && !record.withdrawn && !record.conflictingTimes && <p>{zh
+      ? "按公开完成报告归档，实际到账时间未提供。"
+      : "Filed by the public completion report. Account delivery time is unavailable."}</p>}
     <details className={styles.recordDetails}>
-      <summary>{zh ? "查看原文与时间依据" : "Source and timestamp details"}</summary>
+      <summary>{record.timeBasis === "completion_report" ? (zh ? "完成报告与时间依据" : "Completion report and time basis")
+        : (zh ? "查看原文与时间依据" : "Source and timestamp details")}</summary>
       <p className={styles.originalTitle}>{record.title}</p>
       <p className={styles.originalSummary}>{record.summary}</p>
       {exactPublicTime(record.publishedAt) != null && <p>{zh ? "原文发布时间：" : "Original publication: "}{calendarEventTime(exactPublicTime(record.publishedAt), language)}</p>}
@@ -59,7 +65,8 @@ export function ResetCalendar({ archive, timeline, now, language, action, onOpen
   const zone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
   const today = localCalendarDate(new Date(now));
   const months = useMemo(() => resetCalendarMonths(now), [today, zone]);
-  const records = useMemo(() => resetCalendarRecords(archive?.entries ?? [], timeline?.entries ?? [], language, now),
+  const records = useMemo(() => resetCalendarRecords(archive?.entries ?? [], timeline?.entries ?? [], language, now,
+    timeline?.quantitative?.evaluation?.outcomes),
     [archive, timeline, language, now]);
   const firstDay = months[0]?.days.find((day) => day != null)?.key ?? today;
   const matches = (record: ResetCalendarRecord) => (mode === "all" || record.mode === mode) && (kind === "all" || record.kind === kind)

@@ -21,6 +21,7 @@ def main(argv=None):
     parser.add_argument("--config", help="Local policy and optional producer process JSON")
     parser.add_argument("--output", help="Atomic machine-readable report")
     parser.add_argument("--html", help="Self-contained local report viewer")
+    parser.add_argument("--managed-log", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--as-of", help="Replay the report actually saved by this ISO-8601 time")
     parser.add_argument("--origin", help="Frozen UTC window origin for diagnose")
     parser.add_argument("--hours", type=int, choices=(6, 12, 24, 48), help="Window length for diagnose")
@@ -45,7 +46,7 @@ def main(argv=None):
         if args.output:
             atomic_write(args.output, json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
     elif args.command == "status":
-        result = status(args.db)
+        result = status(args.db, args.producer_db)
     elif args.command == "stop":
         if Path(args.db).is_file() and running(args.db):
             stop_path(args.db).touch()

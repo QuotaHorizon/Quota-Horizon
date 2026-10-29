@@ -13,6 +13,7 @@ from . import VERSION, POLICY_VERSION, SETTLEMENT_VERSION
 from .contracts import HORIZONS, Forecast, digest, iso, stamp
 from .statistics import alert_metrics, paired, scores
 from .diagnostics import dependence, provider_health, window_diagnostics
+from .benchmark import cycle_exclusion
 
 IMPLEMENTATION_HASH = digest(
     {
@@ -20,6 +21,35 @@ IMPLEMENTATION_HASH = digest(
         for p in sorted(Path(__file__).parent.glob("*.py"))
     }
 )
+
+
+class ReportCache:
+    """One bounded derived scoring snapshot, owned by the serial evaluator.
+
+    No ledger rows survive between runs. Serializing the small output both
+    bounds resident cache storage and prevents callers mutating a cached report.
+    Live forecasts, curves, ballots and reaction times are never cached here.
+    """
+
+    def __init__(self, maximum_bytes=8 * 1024 * 1024):
+        self.maximum_bytes = maximum_bytes
+        self.key = None
+        self.payload = None
+        self.at = None
+        self.until = None
+
+    def get(self, key, now):
+        if (self.key == key and self.payload is not None and now >= self.at
+                and (self.until is None or now < self.until)):
+            return json.loads(self.payload)
+        return None
+
+    def put(self, key, now, until, value):
+        payload = json.dumps(value, ensure_ascii=False, allow_nan=False,
+                             separators=(",", ":")).encode("utf-8")
+        self.key = self.payload = self.at = self.until = None
+        if len(payload) <= self.maximum_bytes:
+            self.key, self.payload, self.at, self.until = key, payload, now, until
 
 
 def source_name(source, private=False):
@@ -55,52 +85,213 @@ def scoring_progress(trials, settlements):
     return progress
 
 
+def thin_curve(points, tolerance=0.0025, *, candle_minutes=None):
+    """Keep receipt times, gaps and turns; bound linear display error to 0.25pp.
+
+    Simplification never crosses a bucket or a missing segment. Candle buckets
+    retain exact first/last/min/max receipts; ordinary lines use hourly buckets.
+    Both sides of a sharp step survive without moving the change to a bucket end.
+    Only the display projection is thinned; source and scoring rows are intact.
+    """
+    def segment(rows):
+        if len(rows) < 3:
+            return rows
+        keep, pending = {0, len(rows) - 1}, [(0, len(rows) - 1)]
+        if candle_minutes:
+            # OHLC must use exact receipts, including extrema below the line
+            # simplifier's tolerance. Never synthesize an empty interval.
+            keep.update((min(range(len(rows)), key=lambda i: rows[i]["p"]),
+                         max(range(len(rows)), key=lambda i: rows[i]["p"])))
+        while pending:
+            left, right = pending.pop()
+            a, b = rows[left], rows[right]
+            span = b["at"] - a["at"]
+            if right - left < 2:
+                continue
+            def error(i):
+                fraction = (rows[i]["at"] - a["at"]) / span if span else 0
+                return abs(rows[i]["p"] - (a["p"] + fraction * (b["p"] - a["p"])))
+            index = max(range(left + 1, right), key=error)
+            if error(index) > tolerance:
+                keep.add(index)
+                pending.extend(((left, index), (index, right)))
+        return [rows[i] for i in sorted(keep)]
+    result, batch = [], []
+    bucket_seconds = candle_minutes * 60 if candle_minutes else 3600
+    for point in points:
+        if point["p"] is None or (batch and int(point["at"] // bucket_seconds) != int(batch[0]["at"] // bucket_seconds)):
+            result.extend(segment(batch))
+            batch = []
+        if point["p"] is None:
+            result.append(point)
+        else:
+            batch.append(point)
+    return result + segment(batch)
+
+
 def publication_curves(store, now):
     """Plot what sources published when first received; scoring stays on trials.
 
     A 24h-only forecast remains a valid published 24h observation even if its
     receipt is a minute late. It cannot score a later, unsupported 24h window.
-    Keep the latest receipt in each hour/version, with explicit expiry gaps.
+    Determine continuity from every receipt before simplifying continuous
+    segments. Recovery boundaries and turning points remain actual receipts.
     """
-    rows = store.db.execute("""SELECT f.payload FROM forecasts f JOIN (SELECT id,
-        ROW_NUMBER() OVER (PARTITION BY source,target,track,version,CAST(available_at/3600 AS INTEGER)
-        ORDER BY available_at DESC,origin DESC,id DESC) rank FROM forecasts
-        WHERE available_at BETWEEN ? AND ? AND track IN ('native','model')
-        ) selected ON selected.id=f.id WHERE selected.rank=1 ORDER BY f.available_at,f.origin""", (now-7*86400, now))
-    curves, previous = defaultdict(list), {}
+    # The reaction index already holds the exact publication probabilities.
+    # Reuse that compact projection instead of expanding large model metadata
+    # again. Older/unindexed receipts retain the original decoding path.
+    rows = store.db.execute(
+        """SELECT f.source,f.version,f.target,f.track,f.origin,f.available_at,f.expires_at,
+        r.payload AS projection,
+        CASE WHEN r.id IS NULL THEN
+          json_extract(qh_json(f.payload),'$.private','$.issues','$.points','$.generated_at')
+        END AS fields
+        FROM forecasts f LEFT JOIN reaction_forecasts r ON r.id=f.id
+        WHERE f.available_at BETWEEN ? AND ? AND f.track IN ('native','model')
+        ORDER BY f.available_at,f.origin,f.id""",
+        (now - 7 * 86400, now),
+    )
+    curves, coverage_end = defaultdict(list), {}
     for row in rows:
-        f = Forecast(**json.loads(row[0]))
-        if f.private:
+        if row["projection"] is not None:
+            projection = json.loads(row["projection"])
+            issues = projection["issues"]
+            probabilities = {h: projection[f"p{h}"] for h in (24, 48)}
+        else:
+            private, issues, points, generated_at = json.loads(row["fields"])
+            if private:
+                continue
+            forecast = Forecast(
+                **{name: row[name] for name in (
+                    "source", "version", "target", "track", "origin", "available_at", "expires_at",
+                )},
+                points=points, generated_at=generated_at, issues=issues or [],
+            )
+            probabilities = {h: forecast.cdf(h) for h in (24, 48)}
+        for h in (24, 48):
+            key = row["source"], row["version"], row["target"], row["track"], h
+            values = curves[key]
+            end = coverage_end.get(key)
+            if end is not None and end < row["available_at"]:
+                values.append({"at": end, "p": None})
+                coverage_end.pop(key)
+            p = (
+                probabilities[h]
+                if not issues and row["origin"] <= row["available_at"] < row["expires_at"]
+                else None
+            )
+            point = {"at": row["available_at"], "p": p}
+            if p is None:
+                # An explicit invalid/unsupported publication is a boundary,
+                # even while an earlier forecast would otherwise cover it.
+                if not values or values[-1]["p"] is not None:
+                    values.append(point)
+                coverage_end.pop(key, None)
+            else:
+                values.append(point)
+                # A newer short TTL must not erase still-valid coverage from
+                # earlier receipts in this same version/horizon/segment.
+                coverage_end[key] = max(
+                    coverage_end.get(key, row["expires_at"]), row["expires_at"]
+                )
+    for key, expiry in coverage_end.items():
+        if expiry < now:
+            curves[key].append({"at": expiry, "p": None})
+    return [
+        {
+            "source": k[0],
+            "version": k[1],
+            "target": k[2],
+            "track": k[3],
+            "hours": k[4],
+            **({"candle_interval_minutes": 30} if k[0] == "horizon" and k[3] == "model" and k[4] == 24 else {}),
+            "points": [{"at": iso(p["at"]), "p": p["p"]} for p in thin_curve(
+                v, candle_minutes=30 if k[0] == "horizon" and k[3] == "model" and k[4] == 24 else None)],
+        }
+        for k, v in sorted(curves.items())
+    ]
+
+
+def paired_comparisons(scored, policy, safe):
+    """Compare only series sharing a scored window and outcome.
+
+    Model versions often occupy disjoint dates. Index their actual windows so
+    those versions do not generate empty comparison records. Sorting the pairs
+    retains the source/version ordering of the complete pairwise matrix.
+    """
+    windows = defaultdict(set)
+    for key, rows in scored.items():
+        for row in rows:
+            windows[(row["origin"], row["hours"], row["target"], row["label"])].add(key)
+    candidates = set()
+    for members in windows.values():
+        keys = sorted(members)
+        for i, left in enumerate(keys):
+            for right in keys[i + 1 :]:
+                if left[2] != right[2] or left[4] != right[4]:
+                    continue
+                if left[3] == "shadow" and right[3] == "shadow":
+                    continue
+                candidates.add((left, right))
+    comparisons = []
+    for left, right in sorted(candidates):
+        comparison = paired(scored[left], scored[right], policy)
+        # paired() resolves duplicate right-hand windows using their last row.
+        # Keep that authority even if an earlier duplicate supplied a match.
+        if not comparison["n"]:
             continue
-        for h in (24,48):
-            key = f.source, f.version, f.target, f.track, h
-            if key in previous and previous[key] + 60 < f.available_at and curves[key][-1]["p"] is not None:
-                curves[key].append({"at":iso(previous[key]), "p":None})
-            p = f.cdf(h) if not f.issues and f.origin <= f.available_at < f.expires_at else None
-            curves[key].append({"at":iso(f.available_at), "p":p})
-            previous[key] = f.expires_at
-    for key, expiry in previous.items():
-        if expiry + 60 < now and curves[key][-1]["p"] is not None:
-            curves[key].append({"at":iso(expiry), "p":None})
-    return [{"source":k[0], "version":k[1], "target":k[2], "track":k[3], "hours":k[4], "points":v}
-            for k,v in sorted(curves.items())]
+        comparisons.append(
+            {
+                "left": {"source": safe(left[0]), "version": left[1], "track": left[3]},
+                "right": {"source": safe(right[0]), "version": right[1], "track": right[3]},
+                "target": left[2],
+                "hours": left[4],
+                **comparison,
+            }
+        )
+    return comparisons
 
 
-def build_report(store, now, policy, evidence):
-    forecasts = store.forecasts(now, latest=True)
-    private = {f.source for f in forecasts if f.private}
+def scoring_snapshot(store, now, policy, evidence, latest, private, cache=None):
+    # Pin the key and its dependent reads to one SQLite snapshot. The capture
+    # connection may append while evaluation runs; an old key must never label
+    # newly committed data. Respect a caller's existing read transaction.
+    owned_transaction = not store.db.in_transaction
+    if owned_transaction:
+        store.db.execute("BEGIN")
+    try:
+        key = None
+        if cache is not None:
+            stat = store.path.stat()
+            key = digest([str(store.path), stat.st_dev, stat.st_ino, policy.hash,
+                          store.report_revision(now), store.get("last_grid"),
+                          sorted((f.source, f.version, f.target, f.track) for f in latest.values()),
+                          sorted(private),
+                          [(e["id"], e["status"], e["from"]) for e in evidence["events"]]])
+            saved = cache.get(key, now)
+            if saved is not None:
+                through = saved["coverage_through"]
+                revision = store.coverage_revision(min(now, through) if through is not None else None)
+                if saved["coverage_revision"] == (list(revision) if revision is not None else None):
+                    return saved
+        value, until = _scoring_snapshot(store, now, policy, evidence, latest, private)
+        through = value["coverage_through"]
+        revision = store.coverage_revision(min(now, through) if through is not None else None)
+        value["coverage_revision"] = list(revision) if revision is not None else None
+        if cache is not None:
+            cache.put(key, now, until, value)
+        return value
+    finally:
+        if owned_transaction:
+            store.db.rollback()
+
+
+def _scoring_snapshot(store, now, policy, evidence, latest, private):
+    private = set(private)
     safe = lambda source: source_name(source, source in private)
-    latest = {}
-    for f in forecasts:
-        key = f.source, f.target, f.track
-        if key not in latest or (f.origin, f.available_at) >= (
-            latest[key].origin,
-            latest[key].available_at,
-        ):
-            latest[key] = f
-    trials = store.trials(now)
+    trials = store.trials(now, compact=True)
     private.update(r["source"] for r in trials if r.get("private"))
-    settlements = store.settled(now)
+    settlements = store.settled(now, compact=True)
     groups = defaultdict(list)
     for trial in trials:
         groups[
@@ -115,19 +306,21 @@ def build_report(store, now, policy, evidence):
     for f in latest.values():
         for hours in HORIZONS:
             groups.setdefault((f.source, f.version, f.target, f.track, hours), [])
-    rows, scored, all_scored = [], {}, {}
+    rows, scored = [], {}
     for key, members in sorted(groups.items()):
         source, version, target, track, hours = key
         labels = [(r, settlements.get(r["id"], {"status": "pending"})) for r in members]
         usable = [
-            {**r, **label}
+            {**{name: r[name] for name in ("origin", "hours", "target", "p", "headline")},
+             "label": label["label"], "events": label.get("events", [])}
             for r, label in labels
             if label.get("score_eligible") and r["p"] is not None
         ]
         headline = [r for r in usable if r["headline"]]
-        partial_events = [{**r, **label} for r, label in labels
+        partial_events = [{"origin": r["origin"], "p": r["p"], "label": label["label"],
+                           "events": label.get("events", [])} for r, label in labels
                           if r["headline"] and label.get("event_score_eligible") and not label.get("coverage_complete")]
-        scored[key], all_scored[key] = headline, usable
+        scored[key] = headline
         missing = Counter(r["missing_reason"] for r in members if r["p"] is None)
         row = {
             "source": safe(source),
@@ -150,38 +343,55 @@ def build_report(store, now, policy, evidence):
         rows.append(row)
     # Every pair uses the intersection of identical origin/deadline/target windows.
     # All results are descriptive until enough independent time blocks accumulate.
-    comparisons = []
-    keys = sorted(scored)
-    for i, left in enumerate(keys):
-        for right in keys[i + 1 :]:
-            if (
-                left[2] != right[2]
-                or left[4] != right[4]
-                or not scored[left]
-                or not scored[right]
-            ):
-                continue
-            # Keep a pairwise source matrix plus explicitly declared model ablations.
-            if left[3] == "shadow" and right[3] == "shadow":
-                continue
-            comparison = paired(scored[left], scored[right], policy)
-            comparisons.append(
-                {
-                    "left": {
-                        "source": safe(left[0]),
-                        "version": left[1],
-                        "track": left[3],
-                    },
-                    "right": {
-                        "source": safe(right[0]),
-                        "version": right[1],
-                        "track": right[3],
-                    },
-                    "target": left[2],
-                    "hours": left[4],
-                    **comparison,
-                }
-            )
+    comparisons = paired_comparisons(scored, policy, safe)
+    pending = [s["matures_at"] for s in settlements.values() if s["status"] == "pending"]
+    next_maturity = min(pending, default=store.get("last_grid") + policy.grid_seconds
+                        + min(HORIZONS) * 3600 + policy.reporting_grace_seconds)
+    # Coverage diagnostics consult whether a window has ended. Do not reuse a
+    # pre-deadline projection merely because no new ledger row has arrived yet.
+    until = min((r["origin"] + r["hours"] * 3600 for r in trials
+                 if r["origin"] + r["hours"] * 3600 > now), default=None)
+    diagnostics = window_diagnostics(store, now, policy, trials, settlements)
+    diagnostics.pop("runtime_events")
+    # Only backfilled observations within an unresolved window's evidence range
+    # can change its coverage detail. New live healthy receipts must not force
+    # decoding and rescoring every historical trial once a minute.
+    through = max((stamp(w["deadline"]) + policy.maximum_coverage_gap_seconds
+                   for w in diagnostics["windows"] if w["coverage"] is not None), default=None)
+    return {
+        "private": sorted(private),
+        "frozen_trials": len(trials),
+        "settlements": dict(Counter(s["status"] for s in settlements.values())),
+        "next_maturity": next_maturity,
+        "scoring_by_horizon": scoring_progress(trials, settlements),
+        "scorecards": rows,
+        "comparisons": comparisons,
+        "diagnostics": diagnostics,
+        "coverage_through": through,
+        "dependence": dependence(trials, safe),
+    }, until
+
+
+def build_report(store, now, policy, evidence, preference_features=None, cache=None):
+    forecasts = store.forecasts(now, latest=True)
+    private = {f.source for f in forecasts if f.private}
+    safe = lambda source: source_name(source, source in private)
+    latest = {}
+    for f in forecasts:
+        # The report only needs the reset anchor for cycle eligibility. Keep
+        # full input provenance in its immutable forecast row, not beside every
+        # historical trial while the report is assembled.
+        f.metadata = {"last_reset_at": f.metadata.get("last_reset_at")}
+        key = f.source, f.target, f.track
+        if key not in latest or (f.origin, f.available_at) >= (
+            latest[key].origin,
+            latest[key].available_at,
+        ):
+            latest[key] = f
+    scoring = scoring_snapshot(store, now, policy, evidence, latest, private, cache)
+    scoring["diagnostics"]["runtime_events"] = store.runtime_events(now, limit=30)
+    private.update(scoring["private"])
+    rows = scoring["scorecards"]
     latest_rows = []
     for key, f in sorted(latest.items()):
         latest_rows.append(
@@ -197,6 +407,8 @@ def build_report(store, now, policy, evidence):
                 "capture_delay_seconds": max(0.0, f.available_at - f.generated_at),
                 "state": "excluded"
                 if f.issues
+                else "cycle_closed"
+                if cycle_exclusion(f, now, evidence["events"], policy)
                 else "stale"
                 if f.expires_at <= now
                 else "current",
@@ -247,16 +459,10 @@ def build_report(store, now, policy, evidence):
             }
         )
     providers = provider_health(store, now, policy)
-    counts = Counter(s["status"] for s in settlements.values())
     mature = sum(r["scores"]["n"] for r in rows)
-    next_maturity = min(
-        (s["matures_at"] for s in settlements.values() if s["status"] == "pending"),
-        default=store.get("last_grid")
-        + policy.grid_seconds
-        + min(HORIZONS) * 3600
-        + policy.reporting_grace_seconds,
-    )
+    next_maturity = scoring["next_maturity"]
     from .preferences import report as preference_report
+    from .reaction import report as reaction_report
     return {
         "schema_version": "reset-observer/1",
         "module_version": VERSION,
@@ -280,14 +486,12 @@ def build_report(store, now, policy, evidence):
             "inference": "exploratory_paired_UTC_block_bootstrap_minimum_8_blocks",
         },
         "summary": {
-            "forecast_snapshots": store.db.execute(
-                "SELECT COUNT(*) FROM forecasts WHERE available_at<=?", (now,)
-            ).fetchone()[0],
-            "frozen_trials": len(trials),
-            "settlements": dict(counts),
+            "forecast_snapshots": store.forecast_count(now),
+            "frozen_trials": scoring["frozen_trials"],
+            "settlements": scoring["settlements"],
             "scored_nonoverlapping_trials": mature,
             "next_maturity": iso(next_maturity) if next_maturity else None,
-            "scoring_by_horizon": scoring_progress(trials, settlements),
+            "scoring_by_horizon": scoring["scoring_by_horizon"],
             "outcomes": dict(Counter(e["status"] for e in outcomes)),
             "settlement_revisions": store.db.execute(
                 "SELECT COUNT(*) FROM settlements WHERE at<=?", (now,)
@@ -295,13 +499,14 @@ def build_report(store, now, policy, evidence):
         },
         "latest": latest_rows,
         "indicators": indicators,
-        "calendar_sentiment": preference_report(store, now),
+        "calendar_sentiment": preference_report(store, now, latest=preference_features),
+        "reaction": reaction_report(store, now, evidence, policy),
         "outcome_providers": providers,
         "outcomes": outcomes,
         "scorecards": rows,
-        "comparisons": comparisons,
-        "diagnostics": window_diagnostics(store, now, policy, trials, settlements),
-        "dependence": dependence(trials, safe),
+        "comparisons": scoring["comparisons"],
+        "diagnostics": scoring["diagnostics"],
+        "dependence": scoring["dependence"],
         "weight_review": {
             "state": "human_review_required",
             "automatic_promotion": False,
@@ -330,6 +535,39 @@ def build_report(store, now, policy, evidence):
     }
 
 
+def reaction_html(reaction):
+    if not reaction or not reaction.get("events"):
+        return ""
+    sections = []
+    states = {"updated": "已更新周期", "awaiting_update": "仍在旧周期",
+              "anchor_unknown": "周期时刻未公布", "no_prior_observation": "缺少此前记录"}
+    def clock(value):
+        return iso(value) if value is not None else "未记录"
+    def duration(value):
+        return f"{value:.0f} 秒" if value is not None else "未记录"
+    for event in reaction["events"]:
+        rows = []
+        for row in event["series"]:
+            residual = duration(row.get("old_cycle_residual_seconds"))
+            if row.get("residual_censored"):
+                residual = "至少 " + residual
+            values = (row["source"], "自动重置" if row["target"] == "automatic_reset" else "重置或发卡",
+                      states.get(row["state"], "未记录"), clock(row.get("published_at")),
+                      clock(row.get("source_received_at")), duration(row.get("completion_to_update_seconds")), residual)
+            rows.append("<tr>" + "".join(f"<td>{escape(str(value))}</td>" for value in values) + "</tr>")
+        if not rows:
+            rows.append('<tr><td colspan="7">等待来源周期更新记录</td></tr>')
+        kind = "发卡" if event["kind"] == "banked" else "重置"
+        state = "完成有据" if event["status"] == "confirmed" else "等待交叉确认"
+        sections.append(f'<details><summary>{kind} · {escape(clock(event["completed_to"]))} · {state}</summary>'
+            f'<p>最早采集到完成证据：{escape(clock(event.get("first_received_at")))}。时间均为 UTC。</p>'
+            '<div class="panel"><table><thead><tr><th>来源</th><th>目标</th><th>周期状态</th>'
+            '<th>更新发布时间</th><th>采集时间</th><th>完成后更新耗时</th><th>旧周期残留</th></tr></thead>'
+            '<tbody>' + "".join(rows) + '</tbody></table></div></details>')
+    return ('<h2>事件后的更新速度</h2><p>按明确的周期变化计时；概率下降本身不代表已识别重置。'
+            '未保存的采集时刻留空，桌面显示耗时由桌面端单独测量。</p>' + "".join(sections))
+
+
 def html_report(report):
     """Self-contained local viewer. No remote assets, tracker or browser automation."""
     pct = lambda p: "—" if p is None else f"{p * 100:.1f}%"
@@ -351,7 +589,7 @@ def html_report(report):
         "community": "社区概率",
         "shadow": "实验对照",
     }
-    states = {"current": "有效", "stale": "待更新", "excluded": "暂不记分"}
+    states = {"current": "有效", "stale": "待更新", "excluded": "暂不记分", "cycle_closed": "等待重置后更新"}
     target_name = {"broad_quota_relief": "重置或发卡", "automatic_reset": "自动重置"}
     summary = report["summary"]
     snapshots = []
@@ -518,10 +756,10 @@ def html_report(report):
     diagnostic_html += "<p>社区 25% / 50% / 75% 与移除社区、历史基线、等权组合同步前瞻记录。仅在相同时间窗比较误差；候选筛选后还需新的留出窗口验证，再人工决定权重。没有自动替换线上模型。</p>"
     preference_html = ""
     preference = report.get("calendar_sentiment", {})
-    if preference.get("latest"):
+    if preference.get("latest") or preference.get("trials"):
         states = {"ready_for_evaluation": "已达样本门槛", "insufficient_recent_votes": "新增票不足 50",
                   "upcoming": "等待该日开始", "closed": "已结束", "stale": "采集待更新"}
-        current = [p for p in preference["latest"] if p["window_end"] > stamp(report["generated_at"])
+        current = [p for p in preference.get("latest", []) if p["window_end"] > stamp(report["generated_at"])
                    and p["window_start"] < stamp(report["generated_at"])+72*3600]
         rows = []
         for p in current:
@@ -530,20 +768,61 @@ def html_report(report):
                  f'{p["repeat_adjusted_units"]:.2f}', iso(p["latest_vote_at"]) if p["latest_vote_at"] else "—", states[p["state"]])) + "</tr>")
         preference_html = ('<h2>Did Codex Reset · 实时新增投票</h2><p>按太平洋日历日采样，近 6 小时至少 50 个新增点击后冻结候选；'
             '重复点击敏感性按每 IP 每 24 小时最多 100 次折算。独立参与人数未知。愿望与预测混合，当前主概率权重为 0。</p>'
-            '<div class="panel"><table><thead><tr><th>活动日</th><th>累计点击</th><th>实际新增</th><th>新增重置占比</th>'
+            '<div class="panel"><table><thead><tr><th>活动日</th><th>累计点击</th><th>实际新增</th><th>新增重置占比（未加权）</th>'
             '<th>重复折算单位</th><th>最后增票 · UTC</th><th>状态</th></tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>')
         evaluations = []
         for trial in preference.get("trials", []):
             settlement = trial.get("settlement") or {}
+            has_label = settlement.get("label") is not None
+            trial_scored = has_label and settlement.get("score_eligible")
+            event_scored = has_label and settlement.get("event_score_eligible")
+            reason = settlement.get("reason")
+            if trial_scored:
+                state = "已记分"
+            elif event_scored:
+                state = "完成事件单列误差（结果覆盖不足）"
+            elif reason == "window_not_mature":
+                state = "待成熟 · " + iso(settlement["matures_at"]) + " UTC"
+            elif reason == "incomplete_outcome_coverage":
+                state = "已成熟未决：结果覆盖不足"
+            elif reason == "boundary_or_evidence_conflict":
+                state = "已成熟未决：时间边界、证据冲突或适用人群未知"
+                if settlement.get("coverage_complete") is False:
+                    state += "；结果覆盖不足"
+            else:
+                state = "等待结算记录" if not settlement else "结果待核验，未记分"
+            sampling = trial.get("sampling", {})
+            sample_label = (f'{sampling["local_hour"]:02}:00 观察点'
+                            if sampling.get("mode") == "fixed_checkpoint" and sampling.get("local_hour") is not None
+                            else "首次达标")
+            origin = trial.get("origin")
+            end = origin+trial["hours"]*3600 if origin is not None and trial.get("hours") is not None else None
+            window_label = iso(origin)+" → "+iso(end) if end is not None else "—"
+            activity = trial.get("activity_classification", {})
+            activity_label = {"reset": "重置", "improvement": "改进", "both": "重置与改进"}.get(
+                activity.get("upstream_outcome"), "待上游归类")
+            completion_label = {0: "窗口内未发现完成", 1: "已报告完成"}.get(settlement.get("label"), "待核验")
+            if activity.get("mismatch"):
+                state += "；活动归类与窗口完成不同"
             for name, p in {**trial["candidates"], **{c["source"]+":"+c["version"]: c["probability"] for c in trial["comparisons"]}}.items():
-                loss = settlement.get("candidate_losses", {}).get(name, {})
-                state = "已记分" if settlement.get("score_eligible") else "完成事件单列误差" if settlement.get("event_score_eligible") else "待窗口成熟或证据完整"
+                loss = settlement.get("candidate_losses", {}).get(name, {}) if trial_scored or event_scored else {}
+                label = {"raw_click_share": "时效加权点击候选",
+                         "repeat_sensitive_share": "重复参与敏感性候选"}.get(name, name)
                 evaluations.append("<tr>"+"".join(f"<td>{escape(str(v))}</td>" for v in
-                    (trial["features"]["date"], name, pct(p), f'{loss["brier"]:.4f}' if loss else "—", state))+"</tr>")
-        preference_html += (f'<p>已冻结 {len(preference.get("trials", []))} 个独立日样本，已记分 {preference.get("scored_days", 0)} 个。'
-                            '候选与同一时刻的 Horizon、来源预测按相同剩余日窗口核验；每一天只冻结一次。</p>')
+                    (trial["features"]["date"], sample_label, window_label, activity_label, completion_label,
+                     label, pct(p), f'{loss["brier"]:.4f}' if loss else "—", state))+"</tr>")
+        trials = preference.get("trials", [])
+        frozen_days = preference.get("frozen_days", len({(t.get("source"), t.get("round_id", t["features"]["date"])) for t in trials}))
+        scored_trials = preference.get("scored_trials", sum(bool(t.get("settlement") and t["settlement"].get("score_eligible")) for t in trials))
+        preference_html += (f'<p>已冻结 {frozen_days} 个活动日窗、{preference.get("frozen_trials", len(trials))} 个观察点；'
+                            f'已记分 {preference.get("scored_days", 0)} 个活动日、{scored_trials} 个观察点。'
+                            '同日观察点相关，按活动日分组评估。首次达标后，在太平洋时间 06:00、12:00、18:00 后的合格观测冻结；'
+                            '错过时段不补录。候选与同期 Horizon、来源预测核验相同剩余日窗口。</p>'
+                            '<p>活动归类读取上游的重置 / 改进结果；窗口完成记录冻结后至当日结束的实际完成证据。'
+                            '两者分别保留，表中 Brier 对应窗口完成。</p>')
         if evaluations:
-            preference_html += ('<div class="panel"><table><thead><tr><th>活动日</th><th>候选 / 对照</th><th>冻结值</th>'
+            preference_html += ('<div class="panel"><table><thead><tr><th>活动日</th><th>采样 · 太平洋时间</th>'
+                '<th>实际核验窗口 · UTC</th><th>上游活动归类</th><th>窗口完成</th><th>候选 / 对照</th><th>冻结值</th>'
                 '<th>Brier</th><th>状态</th></tr></thead><tbody>'+"".join(evaluations)+'</tbody></table></div>')
     data = json.dumps(report["curves"], ensure_ascii=False).replace("<", "\\u003c")
     return (
@@ -567,6 +846,7 @@ h1{font-size:32px;margin:0}h2{font-size:21px;margin:28px 0 14px}p{color:#aebeb5}
         + "</tbody></table></div>"
         + diagnostic_html
         + preference_html
+        + reaction_html(report.get("reaction"))
         + """<h2>近期事件核验</h2><p>评估目标是公开可核验的广泛重置或发卡完成。预告、发放中、局部补偿分别保留；完成时间有分歧时延后记分。</p><div class="panel"><table><thead><tr><th>时间 · UTC</th><th>类别</th><th>核验状态</th><th>完成证据</th></tr></thead><tbody>
 """
         + "".join(outcome_rows)

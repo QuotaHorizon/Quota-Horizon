@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .contracts import iso
+from .identity import evaluation_identity
 
 
 def previous_forecast(store, current):
@@ -14,8 +15,7 @@ def previous_forecast(store, current):
     import json
     for row in rows:
         value = json.loads(row[0])
-        if (value["status"] == "current" and value["model_version"] == current["model_version"]
-                and value["config_hash"] == current["config_hash"]):
+        if value["status"] == "current" and evaluation_identity(value) == evaluation_identity(current):
             return value
     return None
 
@@ -48,8 +48,8 @@ def terms(forecast, hours):
 def explain_change(current, previous):
     if current["status"] != "current" or previous is None:
         return None
-    if (current["config_hash"], current["model_version"], current["target"]) != (
-            previous["config_hash"], previous["model_version"], previous["target"]):
+    if (evaluation_identity(current), current["target"]) != (
+            evaluation_identity(previous), previous["target"]):
         return None
     if not 60 <= current["issued_at"] - previous["issued_at"] <= 6.5 * 3600:
         return None

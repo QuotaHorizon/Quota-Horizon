@@ -443,7 +443,11 @@
             status,
             content_type: Some("application/json".to_string()),
             response_headers: Vec::new(),
-            body: UpstreamBody::Buffered(Vec::new()),
+            body: UpstreamBody::Buffered(if status == 429 {
+                serde_json::to_vec(&json!({ "error": { "type": "usage_limit_reached" } })).unwrap()
+            } else {
+                Vec::new()
+            }),
             token_usage_account: Some(TokenUsageAccount {
                 account_id: "current".to_string(),
                 account_email: "current@example.com".to_string(),

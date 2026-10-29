@@ -23,6 +23,7 @@ mod native_tray;
 pub use native_tray::with_tray_on_main_thread;
 mod persistence;
 mod quota_observation;
+mod reset_credit_view;
 mod tray;
 pub use quota_observation::{DesktopQuotaObservation, DesktopQuotaObservationWindow};
 
@@ -149,6 +150,9 @@ struct DesktopResetCreditView {
     summary_status: SummaryStatus,
     available_count: Option<u64>,
     details_status: ResetCreditDetailsStatus,
+    next_expires_at: Option<String>,
+    known_expiry_count: u64,
+    expiry_details_complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1640,11 +1644,10 @@ impl From<&StatusSnapshot> for DesktopStatusView {
             quota_observed_at: None,
             quota_freshness: None,
             quota_source: None,
-            reset_credits: DesktopResetCreditView {
-                summary_status: status.quota.reset_credit_summary.summary_status,
-                available_count: status.quota.reset_credit_summary.available_count,
-                details_status: status.quota.reset_credit_summary.details_status,
-            },
+            reset_credits: reset_credit_view::reset_credit_view(
+                &status.quota.reset_credit_summary,
+                &status.captured_at,
+            ),
             usage: DesktopUsageView {
                 availability: status.usage.availability,
                 has_summary: status.usage.summary.is_some(),

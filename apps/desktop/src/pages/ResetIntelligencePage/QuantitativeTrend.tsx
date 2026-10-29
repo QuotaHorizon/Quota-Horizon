@@ -1,8 +1,7 @@
 import type { CSSProperties } from "react";
 import type { Language } from "../../i18n";
 import type { QuantitativeView } from "./quantitativeTypes";
-import { controllingPoint, forecastFor, percent, seriesPaths, sourceColors, sourceNames } from "./quantitativeModel";
-import { publicEvidenceTime } from "./presentation";
+import { controllingPoint, forecastFor, percent, sourceColors } from "./quantitativeModel";
 import styles from "./quantitative.module.less";
 import { usePlotWidth } from "./usePlotWidth";
 
@@ -24,7 +23,7 @@ export function ProbabilityCurve({ view, language }: { view: QuantitativeView; l
       {[24,48,72].map(h => <g key={h}><line x1={x(h)} x2={x(h)} y1="26" y2="167" strokeDasharray="3 5" /><text x={x(h)} y="191" textAnchor="middle">{h}h</text></g>)}
       {series.map(s => <g key={s.name} style={{ "--series-color": s.color } as CSSProperties}>
         <path className={styles.line} strokeDasharray={s.dashed ? "5 4" : undefined} d={s.values.map((p, i) => `${i ? "L" : "M"}${x(i+1)},${y(p)}`).join(" ")} />
-        {[24,48].map(h => s.values[h-1] == null ? null : <circle key={h} className={styles.dot} cx={x(h)} cy={y(s.values[h-1])} r="3"><title>{s.name} · {h}h · {percent(s.values[h-1])}</title></circle>)}
+        {[24,48].map(h => s.values[h-1] == null ? null : <circle key={h} className={styles.dot} cx={x(h)} cy={y(s.values[h-1])} r="3"><title>{`${s.name} · ${h}h · ${percent(s.values[h-1])}`}</title></circle>)}
       </g>)}
     </svg>
     <div className={styles.legend}>{series.filter(s => s.values.length).map(s => <span key={s.name}><i style={{ background: s.color }} />{s.name}</span>)}</div>
@@ -32,30 +31,4 @@ export function ProbabilityCurve({ view, language }: { view: QuantitativeView; l
   </div>;
 }
 
-export function QuantitativeTrend({ view, language, now }: { view: QuantitativeView; language: Language; now: number }) {
-  const zh = language === "zh";
-  const { ref, width } = usePlotWidth(948, 480);
-  const right = width - 28;
-  const series = (view.evaluation?.curves ?? []).filter(c => c.track === "model" || (c.track === "native" && sourceNames[c.source]));
-  // Native curves preserve publication values at their actual receipt time.
-  const times = series.flatMap(s => s.points.filter(p => p.p != null && Date.parse(p.at) <= now && Date.parse(p.at) >= now - 86400_000).map(p => Date.parse(p.at)));
-  const start = times.length ? Math.min(...times, now - 3600_000) : now - 3600_000;
-  const x = (t: number) => 40 + (t-start) / (now-start) * (right-40), y = (p: number) => 172 - p*144;
-  const tick = (t: number) => new Date(t).toLocaleTimeString(zh ? "zh-CN" : "en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
-  const name = (source: string, target: string) => `${sourceNames[source] ?? source}${source === "horizon" && target === "automatic_reset" ? (zh ? " · 自动" : " · auto") : ""}`;
-  const color = (source: string, target: string) => source === "horizon" && target === "automatic_reset" ? "var(--quant-orange)" : sourceColors[source] ?? "var(--muted)";
-  const legends = [...new Map(series.filter(s => s.points.some(p => p.p != null && Date.parse(p.at) >= start && Date.parse(p.at) <= now)).map(s => [`${s.source}-${s.target}`, s])).values()];
-  return <article className={styles.card}>
-    <div className={styles.heading}><h2>{zh ? "预测怎样变化" : "How predictions change"}</h2><span>{zh ? "全部来源 · 24h 实线 / 48h 虚线" : "All sources · 24h solid / 48h dashed"}</span></div>
-    <div className={styles.historyChart} ref={ref}><svg viewBox={`0 0 ${width} 218`} role="img" aria-label={zh ? "全部来源在统一观测时间的 24h 和 48h 曲线" : "All sources on the same observation clock, for 24h and 48h"}>
-      {[0,.5,1].map(p => <g key={p}><line x1="40" x2={right} y1={y(p)} y2={y(p)} /><text x="32" y={y(p)+4} textAnchor="end">{p*100}%</text></g>)}
-      {series.map(s => <g key={`${s.source}-${s.target}-${s.hours}-${s.version}`} data-series={`${s.source}-${s.target}-${s.hours}`} style={{ "--series-color": color(s.source,s.target) } as CSSProperties}>
-        {seriesPaths(s.points,start,now,x,y).map((d, i) => <path key={i} d={d} className={styles.line} strokeWidth={s.track === "model" ? 2.7 : 1.6} strokeDasharray={s.hours === 48 ? "6 4" : undefined} />)}
-        {s.points.filter(p => p.p != null && Date.parse(p.at) >= start && Date.parse(p.at) <= now).map(p => <circle key={p.at} className={styles.dot} cx={x(Date.parse(p.at))} cy={y(p.p!)} r="2.8"><title>{name(s.source,s.target)} · {s.hours}h · {percent(p.p)} · {publicEvidenceTime(p.at,language)}</title></circle>)}
-      </g>)}
-      <text x="40" y="202">{tick(start)}</text><text x={(40+right)/2} y="202" textAnchor="middle">{tick((start+now)/2)}</text><text x={right} y="202" textAnchor="end">{tick(now)}</text>
-    </svg></div>
-    <div className={styles.legend}>{legends.map(s => <span key={`${s.source}-${s.target}`}><i style={{ background: color(s.source,s.target) }} />{name(s.source,s.target)}<small>{s.target === "automatic_reset" ? (zh ? "自动重置" : "automatic") : (zh ? "重置或发卡" : "reset or credit")}</small></span>)}</div>
-    <p className={styles.caption}>{times.length ? (zh ? "横轴为本机收到预测的时间，每小时保留最新记录；来源曲线保留发布时的 24h / 48h 原值。缺失、过期及版本变化分段展示，评分仍使用同一目标时间窗。" : "The time axis uses actual receipt, retaining the latest record each hour. Source curves preserve published 24h / 48h values. Missing, expired and changed versions remain separate; scoring uses matched target windows.") : (zh ? "等待评估器的首个整点观测；不会补造早期曲线。" : "Awaiting the evaluator’s first hourly observation.")}</p>
-  </article>;
-}
+export { QuantitativeTrend } from "./MarketTrend";

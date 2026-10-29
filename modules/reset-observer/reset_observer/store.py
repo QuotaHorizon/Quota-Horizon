@@ -7,6 +7,36 @@ import sqlite3
 import zlib
 
 from .contracts import Forecast, digest, packed
+try:
+    from reset_intelligence.storage_codec import configure_storage, pack_inline, RETIRED_RAW, maintain_raw_cache, reclaim_pages, prepare_upgrade, retention_ready
+    from reset_intelligence.automatic_storage import recover_rowids, step as storage_upgrade_step
+except ModuleNotFoundError as error:
+    if error.name != "reset_intelligence":
+        raise
+    # The documented standalone observer command starts in this module's root.
+    # Resolve the sibling shared codec without changing sys.path or requiring an
+    # environment install; bundled distributions import the package above.
+    import importlib.util
+    import importlib
+    import sys
+    package_path = Path(__file__).resolve().parents[2] / "reset-intelligence" / "reset_intelligence"
+    spec = importlib.util.spec_from_file_location("_quota_horizon_storage", package_path / "__init__.py", submodule_search_locations=[str(package_path)])
+    if spec is None or spec.loader is None:
+        raise ImportError("shared reset storage codec is unavailable") from error
+    package = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = package
+    spec.loader.exec_module(package)
+    codec = importlib.import_module(spec.name + ".storage_codec")
+    maintenance = importlib.import_module(spec.name + ".automatic_storage")
+    configure_storage = codec.configure_storage
+    pack_inline = codec.pack_inline
+    RETIRED_RAW = codec.RETIRED_RAW
+    maintain_raw_cache = codec.maintain_raw_cache
+    reclaim_pages = codec.reclaim_pages
+    prepare_upgrade = codec.prepare_upgrade
+    retention_ready = codec.retention_ready
+    recover_rowids = maintenance.recover_rowids
+    storage_upgrade_step = maintenance.step
 
 
 class Store:
@@ -16,10 +46,14 @@ class Store:
             self.db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=30)
         else:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            new_database = not self.path.exists()
             self.db = sqlite3.connect(self.path, timeout=30)
+            if new_database:
+                self.db.execute("PRAGMA auto_vacuum=INCREMENTAL")
             self.db.execute("PRAGMA journal_mode=WAL")
         self.db.row_factory = sqlite3.Row
         if read_only:
+            self.json_storage = configure_storage(self.db, read_only=True)
             return
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -37,7 +71,10 @@ class Store:
           track TEXT NOT NULL,origin REAL NOT NULL,available_at REAL NOT NULL,
           expires_at REAL NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS forecasts_time ON forecasts(available_at,origin);
+        CREATE INDEX IF NOT EXISTS forecasts_publication_curve ON forecasts(available_at,origin,id)
+          WHERE track IN ('native','model');
         CREATE INDEX IF NOT EXISTS forecasts_latest ON forecasts(source,target,track,origin DESC,available_at DESC,id DESC);
+        CREATE TABLE IF NOT EXISTS retired_forecasts(id TEXT PRIMARY KEY,available_at REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS imports(kind TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(kind,id));
         CREATE TABLE IF NOT EXISTS indicators(id TEXT PRIMARY KEY,source TEXT NOT NULL,observed_at REAL NOT NULL,payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS truth_revisions(hash TEXT PRIMARY KEY,at REAL NOT NULL,payload TEXT NOT NULL);
@@ -46,6 +83,10 @@ class Store:
           track TEXT NOT NULL,origin REAL NOT NULL,hours INTEGER NOT NULL,p REAL,
           frozen_at REAL NOT NULL,policy_hash TEXT NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS trials_time ON trials(origin,hours);
+        CREATE TABLE IF NOT EXISTS trial_revisions(
+          id INTEGER PRIMARY KEY,trial TEXT NOT NULL,at REAL NOT NULL,
+          signature TEXT NOT NULL,payload TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS trial_revisions_trial ON trial_revisions(trial,at);
         CREATE TABLE IF NOT EXISTS settlements(
           id INTEGER PRIMARY KEY,trial TEXT NOT NULL,at REAL NOT NULL,signature TEXT NOT NULL,
           label INTEGER,status TEXT NOT NULL,payload TEXT NOT NULL);
@@ -56,21 +97,36 @@ class Store:
           id TEXT PRIMARY KEY,source TEXT NOT NULL,round_id TEXT NOT NULL,
           observed_at REAL NOT NULL,received_at REAL NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS preference_samples_time ON preference_samples(source,round_id,observed_at);
+        CREATE INDEX IF NOT EXISTS preference_samples_received ON preference_samples(received_at);
         CREATE TABLE IF NOT EXISTS preference_trials(id TEXT PRIMARY KEY,frozen_at REAL NOT NULL,payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS preference_settlements(trial TEXT NOT NULL,at REAL NOT NULL,signature TEXT NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS preference_settlements_trial ON preference_settlements(trial,at);
+        CREATE TABLE IF NOT EXISTS reaction_forecasts(
+          id TEXT PRIMARY KEY,source TEXT NOT NULL,target TEXT NOT NULL,track TEXT NOT NULL,
+          available_at REAL NOT NULL,payload TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS reaction_forecasts_time ON reaction_forecasts(available_at);
+        CREATE INDEX IF NOT EXISTS reaction_forecasts_series ON reaction_forecasts(source,target,track,available_at);
         """)
+        self.json_storage = configure_storage(self.db)
+        prepare_upgrade(self.db, new_database)
+        recover_rowids(self.db)
 
     def close(self):
         self.db.close()
+
+    def pack_json(self, value, volatile_fields=()):
+        return self.json_storage.pack_json(value, volatile_fields)
 
     def runtime_event(self, now, payload):
         with self.db:
             self.db.execute("INSERT INTO runtime_events(at,payload) VALUES (?,?)", (now, packed(payload)))
 
-    def runtime_events(self, now):
+    def runtime_events(self, now, limit=None):
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_events'").fetchone():
             return []
+        if limit is not None:
+            rows = self.db.execute("SELECT payload FROM runtime_events WHERE at<=? ORDER BY at DESC,id DESC LIMIT ?", (now, limit))
+            return list(reversed([json.loads(r[0]) for r in rows]))
         return [json.loads(r[0]) for r in self.db.execute("SELECT payload FROM runtime_events WHERE at<=? ORDER BY at,id", (now,))]
 
     def get(self, key):
@@ -85,10 +141,17 @@ class Store:
         h = digest(raw) if raw is not None else None
         with self.db:
             if raw is not None:
-                self.db.execute("INSERT OR IGNORE INTO payloads VALUES (?,?)", (h, zlib.compress(packed(raw).encode())))
+                saved = self.db.execute("SELECT body=? FROM payloads WHERE hash=?", (RETIRED_RAW, h)).fetchone()
+                if saved is None:
+                    self.db.execute("INSERT OR IGNORE INTO payloads VALUES (?,?)", (h, pack_inline(raw)))
+                elif saved[0]:
+                    self.db.execute("UPDATE payloads SET body=? WHERE hash=? AND body=?", (pack_inline(raw), h, RETIRED_RAW))
             self.db.execute("INSERT INTO observations(provider,observed_at,generated_at,healthy,claims,payload_hash,error) VALUES (?,?,?,?,?,?,?)",
-                            (provider, now, generated, int(healthy), packed(claims) if claims is not None else None, h, error))
-            self.record_claims(claims or [], now)
+                            (provider, now, generated, int(healthy), self.pack_json(claims) if claims is not None else None, h, error))
+            from .evidence import inventory_revisions
+            revisions = inventory_revisions(self, provider, raw, now, error is None and claims is not None, claims or [])
+            revised = {(c["provider"], c["record"]) for c in revisions}
+            self.record_claims([c for c in claims or [] if (c["provider"], c["record"]) not in revised] + revisions, now)
 
     def record_claims(self, claims, now):
         # Reinterpretation appends knowledge revisions, never monitoring samples.
@@ -118,14 +181,31 @@ class Store:
 
     def add_forecast(self, f: Forecast):
         f.validate()
+        key = f.id
+        if self.db.execute("SELECT 1 FROM forecasts WHERE id=? UNION ALL SELECT 1 FROM retired_forecasts WHERE id=?", (key, key)).fetchone():
+            return
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO forecasts VALUES (?,?,?,?,?,?,?,?,?)",
-                            (f.id, f.source, f.version, f.target, f.track, f.origin, f.available_at, f.expires_at, packed(f.__dict__)))
+                            (key, f.source, f.version, f.target, f.track, f.origin, f.available_at, f.expires_at,
+                             pack_inline(f.__dict__) if f.track in ("shadow", "adapted") else self.pack_json(f.__dict__)))
+
+    def forecast_count(self, now):
+        count = self.db.execute("SELECT COUNT(*) FROM forecasts WHERE available_at<=?", (now,)).fetchone()[0]
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='retired_forecasts'").fetchone():
+            count += self.db.execute("SELECT COUNT(*) FROM retired_forecasts WHERE available_at<=?", (now,)).fetchone()[0]
+        return count
 
     def forecasts(self, now, latest=False):
-        query = """SELECT f.payload FROM forecasts f JOIN (SELECT id,ROW_NUMBER() OVER
-          (PARTITION BY source,target,track ORDER BY origin DESC,available_at DESC,id DESC) rank
-          FROM forecasts WHERE available_at<=?) latest ON f.id=latest.id WHERE latest.rank=1""" if latest else \
+        # Discover series through the covering index, then seek its latest known
+        # publication. Ranking every historical payload makes this read grow
+        # with the archive even though only one row per series is needed.
+        query = """SELECT f.payload FROM
+          (SELECT DISTINCT source,target,track FROM forecasts) series
+          JOIN forecasts f ON f.id=(SELECT id FROM forecasts
+            WHERE source=series.source AND target=series.target AND track=series.track
+              AND available_at<=?
+            ORDER BY origin DESC,available_at DESC,id DESC LIMIT 1)
+          ORDER BY f.source,f.target,f.track""" if latest else \
             "SELECT payload FROM forecasts WHERE available_at<=? ORDER BY available_at,origin,id"
         return [Forecast(**json.loads(r[0])) for r in self.db.execute(query, (now,))]
 
@@ -138,7 +218,7 @@ class Store:
 
     def indicator(self, source, now, payload):
         with self.db:
-            self.db.execute("INSERT OR IGNORE INTO indicators VALUES (?,?,?,?)", (digest([source, payload]), source, now, packed(payload)))
+            self.db.execute("INSERT OR IGNORE INTO indicators VALUES (?,?,?,?)", (digest([source, payload]), source, now, self.pack_json(payload)))
 
     def truth(self, now, payload):
         h = digest(payload)
@@ -151,34 +231,135 @@ class Store:
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO trials VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                             (id, trial["source"], trial["version"], trial["target"], trial["track"], trial["origin"],
-                             trial["hours"], trial["p"], trial["frozen_at"], trial["policy_hash"], packed(trial)))
+                             trial["hours"], trial["p"], trial["frozen_at"], trial["policy_hash"], pack_inline(trial)))
         return id
 
-    def trials(self, now):
-        return [{"id": r["id"], **json.loads(r["payload"])} for r in self.db.execute(
-            "SELECT id,payload FROM trials WHERE frozen_at<=? ORDER BY origin,source", (now,))]
+    def trial_revisions(self, now):
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trial_revisions'").fetchone():
+            return {}
+        return {r["trial"]: json.loads(r["payload"]) for r in self.db.execute("""
+          SELECT r.trial,r.payload FROM (SELECT DISTINCT trial FROM trial_revisions) ids
+          JOIN trial_revisions r ON r.id=(SELECT id FROM trial_revisions
+            WHERE trial=ids.trial AND at<=? ORDER BY at DESC,id DESC LIMIT 1)""", (now,))}
+
+    def revise_trial(self, trial, now, revision):
+        signature = digest(revision)
+        last = self.db.execute("SELECT signature FROM trial_revisions WHERE trial=? ORDER BY at DESC,id DESC LIMIT 1", (trial,)).fetchone()
+        if last and last[0] == signature:
+            return False
+        self.db.execute("INSERT INTO trial_revisions(trial,at,signature,payload) VALUES (?,?,?,?)",
+                        (trial, now, signature, packed(revision)))
+        return True
+
+    def trials(self, now, compact=False):
+        revisions = self.trial_revisions(now)
+        if compact:
+            rows = self.db.execute("""SELECT id,source,version,target,track,origin,hours,p,frozen_at,policy_hash,
+              json_extract(qh_json(payload),'$.private','$.headline','$.missing_reason','$.forecast_id',
+                           '$.received_at','$.publication_origin') fields
+              FROM trials WHERE frozen_at<=? ORDER BY origin,source""", (now,))
+        else:
+            rows = self.db.execute("SELECT id,payload FROM trials WHERE frozen_at<=? ORDER BY origin,source", (now,))
+        result = []
+        symbols = {}
+        for row in rows:
+            if compact:
+                value = {key: row[key] for key in row.keys() if key != "fields"}
+                value.update(zip(("private", "headline", "missing_reason", "forecast_id", "received_at", "publication_origin"), json.loads(row["fields"])))
+                for key in ("source", "version", "target", "track", "policy_hash", "missing_reason"):
+                    if isinstance(value.get(key), str):
+                        value[key] = symbols.setdefault(value[key], value[key])
+            else:
+                value = {"id": row["id"], **json.loads(row["payload"])}
+            if revision := revisions.get(row["id"]):
+                value.update(original_probability=value["p"], original_missing_reason=value.get("missing_reason"))
+                value.update(revision)
+            result.append(value)
+        return result
 
     def settle(self, id, now, result, commit=True):
-        signature = digest({k: result.get(k) for k in ("label", "status", "events", "reason",
-            "score_eligible", "event_score_eligible", "coverage_complete", "settlement_version")})
+        content = {k: result.get(k) for k in ("label", "status", "events", "reason",
+            "score_eligible", "event_score_eligible", "coverage_complete", "settlement_version")}
+        if result.get("eligibility_revision") is not None:
+            content["eligibility_revision"] = result["eligibility_revision"]
+        signature = digest(content)
         last = self.db.execute("SELECT signature FROM settlements WHERE trial=? ORDER BY at DESC,id DESC LIMIT 1", (id,)).fetchone()
         if last and last[0] == signature:
             return False
+        # The first eligibility-aware writer included an empty field in every
+        # signature. Accept those already-written rows as unchanged too, while
+        # preserving actual revision changes and every historical settlement.
+        if last and "eligibility_revision" not in content and last[0] == digest({**content, "eligibility_revision": None}):
+            return False
         self.db.execute("INSERT INTO settlements(trial,at,signature,label,status,payload) VALUES (?,?,?,?,?,?)",
-                        (id, now, signature, result["label"], result["status"], packed(result)))
+                        (id, now, signature, result["label"], result["status"], pack_inline(result)))
         if commit:
             self.db.commit()
         return True
 
-    def settled(self, now):
-        return {r["trial"]: {"at": r["at"], **json.loads(r["payload"])} for r in self.db.execute("""
-          SELECT * FROM (SELECT *,ROW_NUMBER() OVER (PARTITION BY trial ORDER BY at DESC,id DESC) rank
-          FROM settlements WHERE at<=?) WHERE rank=1""", (now,))}
+    def settled(self, now, compact=False):
+        # Seek each trial's latest revision through settlements_trial instead
+        # of sorting all historical payloads on every background report.
+        fields = ("label", "status", "events", "reason", "deadline", "matures_at",
+                  "score_eligible", "event_score_eligible", "coverage_complete",
+                  "settlement_version")
+        projection = ("json_extract(qh_json(s.payload)," +
+                      ",".join("'$." + key + "'" for key in fields) + ")") if compact else "s.payload"
+        rows = self.db.execute(f"""SELECT s.trial,s.at,{projection} AS payload FROM
+          (SELECT DISTINCT trial FROM settlements) trials JOIN settlements s ON s.id=(
+            SELECT id FROM settlements WHERE trial=trials.trial AND at<=?
+            ORDER BY at DESC,id DESC LIMIT 1) ORDER BY s.trial""", (now,))
+        output, symbols = {}, {}
+        for row in rows:
+            value = json.loads(row["payload"])
+            if compact:
+                value = dict(zip(fields, value))
+                for key in ("status", "reason", "settlement_version"):
+                    if isinstance(value.get(key), str):
+                        value[key] = symbols.setdefault(value[key], value[key])
+            output[row["trial"]] = {"at": row["at"], **value}
+        return output
 
-    def report(self, now, payload):
+    def report_revision(self, now):
+        """Small as-of watermarks for the append-only scoring/coverage ledger.
+
+        Count as well as the last row: preloaded future rows can become visible
+        out of rowid order. No forecast, ballot or reaction cache is covered by
+        this signature; those remain live reads on every report.
+        """
+        output = []
+        for table, clock in (("trials", "frozen_at"), ("trial_revisions", "at"),
+                             ("settlements", "at")):
+            row = self.db.execute(
+                f"SELECT COUNT(*),COALESCE(MAX(rowid),0) FROM {table} WHERE {clock}<=?",
+                (now,),
+            ).fetchone()
+            output.append(tuple(row))
+        return output
+
+    def coverage_revision(self, through):
+        if through is None:
+            return None
+        return tuple(self.db.execute(
+            "SELECT COUNT(*),COALESCE(MAX(rowid),0) FROM observations WHERE observed_at<=?",
+            (through,),
+        ).fetchone())
+
+    def raw_payload(self, payload_hash):
+        row = self.db.execute("SELECT body FROM payloads WHERE hash=?", (payload_hash,)).fetchone()
+        if row and row[0] == RETIRED_RAW:
+            return None
+        return json.loads(zlib.decompress(row[0]) if isinstance(row[0], bytes) else row[0]) if row else None
+
+    def report(self, now, payload, *, archive=False):
         with self.db:
-            self.db.execute("INSERT INTO reports(at,payload) VALUES (?,?)", (now, zlib.compress(packed(payload).encode())))
+            self.db.execute("INSERT INTO reports(at,payload) VALUES (?,?)", (now, pack_inline(payload)))
+        if archive:
+            from .retention import retain_reports
+            retain_reports(self, now)
 
     def report_at(self, now):
-        row = self.db.execute("SELECT payload FROM reports WHERE at<=? ORDER BY at DESC,id DESC LIMIT 1", (now,)).fetchone()
-        return json.loads(zlib.decompress(row[0])) if row else None
+        row = self.db.execute("SELECT payload FROM reports WHERE id=(SELECT id FROM reports WHERE at<=? ORDER BY at DESC,id DESC LIMIT 1)", (now,)).fetchone()
+        # QHJSON2 is expanded by the shared row factory. Legacy reports retain
+        # their original zlib representation until explicit maintenance.
+        return json.loads(zlib.decompress(row[0]) if isinstance(row[0], bytes) else row[0]) if row else None

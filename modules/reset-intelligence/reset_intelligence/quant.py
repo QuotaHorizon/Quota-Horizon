@@ -24,6 +24,7 @@ class ModelConfig:
     radar_budget: float = .65
     community_budget: float = .20
     community_overlap: float = .5
+    calendar_sentiment_elasticity: float = 1.
     response_window_hours: float = 6
     response_minimum_revision: float = .1
     stacking_regularization: float = .02
@@ -46,6 +47,8 @@ class ModelConfig:
             raise ValueError("family budgets must be positive")
         if not 0 <= self.community_overlap <= 1 or self.community_budget > 1:
             raise ValueError("invalid community residual budget")
+        if not math.isfinite(self.calendar_sentiment_elasticity) or not 0 <= self.calendar_sentiment_elasticity <= 1:
+            raise ValueError("calendar sentiment elasticity must be between zero and one")
         if not 0 < self.response_window_hours <= 48 or not 0 < self.response_minimum_revision <= 1:
             raise ValueError("invalid response cohort parameters")
 
@@ -66,14 +69,20 @@ class Survival:
     that same censored interval a second time.
     """
     def __init__(self, event_times: list[float], now: float, config: ModelConfig | None = None,
-                 constant: bool = False):
+                 constant: bool = False, renewal_at: float | None = None):
         self.config = config or ModelConfig()
         self.boundaries = (0.,) if constant else self.config.boundaries
-        times = sorted(set(t for t in event_times if t <= now))
+        if renewal_at is not None and (not math.isfinite(renewal_at) or not 0 < renewal_at <= now):
+            raise ValueError("renewal boundary must be a known past clock")
+        # The statistical catalogue may contain a later publication proxy.
+        # Exclude intervals ending after the live boundary before adding its
+        # censored waiting exposure; otherwise that span would be counted twice.
+        cutoff = renewal_at if renewal_at is not None else now
+        times = sorted(set(t for t in event_times if t <= cutoff))
         if len(times) < 3:
             raise ValueError("at least three past events are required")
         self.intervals = len(times) - 1
-        self.age = (now - times[-1]) / 3600
+        self.age = (now - (renewal_at if renewal_at is not None else times[-1])) / 3600
         self.alpha = np.full(len(self.boundaries), self.config.prior_exposure * self.config.prior_rate)
         self.beta = np.full(len(self.boundaries), self.config.prior_exposure, dtype=float)
         self.effective_events = 0.

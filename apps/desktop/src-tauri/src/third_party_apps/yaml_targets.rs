@@ -5,34 +5,40 @@ use std::{
 
 use serde_yaml::{Mapping, Value};
 
-use crate::{models::ProviderProfile, storage::write_text_atomic};
+use super::config_transaction::ConfigTransaction;
+use crate::models::ProviderProfile;
 
 use super::{provider_context_window, provider_protocol, ProviderProtocol, MANAGED_PROVIDER_ID};
 
 const DSH_API_KEY_ENV: &str = "CODEX_SWITCH_API_KEY";
 
-pub(super) fn sync_hermes(home: &Path, provider: Option<&ProviderProfile>) -> Result<(), String> {
+pub(super) fn sync_hermes(
+    home: &Path,
+    provider: Option<&ProviderProfile>,
+    transaction: &mut ConfigTransaction,
+) -> Result<(), String> {
     let path = hermes_path(home);
-    let mut config = read_yaml(&path)?;
+    let mut config = read_yaml(&path, transaction)?;
     update_hermes_config(&mut config, provider)?;
-    write_yaml(&path, &config)
+    write_yaml(&path, &config, transaction)
 }
 
 pub(super) fn sync_deep_seek(
     home: &Path,
     provider: Option<&ProviderProfile>,
+    transaction: &mut ConfigTransaction,
 ) -> Result<(), String> {
     let settings_path = deep_seek_settings_path(home);
     let credentials_path = settings_path
         .parent()
         .unwrap_or(home)
         .join(".credentials.yaml");
-    let mut settings = read_yaml(&settings_path)?;
-    let mut credentials = read_yaml(&credentials_path)?;
+    let mut settings = read_yaml(&settings_path, transaction)?;
+    let mut credentials = read_yaml(&credentials_path, transaction)?;
     update_deep_seek_settings(&mut settings, provider)?;
     update_deep_seek_credentials(&mut credentials, provider)?;
-    write_yaml(&settings_path, &settings)?;
-    write_yaml(&credentials_path, &credentials)
+    write_yaml(&settings_path, &settings, transaction)?;
+    write_yaml(&credentials_path, &credentials, transaction)
 }
 
 fn hermes_path(home: &Path) -> PathBuf {
@@ -60,23 +66,26 @@ fn deep_seek_settings_path(home: &Path) -> PathBuf {
         .join("settings.yaml")
 }
 
-fn read_yaml(path: &Path) -> Result<Value, String> {
-    if !path.exists() {
+fn read_yaml(path: &Path, transaction: &mut ConfigTransaction) -> Result<Value, String> {
+    let Some(bytes) = transaction.read(path)? else {
         return Ok(Value::Mapping(Mapping::new()));
-    }
-    let content = std::fs::read_to_string(path)
-        .map_err(|error| format!("无法读取 {}：{error}", path.display()))?;
+    };
+    let content =
+        std::str::from_utf8(&bytes).map_err(|_| format!("{} 的配置编码无效", path.display()))?;
     if content.trim().is_empty() {
         return Ok(Value::Mapping(Mapping::new()));
     }
-    serde_yaml::from_str(&content)
-        .map_err(|error| format!("{} 的 YAML 格式无效：{error}", path.display()))
+    serde_yaml::from_str(content).map_err(|_| format!("{} 的 YAML 格式无效", path.display()))
 }
 
-fn write_yaml(path: &Path, value: &Value) -> Result<(), String> {
+fn write_yaml(
+    path: &Path,
+    value: &Value,
+    transaction: &mut ConfigTransaction,
+) -> Result<(), String> {
     let content = serde_yaml::to_string(value)
         .map_err(|error| format!("序列化 {} 失败：{error}", path.display()))?;
-    write_text_atomic(path, &content)
+    transaction.write_text(path, &content)
 }
 
 fn mapping(value: &mut Value) -> Result<&mut Mapping, String> {

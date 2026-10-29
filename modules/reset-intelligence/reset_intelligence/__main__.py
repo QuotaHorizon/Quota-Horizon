@@ -16,10 +16,11 @@ from .contracts import TARGETS, iso, stamp
 from .evaluation import canonical_events, forward_report, retrospective
 from .pipeline import consumer_export, forecast_all
 from .quant import ModelConfig
-from .sources import CATALOG, collect
+from .sources import collect, configured_sources
 from .store import Store
 from .audit import source_audit
 from .changes import explain_change, previous_forecast
+from .identity import rule_identity
 
 
 def write_json(path: str, payload: dict):
@@ -46,6 +47,7 @@ def main(argv=None) -> int:
     parser.add_argument("--config", help="Local JSON source and model configuration")
     parser.add_argument("--output", help="Atomic consumer JSON output, or evaluation report for evaluate")
     parser.add_argument("--audit-output", help="Separate source admission and issued-weight JSON")
+    parser.add_argument("--completion-input", help="Optional reset-completions/1 outcome inventory")
     parser.add_argument("--refresh", action="store_true", help="Request fresh public inputs with a five-second duplicate-read guard")
     parser.add_argument("--as-of", help="Timezone-qualified historical time (replay/evaluate only)")
     parser.add_argument("--target", choices=TARGETS, help="Default: both targets")
@@ -56,7 +58,7 @@ def main(argv=None) -> int:
         parser.error("replay requires --as-of")
     if args.command == "watch":
         run_args = ["run", "--db", args.db]
-        for flag, value in (("--config", args.config), ("--output", args.output), ("--target", args.target), ("--audit-output", args.audit_output)):
+        for flag, value in (("--config", args.config), ("--output", args.output), ("--target", args.target), ("--audit-output", args.audit_output), ("--completion-input", args.completion_input)):
             if value:
                 run_args.extend([flag, value])
         try:
@@ -69,7 +71,7 @@ def main(argv=None) -> int:
     config_data = json.loads(Path(args.config).read_text(encoding="utf-8")) if args.config else {}
     extra = config_data.get("sources", [])
     disabled = set(config_data.get("disabled_sources", []))
-    specs = [s for s in [*CATALOG, *extra] if s["id"] not in disabled]
+    specs = configured_sources(extra, disabled)
     config = ModelConfig(**config_data.get("model", {}))
     # Read commands must not silently create an empty data store.
     if args.command in ("replay", "evaluate", "forecast", "audit") and not Path(args.db).is_file():
@@ -84,12 +86,19 @@ def main(argv=None) -> int:
             return 0
         outcomes = collect(store, specs, minimum_interval=5 if args.refresh else None) if args.command in ("collect", "run") else []
         now = stamp(args.as_of) if args.as_of else round(time.time(), 3)
+        if args.completion_input and args.command in ("collect", "run", "forecast"):
+            from .completions import ingest
+            try:
+                ingest(store, args.completion_input, now)
+            except (OSError, ValueError, KeyError, TypeError):
+                store.save("completion_evidence", now, None, None, "completion_input_unavailable")
         if now > time.time() + 1:
             parser.error("cannot replay future observations")
         from .contracts import digest
         implementation = digest({p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                                  for p in sorted(Path(__file__).parent.glob("*.py"))})
         full_config = {"model": asdict(config), "sources": specs, "implementation_hash": implementation,
+                       "evaluation_version": rule_identity(config, specs),
                        "runtime": {"python": ".".join(map(str, sys.version_info[:3])), "numpy": np.__version__}}
         if args.command == "replay":
             saved = store.config_at(now)
@@ -97,6 +106,8 @@ def main(argv=None) -> int:
                 parser.error("no configuration was known at the requested time")
             if saved.get("implementation_hash") != implementation:
                 parser.error("replay requires the implementation revision that issued the forecast")
+            if saved.get("runtime") != full_config["runtime"]:
+                parser.error("replay requires the numerical runtime that issued the forecast")
             full_config = saved
             config = ModelConfig(**saved["model"])
         config_hash = digest(full_config)
@@ -110,7 +121,7 @@ def main(argv=None) -> int:
             obs = store.observations(now).get("event_ledger")
             payload = {"as_of": iso(now), "targets": [
                 {"target": t, "retrospective": retrospective(canonical_events(obs, t, now), now, config),
-                 "prospective": forward_report(store, now, t, config_hash)} for t in targets]}
+                 "prospective": forward_report(store, now, t, config_hash, full_config.get("evaluation_version"))} for t in targets]}
             if args.output:
                 write_json(args.output, payload)
             print(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False))
@@ -119,6 +130,8 @@ def main(argv=None) -> int:
         private_ids = {s["id"] for s in full_config["sources"] if s["adapter"] == "count_market" or s.get("private")}
         results = [r for r in forecast_all(store, now, config, config_hash, source_ids, private_ids) if r["target"] in targets]
         for result in results:
+            # Old recorded builds retain their exact legacy identity on replay.
+            result["evaluation_version"] = full_config.get("evaluation_version") or result["model_version"] + ":" + config_hash
             result["changes"] = explain_change(result, previous_forecast(store, result))
         if args.command != "replay":
             for result in results:
@@ -128,6 +141,9 @@ def main(argv=None) -> int:
             write_json(args.output, payload)
         if args.audit_output:
             write_json(args.audit_output, source_audit(store, now, results))
+        if args.command in ("run", "forecast"):
+            from .storage_codec import maintain_raw_cache
+            maintain_raw_cache(store.db, now)
         summary = {"issued_at": iso(now), "mode": args.command, "sources": outcomes,
                    "forecasts": [{"target": r["target"], "status": r["status"], "reason": r.get("reason"),
                                   "event_count": r["event_count"], "components": [c["id"] for c in r["components"]],
@@ -138,6 +154,9 @@ def main(argv=None) -> int:
         return 0 if all(r["status"] == "current" for r in results) else 2
     finally:
         store.close()
+        if args.command in ("run", "forecast") and not args.completion_input:
+            from .automatic_storage import step
+            step(args.db)
 
 
 if __name__ == "__main__":

@@ -49,6 +49,7 @@ mod providers;
 mod public_reset_archive;
 mod public_reset_feed;
 mod public_reset_sources;
+mod release_update;
 mod remote_control;
 mod skills_market;
 mod storage;
@@ -303,6 +304,7 @@ pub fn run() {
             capacity_bridge::capacity_get_diagnostics_preview,
             capacity_bridge::capacity_get_vault_mutation_status,
             commands::get_app_info,
+            release_update::check_release_update,
             legacy_migration::inspect_legacy_quotaviewer_migration,
             legacy_migration_apply::prepare_legacy_quotaviewer_import,
             legacy_migration_apply::confirm_legacy_quotaviewer_import,

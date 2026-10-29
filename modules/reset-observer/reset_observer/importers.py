@@ -9,6 +9,8 @@ import sqlite3
 import numpy as np
 
 from .contracts import AUTOMATIC, RELIEF, Forecast, digest
+from .reaction import record_forecast
+from .store import configure_storage
 
 
 def fixed_weight_variants(payload):
@@ -88,12 +90,14 @@ def import_model(store, payload, now, variants=None):
         raise ValueError("unsupported producer contract")
     if not payload.get("curve"):
         return 0
-    version = payload["model_version"] + ":" + payload["config_hash"]
+    version = payload.get("evaluation_version") or payload["model_version"] + ":" + payload["config_hash"]
     common = dict(version=version, target=payload["target"], origin=payload["issued_at"],
                   generated_at=payload["issued_at"], available_at=now, expires_at=payload["valid_until"])
     issues = [] if payload["status"] == "current" else ["producer_not_current"]
-    metadata = {"inputs_hash": payload["inputs_hash"], "training_state": payload["training"]["state"],
-                "upstream_issued_at": payload["issued_at"]}
+    metadata = {"inputs_hash": payload["inputs_hash"], "build_config_hash": payload["config_hash"],
+                "training_state": payload["training"]["state"],
+                "upstream_issued_at": payload["issued_at"], "last_reset_at": payload.get("last_event_at"),
+                "cycle": payload.get("cycle")}
     records = [Forecast(source="horizon", track="model", points=[[p["hours"], p["probability"]] for p in payload["curve"]],
                         issues=issues, metadata=metadata, **common)]
     for c in payload["components"]:
@@ -113,6 +117,8 @@ def import_model(store, payload, now, variants=None):
         record.validate()
     for record in records:
         store.add_forecast(record)
+        record_forecast(store, record, source_received_at=now)
+    store.db.commit()
     return len(records)
 
 
@@ -123,7 +129,7 @@ def intelligence_database(store, path, now):
         raise ValueError("observer and producer must have separate databases")
     counts = {"native": 0, "model_and_variants": 0, "indicators": 0, "rejected": 0}
     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=30)) as db:
-        db.row_factory = sqlite3.Row
+        configure_storage(db, read_only=True)
         first = db.execute("SELECT id,source,observed_at FROM observations ORDER BY id LIMIT 1").fetchone()
         namespace = "producer:" + digest([str(path), tuple(first) if first else None])
         cursor_key = namespace + ":observation_cursor"
@@ -145,6 +151,7 @@ def intelligence_database(store, path, now):
                                           issues=c.get("issues", []), metadata={"dependency": c["dependency"],
                                             "evidence": c.get("evidence", []), "last_reset_at": c.get("last_reset_at"), **c.get("metadata", {})})
                         store.add_forecast(record)
+                        record_forecast(store, record, source_received_at=row["observed_at"])
                         counts["native"] += 1
                     except (KeyError, ValueError, TypeError):
                         counts["rejected"] += 1
@@ -204,6 +211,9 @@ def json_lines(store, path, now):
         payload = json.loads(line)
         # The sender cannot backdate the evaluator's receipt clock.
         payload["available_at"] = now
-        store.add_forecast(Forecast(**payload))
+        forecast = Forecast(**payload)
+        store.add_forecast(forecast)
+        record_forecast(store, forecast)
         count += 1
+    store.db.commit()
     return count

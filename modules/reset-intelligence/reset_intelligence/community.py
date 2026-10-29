@@ -193,7 +193,8 @@ def recent_ballot(store, source, poll, now, hours=6, since=None, half_life_hours
     current = deepcopy(poll)
     meta = {"total_votes": poll["total"], "recent_votes": 0, "observation_window_hours": 0.,
             "sampling_state": "no_recent_votes", "latest_vote_at": None,
-            "freshness_weight": 0., "half_life_hours": half_life_hours}
+            "freshness_weight": 0., "half_life_hours": half_life_hours, "largest_gap_seconds": 0.,
+            "sampling_corrections": 0, "sampling_gaps": 0}
     if not poll["total"]:
         return current, meta
     samples.reverse()
@@ -214,10 +215,29 @@ def recent_ballot(store, source, poll, now, hours=6, since=None, half_life_hours
     first_at = samples[0][0]
     for (left_at, before), (right_at, after) in zip(samples, samples[1:]):
         a, b = ({signature(x): x["votes"] for x in item["bins"]} for item in (before, after))
-        if set(a) != set(counts) or set(b) != set(counts) or any(b[k] < a[k] for k in counts):
+        if set(a) != set(counts) or set(b) != set(counts):
             current["total"] = 0
             meta["sampling_state"] = "vote_timing_unavailable"
             return current, meta
+        corrected = any(b[k] < a[k] for k in counts)
+        calendar = poll["kind"] == "calendar_preference"
+        gap = calendar and right_at-left_at > 1800
+        if corrected and not calendar:
+            current["total"] = 0
+            meta["sampling_state"] = "vote_timing_unavailable"
+            return current, meta
+        if corrected or gap:
+            # Keep the known increments AFTER a correction or collection gap.
+            # The unknown batch cannot qualify; a later fresh segment can.
+            counts = {key: 0 for key in counts}
+            weighted = dict(counts)
+            first_at = right_at
+            meta["latest_vote_at"] = None
+            meta["largest_gap_seconds"] = 0.
+            meta["sampling_corrections"] += int(corrected)
+            meta["sampling_gaps"] += int(gap)
+            continue
+        meta["largest_gap_seconds"] = max(meta["largest_gap_seconds"], right_at-left_at)
         # Use the older arrival bound: an observation gap cannot freshen old votes.
         freshness = 2 ** (-(now-left_at)/(half_life_hours*3600))
         for key in counts:
@@ -240,7 +260,8 @@ def ballot_rejection(poll: dict, now: float, last_event: float) -> str | None:
         return "empty_poll"
     if not poll["start"] <= now < poll["expires"]:
         return "poll_outside_original_window"
-    if poll.get("anchor_reset", poll["start"]) < last_event - 3600:
+    if (poll["kind"] == "probability_votes" and poll["start"] < last_event
+            or poll.get("anchor_reset", poll["start"]) < last_event - 3600):
         return "poll_precedes_latest_event"
     if poll["kind"] == "interval_votes":
         bins = poll["bins"]

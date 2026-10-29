@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from http.client import IncompleteRead
 import json
 import re
 import time
@@ -23,12 +24,186 @@ CATALOG = [
     {"id": "community_poll", "adapter": "community_poll", "url": "https://nextreset.ai/api/community"},
     {"id": "didcodex_poll", "adapter": "calendar_preference", "url": "https://didcodexreset.com/api/oct28/votes",
      "calendar_url": "https://didcodexreset.com/zh-hk/oct28.html"},
-    {"id": "statements", "adapter": "statements", "url": "https://codex-reset.pro/api/reset-feed"},
+    {"id": "didcodex_status", "adapter": "scheduled_status", "url": "https://didcodexreset.com/api/status.json"},
     {"id": "tibo_posts", "adapter": "tibo_posts", "url": "https://codex-reset.com/api/feed?locale=zh"},
 ]
+# The observer reads the replacement completion page. Keep the legacy parser
+# for historical receipts and custom feeds, without polling the retired API.
+RETIRED_ENDPOINTS = {"https://codex-reset.pro/api/reset-feed"}
+
+
+def source_retired(spec):
+    try:
+        endpoint = urlsplit(spec.get("url", ""))
+    except (ValueError, TypeError):
+        # Leave malformed custom URLs to fetch's per-source error isolation.
+        return False
+    return endpoint._replace(query="", fragment="").geturl().rstrip("/") in RETIRED_ENDPOINTS
+
+
+def configured_sources(extra=(), disabled=()):
+    return [s for s in [*CATALOG, *extra]
+            if s["id"] not in disabled and not source_retired(s)]
+
+
 USER_AGENT = "ResetIntelligence/0.1 (+https://github.com/QuotaHorizon/Quota-Horizon)"
 SOURCE_INTERVALS = {s["id"]: 60 for s in CATALOG}
 SOURCE_INTERVALS.update(lunar=300, observatory=300, dreaife=300)
+
+# Only these adapters changed normalization in this upgrade. The catalog binds
+# old public rows; explicit metadata binds newly parsed custom source IDs.
+ADAPTER_CONTRACTS = {"codex_reset": 1, "lunar": 1, "observatory": 1, "monitor": 1}
+
+
+def normalization_outdated(curve, adapter=None):
+    if adapter is None:
+        adapter = curve.metadata.get("adapter") or next(
+            (s["adapter"] for s in CATALOG if s["id"] == curve.source), None
+        )
+    return adapter in ADAPTER_CONTRACTS and (
+        curve.metadata.get("adapter") != adapter
+        or curve.metadata.get("adapter_contract") != ADAPTER_CONTRACTS[adapter]
+    )
+
+
+def codex_rounding_only(data):
+    """An explicitly unchanged rounded model is not a news revision.
+
+    Do not apply a generic small-delta cutoff: even a small declared adjustment
+    or a negative revision remains information. The complete upstream values
+    and unrounded paired baseline are retained separately.
+    """
+    context, ps = data.get("context") or {}, data["probabilities"]
+    if (context.get("effect") != "informational_only" or context.get("multiplier") != 1
+            or ps.get("tease_tier") is not None
+            or any(ps.get(f"tease_floor_{h}h") is not None for h in (24, 48))):
+        return False
+    for h in (24, 48):
+        full, model = ps[f"rounded_{h}h"], ps.get(f"model_{h}h")
+        if (isinstance(model, bool) or not isinstance(model, (int, float))
+                or model != full or not float(full).is_integer()
+                or abs(probability(full, 100) - probability(ps[f"raw_{h}h"])) > .005 + 1e-12):
+            return False
+    return True
+
+
+def reset_anchor(at, time_basis, references=(), *, discovered_at=None, event_id=None):
+    """Keep the provider's occurrence, publication and discovery clocks distinct.
+
+    Receipt belongs to Curve.observed_at, not stable forecast metadata: adding a
+    new poll's receipt here would create a different observer forecast identity.
+    """
+    recorded = stamp(at)
+    refs = []
+    for value in references:
+        try:
+            url = canonical_url(value)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if url not in refs:
+            refs.append(url)
+    return {"occurred_at": recorded if time_basis in ("observed", "source_clock") else None,
+            "announced_at": recorded if time_basis == "announcement_proxy" else None,
+            "discovered_at": stamp(discovered_at) if discovered_at else None,
+            "time_basis": time_basis, "references": refs,
+            "source_event_id": str(event_id) if event_id is not None else None}
+
+
+def scheduled_status_facts(raw, source, received_at):
+    """Read explicit schedule windows without turning confidence into a forecast.
+
+    The status snapshot is authoritative for its own pending inventory. A later
+    successful snapshot replaces these facts, including withdrawals. Source
+    publication/check clocks bound freshness; another HTTP receipt cannot renew it.
+    """
+    if (raw.get("schemaVersion") != 1 or not isinstance(raw.get("events"), list)
+            or not isinstance(raw.get("resetTimeline"), dict)
+            or "nextSchedule" not in raw["resetTimeline"]):
+        raise ValueError("incomplete schedule inventory")
+    generated, checked = stamp(raw["generatedAt"]), stamp(raw["lastSuccessfulCheckAt"])
+    if max(generated, checked) > received_at + 60:
+        raise ValueError("source schedule clock is in the future")
+    healthy = raw.get("monitor", {}).get("status") == "ok"
+    timeline = raw["resetTimeline"]
+    closed = {str(value) for value in timeline.get("suppressedPostIds", [])}
+    closed.update(str(item.get("schedule", {}).get("source", {}).get("postId"))
+                  for item in timeline.get("fulfilledSchedules", []))
+    closed.update(str(identifier) for item in timeline.get("manualCompletions", [])
+                  for identifier in item.get("schedulePostIds", []))
+    records = {str(row.get("source", {}).get("postId")): row for row in raw["events"]
+               if isinstance(row, dict) and row.get("kind") == "reset_scheduled"}
+    latest = timeline.get("nextSchedule")
+    if isinstance(latest, dict) and latest.get("kind") == "reset_scheduled":
+        records[str(latest.get("source", {}).get("postId"))] = latest
+    facts = []
+    # Explicit upstream completion records are outcome evidence, not another
+    # probability vote. Preserve linked schedule identities and the notice clock.
+    links = {str(item.get("completionPostId")): item.get("schedule", {})
+             for item in timeline.get("fulfilledSchedules", [])}
+    suppressed = {str(value) for value in timeline.get("suppressedPostIds", [])}
+    for row in raw["events"]:
+        if not isinstance(row, dict) or row.get("kind") != "reset_completed":
+            continue
+        src = row.get("source") or {}
+        identifier = str(src.get("postId", ""))
+        url = src.get("url", "")
+        if identifier in suppressed or not identifier.isdigit() or not url:
+            continue
+        if canonical_url(url) != f"https://x.com/i/status/{identifier}":
+            continue
+        if not any(url.startswith(f"https://x.com/{handle}/status/") for handle in ("thsottiaux", "sama", "OpenAI")):
+            continue
+        target = {"global": AUTOMATIC, "global_and_banked": AUTOMATIC, "banked": RELIEF}.get(row.get("resetType"))
+        schedule = links.get(identifier, {})
+        same_kind = schedule.get("resetType") == row.get("resetType")
+        plans = (row.get("scope") or {}).get("plans", [])
+        if not plans and same_kind:
+            plans = (schedule.get("scope") or {}).get("plans", [])
+        if target is None or "all" not in plans or not row.get("announcedAt"):
+            continue
+        at = stamp(row["announcedAt"])
+        if at > min(generated, received_at):
+            continue
+        refs = [canonical_url(url)]
+        if same_kind and schedule.get("source", {}).get("url"):
+            refs.append(canonical_url(schedule["source"]["url"]))
+        facts.append({"kind": "structured_completion", "id": identifier, "url": refs[0],
+            "references": refs, "at": at, "target": target, "population": "broad",
+            "stage": "completed", "source": source, "generated_at": generated,
+            "expires_at": min(generated, checked) + 3600})
+    for identifier, row in records.items():
+        if not identifier.isdigit() or not row.get("announcedAt") or not row.get("source", {}).get("url"):
+            continue
+        url = canonical_url(row["source"]["url"])
+        if url != f"https://x.com/i/status/{identifier}":
+            continue
+        target = {"global": AUTOMATIC, "global_and_banked": AUTOMATIC, "banked": RELIEF}.get(row.get("resetType"))
+        window = row.get("scheduleWindow") or {}
+        if target is None or not window.get("endAt"):
+            continue
+        announced, deadline = stamp(row["announcedAt"]), stamp(window["endAt"])
+        start = stamp(window["startAt"]) if window.get("startAt") else deadline
+        if start > deadline or deadline <= announced:
+            continue
+        plans = (row.get("scope") or {}).get("plans") or []
+        state = row.get("scheduleState", "pending")
+        stage = {"pending": "scheduled", "fulfilled": "completed", "completed": "completed",
+                 "cancelled": "cancelled", "canceled": "cancelled", "retracted": "retracted",
+                 "elapsed": "elapsed"}.get(state, "unknown")
+        if identifier in closed:
+            stage = "closed"
+        facts.append({"kind": "structured_schedule", "id": identifier, "url": url,
+            "at": announced, "deadline": deadline, "target": target,
+            "population": "broad" if "all" in plans else "unspecified" if not plans or "unknown" in plans else "targeted",
+            "stage": stage, "source": source, "generated_at": generated, "checked_at": checked,
+            "observed_at": received_at, "expires_at": min(generated+3600, checked+3600, deadline),
+            "upstream_healthy": healthy, "schedule_basis": row.get("scheduleBasis"),
+            "schedule_timing_source": row.get("scheduleTimingSource"),
+            "schedule_constraint": row.get("scheduleConstraint"), "schedule_timezone": row.get("scheduleTimezone")})
+    issues = [] if healthy else ["upstream_schedule_unhealthy"]
+    if received_at - min(generated, checked) >= 3600:
+        issues.append("upstream_schedule_stale")
+    return generated, facts, issues
 
 
 def statement_relevance(text):
@@ -117,7 +292,10 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
                   (48, probability(ps["rounded_48h"], 100))], 3600, d["last_reset_at"],
                   metadata={"source_model": str(d["model"]["version"]) + ":published-v2",
                             "upstream_model": d["model"]["version"], "estimate_kind": "published_complete",
+                            "rounding_only": codex_rounding_only(d),
                             "baseline_points": [(24, probability(ps["raw_24h"])), (48, probability(ps["raw_48h"]))]})
+        c.metadata["reset_anchor"] = reset_anchor(d["last_reset_at"], "source_clock",
+            [e.get("href") for e in d.get("evidence", []) if isinstance(e, dict) and e.get("code") == "last_reset"])
         c.evidence = [f"https://x.com/i/status/{i}" for i in d.get("context", {}).get("evidence_ids", []) if str(i).isdigit()]
         # An evidence inventory is not a review of every listed post. Preserve
         # the post the source says actually drives its published adjustment.
@@ -140,10 +318,21 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
     elif adapter == "monitor":
         if "t" in d:
             d = inert(d)["result"]
-        last = max(stamp(e["dateTime"]) for e in d["history"] if e["type"] == "forced-reset")
+        last_record = max((e for e in d["history"] if e["type"] == "forced-reset"),
+                          key=lambda e: stamp(e["dateTime"]), default=None)
+        last = stamp(last_record["dateTime"]) if last_record else None
+        if last is None:
+            obs.issues.append("missing_forced_reset_anchor")
         c = curve(AUTOMATIC, d["updatedAt"], [(24, probability(d["forecast"]["score24h"], 100)),
                   (48, probability(d["forecast"]["score48h"], 100))], 7 * 3600, last,
                   metadata={"upstream_health": d["status"], "forecast_status": d["forecastStatus"]})
+        if last_record:
+            # Monitor's X-backed history dates are publication proxies. A
+            # forced-reset label does not turn a post timestamp into telemetry.
+            basis = "observed" if last_record.get("timeBasis") in ("observed", "feed_observation", "occurrence") else "announcement_proxy"
+            c.metadata["reset_anchor"] = reset_anchor(last, basis,
+                [last_record.get("sourceUrl")], discovered_at=last_record.get("discoveredAt"),
+                event_id=last_record.get("id"))
         if all(k in d["forecast"] for k in ("baseScore24h", "baseScore48h")):
             c.metadata["baseline_points"] = [(24, probability(d["forecast"]["baseScore24h"], 100)),
                                               (48, probability(d["forecast"]["baseScore48h"], 100))]
@@ -155,13 +344,21 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
         c.metadata["reviewed_references"] = [canonical_url(s["sourceUrl"]) for s in d["forecast"].get("semanticSignals", []) if s.get("sourceUrl")]
         c.metadata["response_version"] = 2
     elif adapter == "nextreset":
+        last = d["history"]["last"]
         c = curve(AUTOMATIC, d["asOf"], [(w["hours"], w["probability"]) for w in d["windows"]], 900,
-              d["history"]["last"]["date"], expires=d["expiresAt"],
-              issues=[] if d["checks"]["history"]["ok"] else ["unhealthy_outcome_history"],
+              last["date"], expires=d["expiresAt"],
+              issues=([] if d["checks"]["history"]["ok"] else ["unhealthy_outcome_history"])
+                     + (["non_automatic_reset_anchor"] if last.get("type", "automatic") != "automatic" else []),
               metadata={"source_model": d["version"], "upstream_health": d["degraded"],
                         "decomposition_version": 1,
                         "baseline_points": [(w["hours"], probability(w["baseline"])) for w in d["windows"]]
                             if all("baseline" in w for w in d["windows"]) else None})
+        basis = ("observed" if last.get("timeBasis") in ("observed", "feed_observation", "occurrence")
+                 else "announcement_proxy" if last.get("timeBasis") in ("publication", "announcement", "announcement_proxy")
+                 else "source_clock" if last.get("timeBasis") is None else "unknown")
+        c.metadata["reset_anchor"] = reset_anchor(last["date"], basis, [last.get("source")],
+            discovered_at=last.get("discoveredAt"), event_id=last.get("id"))
+        c.metadata["adapter"] = "nextreset"
         c.metadata.update(response_version=2, reviewed_references=[])
         social = d.get("social") or {}
         # Consume a structured upstream interpretation, never score prose or
@@ -179,18 +376,49 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
                 c.metadata["announcement"] = {"url": url, "at": published, "deadline": deadline}
     elif adapter == "observatory":
         vm = d["viewModel"]
-        curve(RELIEF, d["checkedAt"], [(h, vm[f"probability{h}h"]) for h in (12, 24, 48, 72)],
-              3600, vm["regularResetForecast"]["lastCompletedAt"],
-              issues=["upstream_stale"] if d["dataHealth"]["stale"] else [],
-              metadata={"upstream_health": d["dataHealth"]["overall"]})
+        curve(
+            RELIEF,
+            d["checkedAt"],
+            [(h, vm[f"probability{h}h"]) for h in (12, 24, 48, 72)],
+            3600,
+            d.get("lastRandomResetAt"),
+            issues=["upstream_stale"] if d["dataHealth"]["stale"] else [],
+            metadata={"upstream_health": d["dataHealth"]["overall"]},
+        )
+        if d.get("lastRandomResetAt") is None:
+            obs.issues.append("missing_random_reset_anchor")
     elif adapter == "lunar":
-        curve(RELIEF, d["generatedAt"], [(d["nearTerm"]["hours"], d["nearTerm"]["probability"]),
-              (24, d["next24Hours"]["probability"])], 3600, d["lastResetAt"],
-              metadata={"source_interval_24h": [d["next24Hours"]["low"], d["next24Hours"]["high"]],
-                        "source_model": d["comparisons"]["modelVersion"], "decomposition_version": 1,
-                        "baseline_points": [(d["nearTerm"]["hours"], probability(d["comparisons"]["withoutHints"]["sixHours"])),
-                                            (24, probability(d["comparisons"]["withoutHints"]["twentyFourHours"]))]
-                            if "withoutHints" in d["comparisons"] else None})
+        comparisons = d.get("comparisons") or {}
+        without_hints = comparisons.get("withoutHints") or {}
+        # The published no-hints baseline has fixed 6h/24h windows. A partial
+        # or differently windowed pair cannot decompose the complete curve.
+        paired = d["nearTerm"]["hours"] == 6 and all(
+            without_hints.get(k) is not None for k in ("sixHours", "twentyFourHours")
+        )
+        curve(
+            RELIEF,
+            d["generatedAt"],
+            [
+                (d["nearTerm"]["hours"], d["nearTerm"]["probability"]),
+                (24, d["next24Hours"]["probability"]),
+            ],
+            600,
+            d["lastResetAt"],
+            metadata={
+                "source_interval_24h": [
+                    d["next24Hours"]["low"],
+                    d["next24Hours"]["high"],
+                ],
+                "source_model": comparisons.get("modelVersion"),
+                "decomposition_version": 1,
+                "baseline_points": [
+                    (6, probability(without_hints["sixHours"])),
+                    (24, probability(without_hints["twentyFourHours"])),
+                ]
+                if paired
+                else None,
+            },
+        )
     elif adapter == "dreaife":
         d = raw["snapshot"]["data"]
         obs.generated_at = stamp(d["issued_at"])
@@ -252,6 +480,8 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
                                          "url": f"https://x.com/i/status/{p['in_reply_to_tweet_id']}", "text": None}
                                         if str(p.get("in_reply_to_tweet_id", "")).isdigit() else None,
                               "relevance": p.get("tibo_lane") or statement_relevance(p["text"])})
+    elif adapter == "scheduled_status":
+        obs.generated_at, obs.facts, obs.issues = scheduled_status_facts(d, name, at)
     elif adapter == "statements":
         obs.generated_at = stamp(d["generatedAt"])
         for p in d["posts"]:
@@ -272,6 +502,11 @@ def parse(spec: dict, raw: object, at: float) -> Observation:
         raise ValueError("unknown source adapter")
     if obs.generated_at is not None and obs.generated_at > at + 60:
         raise ValueError("source clock is in the future")
+    if adapter in ADAPTER_CONTRACTS:
+        for c in obs.curves:
+            c.metadata.update(
+                adapter=adapter, adapter_contract=ADAPTER_CONTRACTS[adapter]
+            )
     return obs
 
 
@@ -298,7 +533,7 @@ def fetch(spec: dict) -> tuple[dict, float, object | None, Observation | None, s
             raw = {"health": raw, "snapshot": get_json(url)}
         at = time.time()
         return spec, at, raw, parse(spec, raw, at), None
-    except (ValueError, KeyError, TypeError, IndexError, OSError) as exc:
+    except (ValueError, KeyError, TypeError, IndexError, OSError, IncompleteRead) as exc:
         # Do not put arbitrary upstream responses, query strings or credentials
         # into logs. The retained payload supports local diagnosis.
         code = f"http_{exc.code}" if isinstance(exc, HTTPError) else type(exc).__name__
@@ -309,6 +544,8 @@ def collect(store, specs: list[dict] | None = None, minimum_interval: float | No
     specs = CATALOG if specs is None else specs
     if len({s["id"] for s in specs}) != len(specs):
         raise ValueError("duplicate source id")
+    retired = [s for s in specs if source_retired(s)]
+    specs = [s for s in specs if not source_retired(s)]
     latest = {a["source"]: a for a in store.attempts(time.time())}
     observations = store.observations(time.time())
     outdated = {s["id"] for s in specs if s.get("adapter") == "codex_reset"
@@ -323,6 +560,14 @@ def collect(store, specs: list[dict] | None = None, minimum_interval: float | No
     outdated.update(s["id"] for s in specs if s.get("adapter") == "codex_reset"
                     and (obs := observations.get(s["id"])) is not None
                     and any(c.metadata.get("comment_version") != 1 for c in obs.curves))
+    outdated.update(
+        s["id"]
+        for s in specs
+        if s.get("adapter") in ADAPTER_CONTRACTS
+        and (obs := observations.get(s["id"])) is not None
+        and any(normalization_outdated(c, s["adapter"]) for c in obs.curves)
+    )
+
     def interval(spec):
         normal = minimum_interval if minimum_interval is not None else SOURCE_INTERVALS.get(spec["id"], 900)
         last = latest.get(spec["id"], {})
@@ -336,9 +581,21 @@ def collect(store, specs: list[dict] | None = None, minimum_interval: float | No
                     break
                 failures += 1
             return min(900, 60 * 2 ** max(0, failures - 1))
-        return 0 if spec["id"] in outdated else normal
+        if spec["id"] in outdated:
+            return 0
+        if minimum_interval is None and spec.get("adapter") == "lunar":
+            obs = observations.get(spec["id"])
+            if obs and obs.curves:
+                # Generation may already be minutes old on first receipt.
+                # Refresh before its deadline instead of waiting another full
+                # upstream interval. Repeated cached responses still wait at
+                # least one minute, and failures retain the backoff above.
+                remaining = min(c.expires_at for c in obs.curves) - last.get("observed_at", obs.observed_at)
+                return min(normal, max(60, remaining - 60))
+        return normal
+
     due = [s for s in specs if time.time() - latest.get(s["id"], {}).get("observed_at", 0) >= interval(s)]
-    outcomes = []
+    outcomes = [{"source": s["id"], "status": "retired"} for s in retired]
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = [pool.submit(fetch, s) for s in due]
         for future in as_completed(futures):

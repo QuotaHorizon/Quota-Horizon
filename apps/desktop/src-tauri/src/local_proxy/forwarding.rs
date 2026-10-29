@@ -121,6 +121,9 @@ fn forward_provider(
     body: Vec<u8>,
     provider: &ProviderProfile,
 ) -> Result<UpstreamPayload, String> {
+    if let Some(error) = provider_request_model_error(method, url, &body, provider) {
+        return Ok(error);
+    }
     let client = http_client()?;
     let upstream_endpoint = upstream_endpoint_for_codex_request(url);
     let upstream_url = build_upstream_url(&provider.base_url, &upstream_endpoint);
@@ -147,6 +150,9 @@ fn forward_provider_request(
     body: Vec<u8>,
     provider: &ProviderProfile,
 ) -> Result<UpstreamPayload, String> {
+    if let Some(error) = provider_request_model_error(method, url, &body, provider) {
+        return Ok(error);
+    }
     if provider.kind == ProviderKind::Custom
         && *method == Method::Post
         && is_response_create_endpoint(request_path(url))

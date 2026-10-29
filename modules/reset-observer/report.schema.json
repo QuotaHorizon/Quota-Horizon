@@ -35,6 +35,57 @@
     "runtime": {"type": "object", "required": ["producer", "import", "pid"]},
     "diagnostics": {"type": "object", "required": ["unique_windows", "states", "unresolved_reasons", "windows", "runtime_events"]},
     "dependence": {"type": "array", "items": {"type": "object", "required": ["left", "right", "target", "matched_origins", "level_correlation", "change_correlation"]}},
-    "weight_review": {"type": "object", "required": ["state", "automatic_promotion", "candidates", "selection"]}
+    "weight_review": {"type": "object", "required": ["state", "automatic_promotion", "candidates", "selection"]},
+    "reaction": {"type": "object", "additionalProperties": false,
+      "required": ["version", "generated_at", "events"],
+      "properties": {
+        "version": {"const": "reset-reaction-1"},
+        "generated_at": {"type": "number"},
+        "initialized_at": {"type": "number"},
+        "history_since": {"type": "number"},
+        "events": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/reaction_event"}}
+      }}
+  },
+  "$defs": {
+    "nullable_clock": {"type": ["number", "null"]},
+    "nullable_duration": {"type": ["number", "null"], "minimum": 0},
+    "nullable_probability": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "reaction_evidence": {"type": "object", "additionalProperties": false,
+      "required": ["provider", "source_family", "published_at", "first_received_at", "published_to_capture_seconds"],
+      "properties": {
+        "provider": {"type": "string"}, "source_family": {"type": "string"},
+        "published_at": {"$ref": "#/$defs/nullable_clock"}, "first_received_at": {"type": "number"},
+        "published_to_capture_seconds": {"$ref": "#/$defs/nullable_duration"}
+      }},
+    "reaction_series": {"type": "object", "additionalProperties": false,
+      "required": ["source", "version", "target", "track", "state", "published_at", "source_received_at",
+        "observer_received_at", "publication_to_capture_seconds", "completion_to_update_seconds", "known_to_update_seconds",
+        "old_cycle_residual_seconds", "residual_censored", "before_probability_24h", "after_probability_24h",
+        "ui_received_at", "ui_presented_at", "ui_delay_seconds", "missing_fields"],
+      "properties": {
+        "source": {"type": "string"}, "version": {"type": "string"},
+        "target": {"enum": ["automatic_reset", "broad_quota_relief"]}, "track": {"enum": ["native", "model"]},
+        "state": {"enum": ["updated", "awaiting_update", "anchor_unknown", "no_prior_observation"]},
+        "published_at": {"$ref": "#/$defs/nullable_clock"}, "source_received_at": {"$ref": "#/$defs/nullable_clock"},
+        "observer_received_at": {"$ref": "#/$defs/nullable_clock"},
+        "publication_to_capture_seconds": {"$ref": "#/$defs/nullable_duration"},
+        "completion_to_update_seconds": {"$ref": "#/$defs/nullable_duration"},
+        "known_to_update_seconds": {"$ref": "#/$defs/nullable_duration"},
+        "old_cycle_residual_seconds": {"$ref": "#/$defs/nullable_duration"}, "residual_censored": {"type": "boolean"},
+        "before_probability_24h": {"$ref": "#/$defs/nullable_probability"},
+        "after_probability_24h": {"$ref": "#/$defs/nullable_probability"},
+        "ui_received_at": {"type": "null"}, "ui_presented_at": {"type": "null"}, "ui_delay_seconds": {"type": "null"},
+        "missing_fields": {"type": "array", "uniqueItems": true, "items": {"enum": ["source_received_at", "ui_received_at"]}}
+      }},
+    "reaction_event": {"type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "status", "time_basis", "completed_from", "completed_to", "first_received_at", "evidence", "series"],
+      "properties": {
+        "id": {"type": "string"}, "kind": {"enum": ["automatic", "banked", "unknown"]},
+        "status": {"enum": ["confirmed", "pending"]}, "time_basis": {"type": "string"},
+        "completed_from": {"type": "number"}, "completed_to": {"type": "number"},
+        "first_received_at": {"$ref": "#/$defs/nullable_clock"},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/reaction_evidence"}},
+        "series": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/reaction_series"}}
+      }}
   }
 }

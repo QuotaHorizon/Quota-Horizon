@@ -84,6 +84,112 @@ pub(crate) struct Status {
     checked_at: Option<String>,
     retry_at: Option<String>,
     issue: Option<String>,
+    health: Option<String>,
+    last_capture_at: Option<String>,
+    last_report_at: Option<String>,
+    storage: Option<StorageStatus>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
+struct StorageStatus {
+    observer_bytes: u64,
+    producer_bytes: Option<u64>,
+    log_bytes: u64,
+    log_limit_bytes: u64,
+    maintenance: Vec<MaintenanceStatus>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct MaintenanceStatus {
+    module: String,
+    phase: String,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct Progress {
+    health: Option<String>,
+    issue: Option<String>,
+    last_capture_at: Option<String>,
+    last_report_at: Option<String>,
+    storage: Option<StorageStatus>,
+}
+impl Progress {
+    fn apply(self, state: &mut Status) {
+        state.health = self.health.filter(|v| {
+            matches!(
+                v.as_str(),
+                "healthy"
+                    | "catching_up"
+                    | "collecting"
+                    | "evaluating"
+                    | "maintaining"
+                    | "degraded"
+                    | "stalled"
+                    | "recovering"
+                    | "starting"
+                    | "external"
+            )
+        });
+        state.issue = self.issue.filter(|v| {
+            matches!(
+                v.as_str(),
+                "clock_changed"
+                    | "capture_stalled"
+                    | "evaluation_stalled"
+                    | "capture_failed"
+                    | "evaluation_failed"
+                    | "source_updates_failed"
+            )
+        });
+        fn timestamp(value: Option<String>) -> Option<String> {
+            value
+                .and_then(|v| DateTime::parse_from_rfc3339(&v).ok())
+                .map(|v| v.to_rfc3339())
+        }
+        state.last_capture_at = timestamp(self.last_capture_at);
+        state.last_report_at = timestamp(self.last_report_at);
+        state.storage = self
+            .storage
+            .filter(|s| {
+                s.observer_bytes <= 1 << 50
+                    && s.producer_bytes.unwrap_or(0) <= 1 << 50
+                    && s.log_bytes <= 1 << 50
+                    && s.log_limit_bytes <= 1 << 30
+                    && s.maintenance.len() <= 2
+            })
+            .map(|mut s| {
+                s.maintenance
+                    .retain(|v| matches!(v.module.as_str(), "observer" | "producer"));
+                for m in &mut s.maintenance {
+                    if !matches!(
+                        m.phase.as_str(),
+                        "compress" | "retire" | "bodies" | "vacuum" | "done" | "unavailable"
+                    ) {
+                        m.phase = "unknown".into();
+                    }
+                    m.state = m.state.take().filter(|v| {
+                        matches!(
+                            v.as_str(),
+                            "progress" | "deferred" | "retry_later" | "waiting_for_disk_space"
+                        )
+                    });
+                    m.error = m.error.take().filter(|v| {
+                        matches!(
+                            v.as_str(),
+                            "OSError"
+                                | "PermissionError"
+                                | "ValueError"
+                                | "OperationalError"
+                                | "DatabaseError"
+                                | "IntegrityError"
+                        )
+                    });
+                }
+                s
+            });
+    }
 }
 static STATUS: Mutex<Option<(PathBuf, Status)>> = Mutex::new(None);
 static ACTIVE: Mutex<Option<(PathBuf, Configuration)>> = Mutex::new(None);
@@ -98,10 +204,18 @@ pub(crate) fn refresh(directory: &Path) -> Result<(), String> {
         .or_else(|| read_json::<Configuration>(&directory.join("reset-radar-runtime.json")).ok())
         .filter(Configuration::valid);
     if let Some(config) = configuration {
-        invoke(config.action("refresh"), Duration::from_secs(45))
-            .map_err(|_| "独立雷达更新未完成，后台将继续重试。".to_string())?;
+        refresh_receipt(invoke(config.action("refresh"), Duration::from_secs(45)))?;
     }
     Ok(())
+}
+
+fn refresh_receipt(result: Result<&str, &str>) -> Result<(), String> {
+    match result {
+        Ok("refreshed" | "partial") => Ok(()),
+        Ok("cached") => Err("结果来源沿用有效缓存，本轮未完成新采集。".into()),
+        Err("refresh_failed") => Err("独立雷达数据更新失败，后台将继续重试。".into()),
+        _ => Err("独立雷达更新未完成，后台将继续重试。".into()),
+    }
 }
 
 pub(crate) fn status(directory: &Path) -> Status {
@@ -137,9 +251,15 @@ impl Supervisor {
         supervisor
     }
     pub(crate) fn tick(&mut self, directory: &Path, at: DateTime<Utc>) {
+        let mut progress = None;
         self.check(directory, at, |c| {
-            invoke(c.command(), Duration::from_secs(10))
+            let (state, receipt) = invoke_progress(c.command(), Duration::from_secs(10))?;
+            progress = Some(receipt);
+            Ok(state)
         });
+        if let Some(progress) = progress {
+            progress.apply(&mut self.state);
+        }
         *STATUS.lock().unwrap_or_else(|e| e.into_inner()) =
             Some((directory.into(), self.state.clone()));
         *ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) =
@@ -201,6 +321,7 @@ impl Supervisor {
                 self.state.state = "retrying".into();
                 self.state.issue = Some(issue.into());
                 self.state.retry_at = Some(next.to_rfc3339_opts(SecondsFormat::Millis, true));
+                self.state.health = None;
             }
         }
     }
@@ -250,7 +371,14 @@ fn bundled_configuration(root: &Path, directory: &Path) -> Configuration {
     }
 }
 
-fn invoke(mut command: Command, timeout: Duration) -> Result<&'static str, &'static str> {
+fn invoke(command: Command, timeout: Duration) -> Result<&'static str, &'static str> {
+    invoke_progress(command, timeout).map(|(state, _)| state)
+}
+
+fn invoke_progress(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<(&'static str, Progress), &'static str> {
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -287,13 +415,17 @@ fn invoke(mut command: Command, timeout: Duration) -> Result<&'static str, &'sta
         return Err("start_failed");
     }
     let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| "start_failed")?;
-    match value.get("state").and_then(|s| s.as_str()) {
+    let state = match value.get("state").and_then(|s| s.as_str()) {
         Some("already_running") => Ok("running"),
         Some("starting" | "restarting") => Ok("starting"),
-        Some("refreshed") => Ok("running"),
+        Some("refreshed") => Ok("refreshed"),
+        Some("partial") => Ok("partial"),
+        Some("cached") => Ok("cached"),
+        Some("failed") => Err("refresh_failed"),
         Some("refreshing") => Ok("refreshing"),
         _ => Err("start_failed"),
-    }
+    }?;
+    Ok((state, serde_json::from_value(value).unwrap_or_default()))
 }
 
 #[cfg(test)]

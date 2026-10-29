@@ -5,8 +5,9 @@ from html.parser import HTMLParser
 from datetime import datetime, timedelta
 import json
 from zoneinfo import ZoneInfo
+from urllib.parse import urljoin, urlsplit
 
-from .contracts import RELIEF, Observation, count, stamp
+from .contracts import RELIEF, Observation, canonical_url, count, stamp
 
 
 class Bootstrap(HTMLParser):
@@ -34,6 +35,46 @@ def calendar_bootstrap(html):
     if value.get("timeZone") != "America/Los_Angeles" or value.get("sides") != ["reset", "feature"]:
         raise ValueError("calendar question contract changed")
     return value
+
+
+def activity_metadata(day, calendar_url):
+    """Preserve upstream structured phases without turning scheduling into delivery."""
+    activity = {"scheduled": [], "completed": [], "improvements": []}
+    for phase in ("scheduled", "completed"):
+        group = day.get(phase)
+        links = group.get("links", []) if isinstance(group, dict) else []
+        if not isinstance(links, list):
+            continue
+        for link in links[:64]:
+            if not isinstance(link, dict):
+                continue
+            post_id = str(link.get("postId", ""))
+            if not post_id.isascii() or not post_id.isdigit():
+                continue
+            try:
+                at = stamp(link["announcedAt"])
+                url = canonical_url("https://x.com/i/status/" + post_id)
+                source_url = canonical_url(urljoin(calendar_url, link["href"]))
+                if urlsplit(source_url).netloc != urlsplit(calendar_url).netloc:
+                    continue
+            except (KeyError, TypeError, ValueError, AttributeError):
+                continue
+            record = {"at": at, "url": url, "source_url": source_url,
+                      "scope": link.get("resetType") if isinstance(link.get("resetType"), str) else None}
+            if record not in activity[phase]:
+                activity[phase].append(record)
+    improvement = day.get("improvement")
+    if isinstance(improvement, dict):
+        urls = improvement.get("urls", [])
+        urls = ([improvement["url"]] if improvement.get("url") else []) + (urls if isinstance(urls, list) else [])
+        for value in urls[:64]:
+            try:
+                url = canonical_url(value)
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if url not in activity["improvements"]:
+                activity["improvements"].append(url)
+    return activity
 
 
 def parse_calendar(spec, raw, at):
@@ -75,6 +116,7 @@ def parse_calendar(spec, raw, at):
             "question_url": spec["calendar_url"],
             "voting_open": calendar["votingEnabled"] and day["votingOpen"],
             "upstream_outcome": day["outcome"],
+            "activity": activity_metadata(day, spec["calendar_url"]),
             "observed_only": True,
         })
     return observation
