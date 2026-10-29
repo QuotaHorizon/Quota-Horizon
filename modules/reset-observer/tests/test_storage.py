@@ -1,3 +1,4 @@
+from contextlib import closing
 from dataclasses import replace
 import json
 import os
@@ -31,7 +32,7 @@ class ObserverStorageTests(unittest.TestCase):
                 self.assertEqual(store.report_at(at), value)
             self.assertIsNone(store.report_at(-1))
             self.assertEqual(store.db.execute("SELECT COUNT(*) FROM reports").fetchone()[0], len(values))
-            with sqlite3.connect(path) as raw:
+            with closing(sqlite3.connect(path)) as raw, raw:
                 self.assertLess(raw.execute("SELECT MAX(length(payload)) FROM reports WHERE at>0").fetchone()[0], 2048)
                 self.assertEqual(raw.execute("SELECT COUNT(*) FROM json_bodies").fetchone()[0], 0)
             store.close()
@@ -85,7 +86,7 @@ class ObserverStorageTests(unittest.TestCase):
                 self.assertEqual(json.loads(row[0]), {**stable, "observed_at": at, "received_at": at+3})
             self.assertEqual(store.db.execute("SELECT COUNT(*) FROM json_bodies").fetchone()[0], 61)
             # Physical rows remain lightweight references; all 60 samples survive.
-            with sqlite3.connect(path) as raw:
+            with closing(sqlite3.connect(path)) as raw, raw:
                 self.assertEqual(raw.execute("SELECT COUNT(*) FROM preference_samples").fetchone()[0], 60)
                 self.assertLess(raw.execute("SELECT MAX(length(payload)) FROM preference_samples").fetchone()[0], 100)
             store.close()

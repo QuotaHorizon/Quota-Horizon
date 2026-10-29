@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 import hashlib
 from pathlib import Path
@@ -46,7 +47,7 @@ class StorageCompatibilityTests(unittest.TestCase):
         small = {"n": 1}
         for value in (large, small, legacy, legacy_blob):
             self.store.save("source", 100, value, Observation("source", 100, 100))
-        with sqlite3.connect(self.path) as raw_db:
+        with closing(sqlite3.connect(self.path)) as raw_db, raw_db:
             compressed = raw_db.execute("SELECT body FROM payloads WHERE hash=?", (digest(large),)).fetchone()[0]
         self.assertIsInstance(compressed, bytes)
         self.assertLess(len(compressed), len(json.dumps(large, ensure_ascii=False).encode()) / 10)
@@ -173,7 +174,7 @@ class StorageCompatibilityTests(unittest.TestCase):
 
     def test_read_only_old_schema_without_body_table_remains_usable(self):
         path = Path(self.directory.name)/"legacy.sqlite"
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.execute("CREATE TABLE forecasts(payload TEXT)")
             db.execute("INSERT INTO forecasts VALUES (?)", (json.dumps({"literal": "unchanged"}),))
         db = sqlite3.connect(path.as_uri()+"?mode=ro", uri=True)
@@ -194,7 +195,7 @@ class StorageCompatibilityTests(unittest.TestCase):
                               (b"\0QHJSON2\0"+b"0"*64, "missing")):
             with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
                 self.store.db.execute("SELECT ? AS payload", (broken,)).fetchone()
-        with sqlite3.connect(self.path) as raw:
+        with closing(sqlite3.connect(self.path)) as raw, raw:
             raw.execute("UPDATE json_bodies SET body=? WHERE hash=?", (zlib.compress(b'{"altered":true}'), key))
         with self.assertRaisesRegex(ValueError, "hash mismatch"):
             self.store.db.execute("SELECT payload FROM forecasts").fetchone()

@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -73,12 +74,12 @@ class StorageMaintenanceTests(unittest.TestCase):
         self.assertTrue(verify(self.path)["verified"])
 
     def test_failed_row_verification_rolls_back_row_bodies_and_checkpoint(self):
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.execute("CREATE TRIGGER corrupt_clock AFTER UPDATE OF normalized ON observations BEGIN UPDATE observations SET observed_at=999 WHERE id=NEW.id; END")
             original = db.execute("SELECT normalized,observed_at FROM observations WHERE id=1").fetchone()
         with self.assertRaisesRegex(ValueError, "semantic verification failed"):
             compact(self.path, batch_rows=1)
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             self.assertEqual(db.execute("SELECT normalized,observed_at FROM observations WHERE id=1").fetchone(), original)
             self.assertEqual(db.execute("SELECT verified_rows FROM qh_storage_progress WHERE table_name='observations'").fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM json_bodies").fetchone()[0], 0)
@@ -87,12 +88,12 @@ class StorageMaintenanceTests(unittest.TestCase):
         self.assert_original_values()
 
     def test_corrupt_json_fails_without_skipping_evidence_and_can_resume_after_repair(self):
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             original = db.execute("SELECT body FROM payloads WHERE hash='0'").fetchone()[0]
             db.execute("UPDATE payloads SET body='invalid json' WHERE hash='0'")
         with self.assertRaises(json.JSONDecodeError):
             compact(self.path)
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             self.assertEqual(db.execute("SELECT verified_rows FROM qh_storage_progress WHERE table_name='payloads'").fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM payloads").fetchone()[0], 12)
             db.execute("UPDATE payloads SET body=? WHERE hash='0'", (original,))
@@ -104,7 +105,7 @@ class StorageMaintenanceTests(unittest.TestCase):
             nonlocal appended
             if not appended:
                 appended = True
-                with sqlite3.connect(self.path) as db:
+                with closing(sqlite3.connect(self.path)) as db, db:
                     db.execute("INSERT INTO forecasts VALUES ('appended',100,'target','new',?)", (json.dumps(self.values[0]),))
         compact(self.path, batch_rows=4, emit=append)
         with self.assertRaisesRegex(ValueError, "appended"):
@@ -113,16 +114,16 @@ class StorageMaintenanceTests(unittest.TestCase):
         self.assertEqual(next(t for t in caught["tables"] if t["table_name"] == "forecasts")["verified_rows"], 13)
         vacuum(self.path, writers_stopped=True)
         self.assertTrue(verify(self.path)["verified"])
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM forecasts WHERE id='appended'").fetchone()[0], 1)
 
     def test_full_verification_detects_changed_metadata_without_repairing_it(self):
         compact(self.path)
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.execute("UPDATE forecasts SET model_version='tampered' WHERE id='0'")
         with self.assertRaisesRegex(ValueError, "baseline mismatch"):
             verify(self.path)
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             self.assertEqual(db.execute("SELECT model_version FROM forecasts WHERE id='0'").fetchone()[0], "tampered")
 
     def test_space_guard_leaves_database_usable(self):
@@ -151,16 +152,16 @@ class StorageMaintenanceTests(unittest.TestCase):
         compact(self.path)
         def alter(event):
             if event["event"] == "vacuum_sql_complete":
-                with sqlite3.connect(self.path) as other:
+                with closing(sqlite3.connect(self.path)) as other, other:
                     other.execute("UPDATE forecasts SET rowid=500 WHERE id='0'")
         with self.assertRaisesRegex(ValueError, "rowid ordering"):
             vacuum(self.path, writers_stopped=True, emit=alter)
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             self.assertEqual(db.execute("SELECT status FROM qh_storage_jobs").fetchone()[0], "vacuum_started")
 
     def test_report_zlib_and_text_are_deduplicated_without_losing_any_revision(self):
         path = Path(self.directory.name) / "observer.sqlite"
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.executescript("""CREATE TABLE observations(id INTEGER PRIMARY KEY,provider TEXT,claims TEXT,healthy INTEGER);
                 CREATE TABLE trials(id TEXT PRIMARY KEY,payload TEXT);
                 CREATE TABLE reports(id INTEGER PRIMARY KEY,at REAL,payload BLOB);
@@ -193,12 +194,12 @@ class StorageMaintenanceTests(unittest.TestCase):
         self.assertGreater(result["removed"], 0)
         self.assert_original_values()
         self.assertTrue(verify(self.path)["verified"])
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             before = db.execute("SELECT COUNT(*) FROM json_bodies").fetchone()[0]
             db.execute("UPDATE forecasts SET payload=? WHERE id='0'", (b'\0QHJSON2\0' + b'0' * 64,))
         with self.assertRaisesRegex(ValueError, "missing"):
             collect_unused_bodies(self.path, writers_stopped=True)
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM json_bodies").fetchone()[0], before)
 
     def test_unknown_database_and_missing_path_do_not_create_evidence(self):
@@ -207,17 +208,17 @@ class StorageMaintenanceTests(unittest.TestCase):
             compact(missing)
         self.assertFalse(missing.exists())
         unknown = Path(self.directory.name) / "unknown.sqlite"
-        with sqlite3.connect(unknown) as db:
+        with closing(sqlite3.connect(unknown)) as db, db:
             db.execute("CREATE TABLE unrelated(value TEXT)")
         with self.assertRaisesRegex(ValueError, "recognized"):
             compact(unknown)
-        with sqlite3.connect(unknown) as db:
+        with closing(sqlite3.connect(unknown)) as db, db:
             self.assertEqual(db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [("unrelated",)])
 
     def test_short_live_writer_lock_is_retried_without_advancing_checkpoint(self):
         ready = threading.Event()
         def writer():
-            with sqlite3.connect(self.path) as db:
+            with closing(sqlite3.connect(self.path)) as db, db:
                 db.execute("BEGIN IMMEDIATE")
                 ready.set()
                 time.sleep(.12)
