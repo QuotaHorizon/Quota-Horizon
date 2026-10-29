@@ -71,13 +71,6 @@ jobs:
       - name: Install frontend and packaging dependencies
         run: npm --prefix apps/desktop ci --no-audit --no-fund
 
-      - name: Check source, types and frontend
-        run: |
-          npm run check:source
-          npm run typecheck
-          npm run test:scripts
-          npm test
-
       - name: Use a native Windows temporary directory
         if: runner.os == 'Windows'
         shell: pwsh
@@ -89,6 +82,13 @@ jobs:
           "TEMP=$temporary" >> $env:GITHUB_ENV
           "TMP=$temporary" >> $env:GITHUB_ENV
           "TMPDIR=$temporary" >> $env:GITHUB_ENV
+
+      - name: Check source, types and frontend
+        run: |
+          npm run check:source
+          npm run typecheck
+          npm run test:scripts
+          npm test
 
       - name: Check Rust formatting and native tests
         run: |

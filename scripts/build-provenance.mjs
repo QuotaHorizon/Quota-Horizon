@@ -12,7 +12,9 @@ const git = (root, args) => execFileSync("git", args, {
   env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, stdio: ["ignore", "pipe", "pipe"],
 });
 const samePath = (left, right) => {
-  const canonical = value => process.platform === "win32" ? realpathSync(value).toLowerCase() : realpathSync(value);
+  // The JavaScript resolver preserves Windows 8.3 names; Git reports long
+  // names. Native resolution expands both aliases before comparing roots.
+  const canonical = value => process.platform === "win32" ? realpathSync.native(value).toLowerCase() : realpathSync(value);
   return canonical(left) === canonical(right);
 };
 

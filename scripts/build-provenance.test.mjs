@@ -43,6 +43,30 @@ test("build provenance preserves genuine local edits and requires clean CI input
   assert.throws(() => verifyBuildSource(modified), /new-source.txt/);
 });
 
+test("Windows short paths preserve the same Git source identity", { skip: process.platform !== "win32" }, t => {
+  const { root } = fixture(t);
+  // Git reports the native long path even when a runner's TEMP uses an 8.3
+  // alias. Ask Windows for the real alias rather than assuming its spelling.
+  const short = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+    "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:QUOTAHORIZON_TEST_SOURCE_ROOT).ShortPath"], {
+    env: { ...process.env, QUOTAHORIZON_TEST_SOURCE_ROOT: root },
+    encoding: "utf8", windowsHide: true,
+  }).trim();
+  if (short.toLowerCase() === root.toLowerCase()) {
+    t.skip("This Windows volume does not allocate 8.3 directory aliases");
+    return;
+  }
+  const source = captureSource(short);
+  assert.ok(source, "An 8.3 path must identify its own Git checkout");
+  assert.equal(source.commit, captureSource(root).commit);
+  assert.equal(source.inputDigest, captureSource(root).inputDigest);
+  assert.equal(source.dirty, false);
+  verifyBuildSource(source);
+  const archive = join(short, "dist/archive");
+  mkdirSync(archive);
+  assert.equal(captureSource(archive), null);
+});
+
 test("Tauri newline normalization is restored without concealing manifest edits", t => {
   const { root, manifest } = fixture(t);
   // A user's unpublished manifest changes must also survive the restoration.
