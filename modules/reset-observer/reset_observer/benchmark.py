@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 import math
+import time
 
 from . import SETTLEMENT_VERSION
 from .contracts import AUTOMATIC, HORIZONS, Forecast
@@ -59,12 +60,20 @@ def trial_probability(forecast, origin, hours, events, policy):
     return (p, None) if p is not None else (None, "outside_original_support")
 
 
-def freeze_grid(store, now, policy):
+def freeze_grid(store, now, policy, *, maximum_hours=None, maximum_seconds=None,
+                should_stop=None, progress=None):
     initialize(store, now, policy)
     grid = policy.grid_seconds
     origin = store.get("last_grid") + grid
     count = 0
+    completed = 0
+    started = time.monotonic()
     while origin <= now:
+        if (should_stop and should_stop()) or (
+            maximum_hours is not None and completed >= maximum_hours
+        ) or (completed and maximum_seconds is not None
+              and time.monotonic() - started >= maximum_seconds):
+            break
         latest = {}
         for f in store.forecasts(origin, latest=True):
             # Retire an old version when its successor is observed. Its past
@@ -87,6 +96,9 @@ def freeze_grid(store, now, policy):
         # Persist after each complete grid. Retrying a partially written grid is
         # idempotent, and never replaces already frozen probabilities.
         store.put("last_grid", origin)
+        completed += 1
+        if progress:
+            progress(origin)
         origin += grid
     return count
 
@@ -137,12 +149,28 @@ def revise_trial_eligibility(store, now, policy, evidence, truth_hash):
     original exclusion and old settlements. Every source/track is treated alike.
     """
     context = store.get("trial_revision_context")
-    if context == truth_hash:
+    # Catch-up can append more trials after this truth was already evaluated.
+    # Count as well as the last row: a preloaded future trial can become visible
+    # below the current maximum rowid. Capture this before processing so a
+    # concurrent collector's later rows remain eligible for the next pass.
+    watermark = list(store.db.execute(
+        "SELECT COUNT(*),COALESCE(MAX(rowid),0) FROM trials WHERE frozen_at<=?",
+        (now,),
+    ).fetchone())
+    revision_from = context.get("revision_from") if isinstance(context, dict) else None
+    next_context = {"truth_hash": truth_hash, "trials": watermark, "revision_from": revision_from}
+    if context == next_context:
         return 0
     prior = store.trial_revisions(now)
     times = [e["from"] for e in evidence["events"]
              if e.get("reason") == "completion_withdrawn" and e.get("from") is not None]
-    old_hash = context or (store.get("settlement_context") or {}).get("truth_hash")
+    # A reclassification can arrive while the first catch-up batch still
+    # predates all affected trials. Retain its lower bound even when this pass
+    # has no corrections, so later batches can use the same current evidence.
+    if revision_from is not None:
+        times.append(revision_from)
+    old_hash = (context.get("truth_hash") if isinstance(context, dict) else context)
+    old_hash = old_hash or (store.get("settlement_context") or {}).get("truth_hash")
     if old_hash:
         previous = store.db.execute("SELECT payload FROM truth_revisions WHERE hash=?", (old_hash,)).fetchone()
         if previous:
@@ -158,12 +186,13 @@ def revise_trial_eligibility(store, now, policy, evidence, truth_hash):
           (SELECT DISTINCT trial FROM trial_revisions WHERE at<=?) r ON r.trial=t.id""", (now,)).fetchone()
         if row[0] is not None:
             times.append(row[0])
+    next_context["revision_from"] = min(times) if times else None
     if not times:
-        store.put("trial_revision_context", truth_hash)
+        store.put("trial_revision_context", next_context)
         return 0
-    rows = store.db.execute("""SELECT id,payload FROM trials WHERE frozen_at<=? AND origin>=?
+    rows = store.db.execute("""SELECT id,payload FROM trials WHERE frozen_at<=? AND origin>=? AND rowid<=?
       AND (p IS NULL OR id IN (SELECT trial FROM trial_revisions WHERE at<=?)) ORDER BY origin,id""",
-      (now, min(times), now)).fetchall()
+      (now, min(times), watermark[1], now)).fetchall()
     # Finish the read cursor before appending revisions. A concurrent collector
     # or maintenance batch can commit while probabilities are reconstructed;
     # upgrading its older WAL snapshot would otherwise fail with SQLITE_BUSY_SNAPSHOT.
@@ -205,7 +234,7 @@ def revise_trial_eligibility(store, now, policy, evidence, truth_hash):
                 "at": now, "reason": "completion_evidence_revision", "truth_hash": truth_hash,
                 "forecast_id": identifier, "method": "original_received_forecast_with_revised_evidence"}}
             count += store.revise_trial(row["id"], now, revision)
-    store.put("trial_revision_context", truth_hash)
+    store.put("trial_revision_context", next_context)
     return count
 
 

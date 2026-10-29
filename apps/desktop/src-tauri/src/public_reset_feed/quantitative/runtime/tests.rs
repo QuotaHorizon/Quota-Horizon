@@ -26,6 +26,16 @@ fn actual_progress_and_storage_are_projected_without_trusting_process_presence()
 }
 
 #[test]
+fn historical_catch_up_is_exposed_as_progress() {
+    let progress: Progress =
+        serde_json::from_value(serde_json::json!({"health":"catching_up"})).unwrap();
+    let mut status = Status::default();
+    progress.apply(&mut status);
+    assert_eq!(status.health.as_deref(), Some("catching_up"));
+    assert!(status.issue.is_none());
+}
+
+#[test]
 fn telemetry_does_not_expose_unknown_errors_or_local_paths() {
     let progress: Progress = serde_json::from_value(serde_json::json!({
         "health":"/private/config", "issue":"secret", "last_report_at":"private-path",

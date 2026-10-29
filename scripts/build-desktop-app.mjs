@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { desktopSigningPlan } from "./desktop-signing.mjs";
 import { bundleRuntime } from "./bundle-reset-runtime.mjs";
 import { bundleWindowsRuntime } from "./bundle-windows-runtime.mjs";
+import { captureSource, requireBuildSource, restoreManifestLineEndings, sourceEnvironment,
+  verifyBuildSource, writeBuildProvenance } from "./build-provenance.mjs";
 
 // Modified by the QuotaHorizon project from Codex Switch v1.3.5.
 
@@ -29,8 +31,10 @@ const tauriOptions = cargoArguments < 0 ? tauriArgs : tauriArgs.slice(0, cargoAr
 const targetIndex = tauriOptions.indexOf("--target");
 const target = targetIndex >= 0 ? tauriOptions[targetIndex + 1]
   : tauriOptions.find((arg) => arg.startsWith("--target="))?.slice("--target=".length);
+const source = captureSource(repositoryRoot);
+if (process.env.GITHUB_ACTIONS === "true") requireBuildSource(source, process.env.GITHUB_SHA);
 // A non-secret build fact, not a system environment change or signing identity.
-const buildEnvironment = { ...process.env, VITE_HORIZON_SIGNING_MODE: signing.mode };
+const buildEnvironment = { ...process.env, ...sourceEnvironment(source), VITE_HORIZON_SIGNING_MODE: signing.mode };
 
 if (!existsSync(tauriCli)) {
   fail("Tauri CLI is unavailable. Run `npm ci` or `npm install` first.");
@@ -71,7 +75,12 @@ if (signing.mode === "ad_hoc") {
   console.log("Local ad-hoc macOS build: upgrades can require renewed history Keychain authorization. A stable signing certificate is not configured.");
 }
 
-run(process.execPath, [tauriCli, "build", ...tauriArgs], desktopRoot);
+try {
+  run(process.execPath, [tauriCli, "build", ...tauriArgs], desktopRoot);
+} finally {
+  restoreManifestLineEndings(source);
+  verifyBuildSource(source);
+}
 
 // Tauri's `--no-sign` also skips the macOS bundle seal. A local daily-driver
 // build still needs a complete ad-hoc seal so macOS verifies the bundle's
@@ -90,6 +99,10 @@ if (signing.sealAdHoc) {
   run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", appBundle]);
 }
 
+verifyBuildSource(source);
+mkdirSync(join(repositoryRoot, "dist"), { recursive: true });
+writeBuildProvenance(join(repositoryRoot, "dist/build-provenance.json"), source);
+
 function run(command, args, cwd = repositoryRoot) {
   const result = spawnSync(command, args, {
     cwd,
@@ -97,10 +110,10 @@ function run(command, args, cwd = repositoryRoot) {
     stdio: "inherit",
   });
   if (result.error) {
-    fail(`Unable to run ${command}: ${result.error.message}`);
+    throw new Error(`Unable to run ${command}: ${result.error.message}`);
   }
   if ((result.status ?? 1) !== 0) {
-    process.exit(result.status ?? 1);
+    throw new Error(`${command} exited with status ${result.status ?? 1}`);
   }
 }
 

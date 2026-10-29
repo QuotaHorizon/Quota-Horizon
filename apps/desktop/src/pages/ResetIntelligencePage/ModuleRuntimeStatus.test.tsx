@@ -4,6 +4,15 @@ import { quantitativeFixture } from "../../preview/quantitativeFixture";
 import { ModuleRuntimeStatus } from "./ModuleRuntimeStatus";
 
 describe("background progress", () => {
+  it("shows pending historical evaluation without claiming it is up to date", () => {
+    const view = quantitativeFixture(Date.now());
+    view.runtime = {managed:true, state:"running", checkedAt:null, retryAt:null, issue:null, health:"catching_up"};
+    const english = renderToStaticMarkup(<ModuleRuntimeStatus view={view} language="en" />);
+    expect(english).toContain("Catching up historical evaluation");
+    expect(english).not.toContain("up to date");
+    expect(english).not.toContain("data-issue");
+    expect(renderToStaticMarkup(<ModuleRuntimeStatus view={view} language="zh" />)).toContain("正在补齐历史评估");
+  });
   it("does not call a present but stalled process healthy", () => {
     const view = quantitativeFixture(Date.parse("2026-10-30T01:00:00Z"));
     view.runtime = {managed:true, state:"running", checkedAt:null, retryAt:null,

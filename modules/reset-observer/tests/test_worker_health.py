@@ -41,6 +41,30 @@ class WorkerHealthTests(TemporaryStore):
         self.progress(capture=T, evaluation=T, state="maintaining")
         self.assertEqual(worker_health(self.store.path, now=T+1200)["health"], "maintaining")
 
+    def test_previous_process_evaluation_does_not_stall_a_new_capture(self):
+        self.progress(capture=T, evaluation=T-86400, state="collecting")
+        old = self.store.get("evaluation_progress")
+        self.store.put("evaluation_progress", {**old, "pid": -1})
+        health = worker_health(self.store.path, now=T+120)
+        self.assertEqual(health["health"], "collecting")
+        self.assertIsNone(health["issue"])
+        self.assertEqual(health["last_report_at"], public_health(worker_health(self.store.path, now=T))["last_report_at"])
+        # The waiting marker belongs to the new process and keeps old report
+        # freshness honest without hiding a subsequently stuck live evaluator.
+        mark_progress(self.store, "evaluation", "waiting", now=T)
+        self.assertEqual(self.store.get("evaluation_progress")["last_success_at"], T-86400)
+        self.assertEqual(worker_health(self.store.path, now=T+120)["health"], "collecting")
+        mark_progress(self.store, "evaluation", "evaluating", now=T+120)
+        mark_progress(self.store, "capture", "idle", success=True, now=T+1100)
+        self.assertEqual(worker_health(self.store.path, now=T+1101)["issue"], "evaluation_stalled")
+
+    def test_pending_backlog_is_visible_without_overriding_active_stages(self):
+        self.progress()
+        self.store.put("catch_up", {"state": "pending", "remaining_hours": 20})
+        self.assertEqual(worker_health(self.store.path, now=T+1)["health"], "catching_up")
+        mark_progress(self.store, "capture", "collecting", now=T+2)
+        self.assertEqual(worker_health(self.store.path, now=T+3)["health"], "collecting")
+
     def test_capture_and_evaluation_report_actual_success_and_failure(self):
         args = SimpleNamespace(db=self.store.path, producer_db=None, ingest=None, output=None, html=None)
         with patch("reset_observer.runtime.collect", return_value=[]):

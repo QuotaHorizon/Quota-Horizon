@@ -136,6 +136,9 @@ jobs:
         if: runner.os == 'Windows'
         run: npm --prefix apps/desktop run "${{ matrix.build }}" -- -- --locked
 
+      - name: Verify the artifact source commit and frozen inputs
+        run: node scripts/build-provenance.mjs
+
       - name: Verify the Windows installer and its installed runtime
         if: runner.os == 'Windows'
         shell: pwsh

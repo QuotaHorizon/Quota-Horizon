@@ -124,7 +124,7 @@ export interface QuantitativeView {
   connected: boolean; checkedAt: string; forecastIssue: string | null; evaluationIssue: string | null;
   runtime?: { managed: boolean; state: "external" | "checking" | "starting" | "running" | "retrying";
     checkedAt: string | null; retryAt: string | null; issue: string | null;
-    health?: "healthy" | "collecting" | "evaluating" | "maintaining" | "degraded" | "stalled" | "recovering" | "starting" | "external" | null;
+    health?: "healthy" | "catching_up" | "collecting" | "evaluating" | "maintaining" | "degraded" | "stalled" | "recovering" | "starting" | "external" | null;
     lastCaptureAt?: string | null; lastReportAt?: string | null;
     storage?: {observerBytes: number; producerBytes?: number | null; logBytes: number; logLimitBytes: number;
       maintenance: {module: "observer" | "producer"; phase: string; state?: string | null; error?: string | null}[]} | null;

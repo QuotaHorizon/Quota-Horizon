@@ -121,6 +121,7 @@ impl Progress {
             matches!(
                 v.as_str(),
                 "healthy"
+                    | "catching_up"
                     | "collecting"
                     | "evaluating"
                     | "maintaining"

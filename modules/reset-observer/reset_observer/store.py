@@ -231,7 +231,7 @@ class Store:
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO trials VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                             (id, trial["source"], trial["version"], trial["target"], trial["track"], trial["origin"],
-                             trial["hours"], trial["p"], trial["frozen_at"], trial["policy_hash"], packed(trial)))
+                             trial["hours"], trial["p"], trial["frozen_at"], trial["policy_hash"], pack_inline(trial)))
         return id
 
     def trial_revisions(self, now):
@@ -292,7 +292,7 @@ class Store:
         if last and "eligibility_revision" not in content and last[0] == digest({**content, "eligibility_revision": None}):
             return False
         self.db.execute("INSERT INTO settlements(trial,at,signature,label,status,payload) VALUES (?,?,?,?,?,?)",
-                        (id, now, signature, result["label"], result["status"], packed(result)))
+                        (id, now, signature, result["label"], result["status"], pack_inline(result)))
         if commit:
             self.db.commit()
         return True

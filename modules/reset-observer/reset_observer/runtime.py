@@ -138,6 +138,26 @@ def outcome_status(store, policy, now, collected):
     }
 
 
+CATCH_UP_HOURS = 24
+CATCH_UP_SECONDS = 2.0
+
+
+def catch_up_status(store, now, policy):
+    target = int(now // policy.grid_seconds) * policy.grid_seconds
+    through = store.get("last_grid")
+    remaining = max(0, int((target - through) // policy.grid_seconds))
+    return {"state": "pending" if remaining else "current", "through": iso(through),
+            "target": iso(target), "remaining_hours": remaining}
+
+
+def freeze_capture_batch(store, now, policy, should_stop=None):
+    count = freeze_grid(store, now, policy, maximum_hours=CATCH_UP_HOURS,
+                        maximum_seconds=CATCH_UP_SECONDS, should_stop=should_stop,
+                        progress=lambda _: mark_progress(store, "capture", "collecting"))
+    store.put("catch_up", catch_up_status(store, now, policy))
+    return count
+
+
 def run_once(args, config, refresh=False, evaluator=None):
     began = time.monotonic()
     timings = {}
@@ -230,7 +250,11 @@ def run_once(args, config, refresh=False, evaluator=None):
             imported["jsonl"] = json_lines(store, args.ingest, now)
         timings["import"] = time.monotonic() - phase
         phase = time.monotonic()
-        freeze_grid(store, now, policy)
+        if evaluator is None:
+            freeze_grid(store, now, policy)
+            store.put("catch_up", catch_up_status(store, now, policy))
+        else:
+            freeze_capture_batch(store, now, policy, lambda: stop_path(args.db).exists())
         from .preferences import current_features, freeze as freeze_preferences
 
         # Both consumers use this exact capture cutoff. Carry the small feature
@@ -246,6 +270,7 @@ def run_once(args, config, refresh=False, evaluator=None):
             "import": imported,
             "pid": os.getpid(),
             "phase_seconds": timings,
+            "catch_up": catch_up_status(store, now, policy),
         }
         store.put(
             "heartbeat",
@@ -263,9 +288,11 @@ def run_once(args, config, refresh=False, evaluator=None):
         mark_progress(store, "capture", "idle", success=True)
         if evaluator is None:
             result = evaluate(args, policy, now, evidence, runtime, preference_features)
-        else:
+        elif not stop_path(args.db).exists():
             evaluator.submit(args, policy, now, evidence, runtime, preference_features)
             result = {"state": "captured", "evaluation": "background"}
+        else:
+            result = {"state": "stopping", "evaluation": "deferred"}
         return {
             "at": iso(now),
             "collected": collected,
@@ -294,7 +321,8 @@ def evaluate(args, policy, now, evidence, runtime, preference_features=None, rep
 
         settle_preferences(store, now, policy, evidence)
         from .retention import maintain_auxiliary_forecasts
-        maintain_auxiliary_forecasts(store, now)
+        if (store.get("catch_up") or {}).get("state") != "pending":
+            maintain_auxiliary_forecasts(store, now)
         timings = dict(runtime["phase_seconds"])
         timings["settlement"] = time.monotonic() - phase
         phase = time.monotonic()
@@ -356,9 +384,11 @@ class BackgroundEvaluation:
         self.future = None
         self.pending = None
         self.database = None
+        self.latest_job = None
         self.report_cache = ReportCache()
 
     def submit(self, *job):
+        self.latest_job = job
         self.pending = job
         self.database = job[0].db
         self.poll()
@@ -383,6 +413,37 @@ class BackgroundEvaluation:
             self.future = self.pool.submit(evaluate, *self.pending, report_cache=self.report_cache)
             self.pending = None
 
+    def resume_catch_up(self, should_stop):
+        """Advance a bounded batch using the capture's original knowledge cutoff.
+
+        Maintenance runs before this method while both connections are idle.
+        Each batch keeps every missing window and yields before refreshing or
+        stopping; a partial report explicitly retains its catch-up status.
+        """
+        if self.future is not None or self.pending is not None or self.latest_job is None or should_stop():
+            return False
+        args, policy, now, evidence, runtime, features = self.latest_job
+        store = Store(args.db)
+        try:
+            if catch_up_status(store, now, policy)["state"] == "current":
+                return False
+            mark_progress(store, "capture", "collecting")
+            try:
+                freeze_capture_batch(store, now, policy, should_stop)
+            finally:
+                mark_progress(store, "capture", "idle")
+            runtime = {**runtime, "catch_up": catch_up_status(store, now, policy)}
+        except Exception as exc:
+            mark_progress(store, "capture", "failed", error=type(exc).__name__)
+            store.runtime_event(time.time(), {"kind": "catch_up_failed", "error": type(exc).__name__})
+            self.latest_job = None  # The next normal capture retries the saved cursor.
+            return False
+        finally:
+            store.close()
+        if not should_stop():
+            self.submit(args, policy, now, evidence, runtime, features)
+        return True
+
     def close(self):
         self.pending = None
         self.pool.shutdown(wait=True)
@@ -401,7 +462,11 @@ def maintain_storage(args):
         store = Store(args.db)
         try:
             now = time.time()
-            return (retain_reports(store, now) or 0) + retain_auxiliary_forecasts(store, now)
+            # A partial catch-up within the old 48h guard can still need an
+            # unfrozen intermediate. Retire auxiliaries only after all grids.
+            auxiliaries = (retain_auxiliary_forecasts(store, now)
+                           if (store.get("catch_up") or {}).get("state") != "pending" else 0)
+            return (retain_reports(store, now) or 0) + auxiliaries
         finally:
             store.close()
     result = {"observer": storage_upgrade_step(args.db, retire=retire)}
@@ -494,6 +559,9 @@ def watch(args, config):
         store = Store(args.db)
         previous = store.get("heartbeat")
         now = time.time()
+        # Old reports remain visibly old, but an evaluator from a previous
+        # process must not make this process's first capture look stalled.
+        mark_progress(store, "evaluation", "waiting", now=now)
         store.runtime_event(
             now, {"kind": "process_start", "at": now, "pid": os.getpid()}
         )
@@ -577,6 +645,8 @@ def watch(args, config):
                         maintenance = maintain_storage(args)
                         quiet = all(r["phase"] == "done" or r.get("state") in ("deferred", "retry_later", "waiting_for_disk_space") for r in maintenance.values())
                         next_maintenance = time.monotonic() + (3600 if quiet else 2)
+                    if time.monotonic() < until:
+                        evaluator.resume_catch_up(lambda: marker.exists() or bool(refresh_request(args.db)))
                     time.sleep(min(2.0, max(0.0, until - time.monotonic())))
         except KeyboardInterrupt:
             pass

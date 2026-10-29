@@ -100,7 +100,11 @@ def worker_health(db, producer_db=None, *, now=None):
         if published is None:
             published = store.db.execute("SELECT MAX(at) FROM reports WHERE at<=?", (now,)).fetchone()[0]
         capture_clock = capture.get("at") or heartbeat.get("at")
-        evaluation_clock = evaluation.get("at") or published
+        # A prior worker's evaluation/report is a freshness fact, not evidence
+        # that this worker's evaluator has stalled before its first submission.
+        same_worker = (not capture.get("pid") or not evaluation.get("pid")
+                       or capture["pid"] == evaluation["pid"])
+        evaluation_clock = (evaluation.get("at") if same_worker else capture_clock) or published
         health, issue = "healthy", None
         if capture_clock is None:
             health = "starting"
@@ -122,6 +126,8 @@ def worker_health(db, producer_db=None, *, now=None):
             health = "collecting"
         elif evaluation.get("state") == "evaluating":
             health = "evaluating"
+        elif (store.get("catch_up") or {}).get("state") == "pending":
+            health = "catching_up"
         return {"health": health, "issue": issue,
                 "last_capture_at": iso(captured) if captured is not None else None,
                 "last_report_at": iso(published) if published is not None else None,

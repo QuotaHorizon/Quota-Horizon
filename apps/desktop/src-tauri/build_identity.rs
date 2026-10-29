@@ -63,8 +63,55 @@ pub fn source_identity(root: &Path) -> SourceIdentity {
     }
 }
 
+fn captured_identity(
+    mut current: SourceIdentity,
+    commit: Option<&str>,
+    dirty: Option<&str>,
+    digest: Option<&str>,
+) -> Result<SourceIdentity, &'static str> {
+    if commit.is_none() && dirty.is_none() && digest.is_none() {
+        return Ok(current);
+    }
+    if commit == Some("unknown") && dirty == Some("unknown") && digest == Some("unknown") {
+        if current.commit.is_some() {
+            return Err("source archive identity does not match the checkout");
+        }
+        return Ok(current);
+    }
+    if commit != current.commit.as_deref()
+        || !digest
+            .is_some_and(|value| value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err("captured build source does not match the checkout");
+    }
+    current.dirty = Some(match dirty {
+        Some("true") => true,
+        Some("false") => false,
+        _ => return Err("invalid captured source modification state"),
+    });
+    Ok(current)
+}
+
 pub fn emit(root: &Path) {
-    let identity = source_identity(root);
+    // The build wrapper captures source before Tauri normalizes Cargo.toml,
+    // then checks every source input again after compilation. Direct cargo
+    // builds keep using their current Git state.
+    for name in [
+        "QUOTAHORIZON_BUILD_COMMIT",
+        "QUOTAHORIZON_BUILD_DIRTY",
+        "QUOTAHORIZON_BUILD_INPUT_DIGEST",
+    ] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+    let identity = captured_identity(
+        source_identity(root),
+        std::env::var("QUOTAHORIZON_BUILD_COMMIT").ok().as_deref(),
+        std::env::var("QUOTAHORIZON_BUILD_DIRTY").ok().as_deref(),
+        std::env::var("QUOTAHORIZON_BUILD_INPUT_DIGEST")
+            .ok()
+            .as_deref(),
+    )
+    .expect("valid captured build source");
     for path in identity.watch_paths {
         println!("cargo:rerun-if-changed={}", path.display());
     }
@@ -80,6 +127,7 @@ pub fn emit(root: &Path) {
         "crates",
         "modules",
         "scripts/build-desktop-app.mjs",
+        "scripts/build-provenance.mjs",
     ] {
         println!("cargo:rerun-if-changed={}", root.join(path).display());
     }
@@ -106,6 +154,39 @@ pub fn emit(root: &Path) {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn captured_build_identity_preserves_local_changes_and_rejects_wrong_commits() {
+        let current = |dirty| SourceIdentity {
+            commit: Some("a".repeat(40)),
+            dirty: Some(dirty),
+            watch_paths: vec![],
+        };
+        let commit = "a".repeat(40);
+        let digest = "b".repeat(64);
+        assert_eq!(
+            captured_identity(current(true), Some(&commit), Some("false"), Some(&digest))
+                .unwrap()
+                .dirty,
+            Some(false)
+        );
+        assert_eq!(
+            captured_identity(current(false), Some(&commit), Some("true"), Some(&digest))
+                .unwrap()
+                .dirty,
+            Some(true)
+        );
+        assert!(
+            captured_identity(current(false), Some("wrong"), Some("false"), Some(&digest)).is_err()
+        );
+        assert!(captured_identity(current(false), Some(&commit), Some("false"), None).is_err());
+        assert_eq!(
+            captured_identity(current(true), None, None, None)
+                .unwrap()
+                .dirty,
+            Some(true)
+        );
+    }
 
     struct Fixture(PathBuf);
     impl Fixture {

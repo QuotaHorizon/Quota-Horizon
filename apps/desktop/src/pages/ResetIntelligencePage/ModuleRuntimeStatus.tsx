@@ -9,6 +9,7 @@ export function ModuleRuntimeStatus({ view, language }: { view: QuantitativeView
   const failed = runtime.state === "retrying" || runtime.health === "degraded" || runtime.health === "stalled";
   const healthLabels = {
     healthy: zh ? "采集与评估正常" : "Collection and evaluation up to date",
+    catching_up: zh ? "正在补齐历史评估" : "Catching up historical evaluation",
     collecting: zh ? "正在采集" : "Collecting",
     evaluating: zh ? "正在更新评估" : "Updating evaluation",
     maintaining: zh ? "正在整理存储" : "Optimizing storage",
