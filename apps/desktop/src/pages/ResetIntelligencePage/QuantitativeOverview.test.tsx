@@ -12,14 +12,15 @@ import type { PublicResetTimeline } from "./types";
 const now = Date.parse("2026-10-04T02:10:00Z");
 const timeline = (): PublicResetTimeline => ({sources:[],entries:[],revisionCount:0,evidenceFamilyCount:0,quantitative:quantitativeFixture(now)});
 describe("independent quantitative integration", () => {
-  it("shows only 24h history with a distinct Observatory color and stronger Horizon line", () => {
+  it("shows only 24h history with Horizon candles and distinct source lines", () => {
     const view = quantitativeFixture(now, true);
     const original = view.evaluation!.curves[0];
     view.evaluation!.curves.push({...original, hours:48});
     const html = renderToStaticMarkup(<QuantitativeTrend view={view} language="zh" now={now} />);
     expect(html).toContain("24h 概率");
     expect(html).not.toMatch(/data-series="[^"]+-48"/);
-    expect(html).toContain("--series-width:3");
+    expect(html).toContain("data-candle=");
+    expect(html).toContain("data-open=");
     expect(html).toContain("var(--quant-slate)");
     expect(html).not.toContain("48h");
   });
@@ -102,7 +103,7 @@ describe("independent quantitative integration", () => {
   it.each(["zh", "en"] as const)("retains saved curves and scores after a report read failure in %s", language => {
     const view=quantitativeFixture(now,true);
     const before=renderToStaticMarkup(<QuantitativeTrend view={view} language={language} now={now} />);
-    expect(before).toMatch(/<path d="M[^\"]+L/);
+    expect(before).toMatch(/<path[^>]*d="M[^\"]+L/);
     view.evaluationIssue="invalid";
     expect(renderToStaticMarkup(<QuantitativeTrend view={view} language={language} now={now} />)).toBe(before);
     const report=renderToStaticMarkup(<QuantitativeEvaluation view={view} language={language} now={now} />);

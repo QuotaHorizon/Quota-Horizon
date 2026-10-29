@@ -48,6 +48,7 @@ export interface QuantLatest extends ForecastIdentity {
 }
 export interface QuantCurve extends ForecastIdentity {
   target: ResetTarget; hours: number; points: { at: string; p: number | null }[];
+  candle_interval_minutes?: number | null;
 }
 interface Interval { mean: number | null; ci95: [number, number] | null; blocks: number }
 export interface QuantScorecard extends ForecastIdentity {

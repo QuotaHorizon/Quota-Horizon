@@ -1205,3 +1205,45 @@ fn capture_installed_connection() {
         fs::write(output, serde_json::to_vec(&timeline).unwrap()).unwrap();
     }
 }
+
+#[test]
+fn candle_projection_contract_survives_filtering_and_accepts_legacy_lines() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("report.json");
+    let mut report = content_report(0);
+    report["curves"][0]["candle_interval_minutes"] = json!(30);
+    fs::write(&path, report.to_string()).unwrap();
+    let parsed = parse_report(&path).unwrap();
+    assert_eq!(parsed.curves[0].candle_interval_minutes, Some(30));
+    assert_eq!(parsed.curves[1].candle_interval_minutes, None);
+    let exported = serde_json::to_value(&parsed).unwrap();
+    assert_eq!(exported["curves"][0]["candle_interval_minutes"], 30);
+    assert!(exported["curves"][1]
+        .get("candle_interval_minutes")
+        .is_none());
+    for (field, value) in [
+        ("candle_interval_minutes", json!(15)),
+        ("source", json!("monitor")),
+        ("track", json!("native")),
+        ("hours", json!(48)),
+    ] {
+        let mut invalid = report.clone();
+        invalid["curves"][0][field] = value;
+        fs::write(&path, invalid.to_string()).unwrap();
+        // Disallowed identities are removed before value validation. A report
+        // may survive that filter, but no invalid candle contract may escape.
+        if let Ok(parsed) = parse_report(&path) {
+            assert!(
+                parsed.curves.iter().all(|curve| {
+                    curve.candle_interval_minutes.is_none_or(|minutes| {
+                        minutes == 30
+                            && curve.identity.source == "horizon"
+                            && curve.identity.track == "model"
+                            && curve.hours == 24
+                    })
+                }),
+                "invalid candle {field}"
+            );
+        }
+    }
+}

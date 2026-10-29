@@ -56,17 +56,23 @@ def scoring_progress(trials, settlements):
     return progress
 
 
-def thin_curve(points, tolerance=0.0025):
+def thin_curve(points, tolerance=0.0025, *, candle_minutes=None):
     """Keep receipt times, gaps and turns; bound linear display error to 0.25pp.
 
-    Simplification never crosses an hour or a missing segment. Both sides of a
-    sharp step survive, instead of moving the change to the end of its hour.
+    Simplification never crosses a bucket or a missing segment. Candle buckets
+    retain exact first/last/min/max receipts; ordinary lines use hourly buckets.
+    Both sides of a sharp step survive without moving the change to a bucket end.
     Only the display projection is thinned; source and scoring rows are intact.
     """
     def segment(rows):
         if len(rows) < 3:
             return rows
         keep, pending = {0, len(rows) - 1}, [(0, len(rows) - 1)]
+        if candle_minutes:
+            # OHLC must use exact receipts, including extrema below the line
+            # simplifier's tolerance. Never synthesize an empty interval.
+            keep.update((min(range(len(rows)), key=lambda i: rows[i]["p"]),
+                         max(range(len(rows)), key=lambda i: rows[i]["p"])))
         while pending:
             left, right = pending.pop()
             a, b = rows[left], rows[right]
@@ -82,8 +88,9 @@ def thin_curve(points, tolerance=0.0025):
                 pending.extend(((left, index), (index, right)))
         return [rows[i] for i in sorted(keep)]
     result, batch = [], []
+    bucket_seconds = candle_minutes * 60 if candle_minutes else 3600
     for point in points:
-        if point["p"] is None or (batch and int(point["at"] // 3600) != int(batch[0]["at"] // 3600)):
+        if point["p"] is None or (batch and int(point["at"] // bucket_seconds) != int(batch[0]["at"] // bucket_seconds)):
             result.extend(segment(batch))
             batch = []
         if point["p"] is None:
@@ -168,7 +175,9 @@ def publication_curves(store, now):
             "target": k[2],
             "track": k[3],
             "hours": k[4],
-            "points": [{"at": iso(p["at"]), "p": p["p"]} for p in thin_curve(v)],
+            **({"candle_interval_minutes": 30} if k[0] == "horizon" and k[3] == "model" and k[4] == 24 else {}),
+            "points": [{"at": iso(p["at"]), "p": p["p"]} for p in thin_curve(
+                v, candle_minutes=30 if k[0] == "horizon" and k[3] == "model" and k[4] == 24 else None)],
         }
         for k, v in sorted(curves.items())
     ]

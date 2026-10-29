@@ -246,6 +246,8 @@ struct Curve {
     identity: Identity,
     target: String,
     hours: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    candle_interval_minutes: Option<u32>,
     points: Vec<Point>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1396,6 +1398,12 @@ fn parse_report(path: &Path) -> Result<Report, String> {
                 .any(|p| !probability(*p))
     }) || r.curves.iter().any(|c| {
         c.points.len() > 2000
+            || c.candle_interval_minutes.is_some_and(|minutes| {
+                minutes != 30
+                    || c.identity.source != "horizon"
+                    || c.identity.track != "model"
+                    || c.hours != 24
+            })
             || c.points
                 .iter()
                 .any(|p| !timestamp(&p.at) || p.p.is_some_and(|p| !probability(p)))

@@ -13,6 +13,32 @@ from reset_observer.runtime import run_once
 
 
 class CompactReportTests(TemporaryStore):
+    def test_candle_projection_keeps_sub_tolerance_extrema_and_half_hour_open_close(self):
+        values = [(0, .5), (5, .501), (10, .499), (29, .5001),
+                  (30, .5002), (35, .5003), (40, .4999), (59, .5004)]
+        points = [{"at": T + minute * 60, "p": p} for minute, p in values]
+        output = thin_curve(points, candle_minutes=30)
+        def ohlc(rows):
+            return rows[0]["p"], max(r["p"] for r in rows), min(r["p"] for r in rows), rows[-1]["p"]
+        for begin in (T, T+1800):
+            select = lambda rows: [r for r in rows if begin <= r["at"] < begin+1800]
+            self.assertEqual(ohlc(select(output)), ohlc(select(points)))
+        gap = [{"at": T+600, "p": None}]
+        split = thin_curve(points[:2]+gap+points[2:4], candle_minutes=30)
+        self.assertEqual(split, points[:2]+gap+points[2:4])
+
+    def test_only_horizon_24h_curves_declare_exact_candle_buckets(self):
+        for source, track in (("horizon", "model"), ("monitor", "native")):
+            for minute, p in ((0, .5), (5, .501), (10, .499), (29, .5001), (30, .5002)):
+                self.store.add_forecast(forecast(source=source, track=track, origin=T+minute*60,
+                    available_at=T+minute*60, expires_at=T+3600, points=[[24, p], [48, .7]]))
+        curves = publication_curves(self.store, T+3600)
+        for curve in curves:
+            expected = 30 if curve["source"] == "horizon" and curve["hours"] == 24 else None
+            self.assertEqual(curve.get("candle_interval_minutes"), expected)
+            if expected:
+                self.assertEqual([p["p"] for p in curve["points"]], [.5, .501, .499, .5001, .5002])
+
     def test_hourly_chart_preserves_both_sides_of_real_reset_step(self):
         points = [{"at": T + m * 60, "p": .94 if m < 31 else .30} for m in range(60)]
         output = thin_curve(points)
