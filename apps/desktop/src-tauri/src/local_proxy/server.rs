@@ -576,16 +576,24 @@ where
 {
     let mut retry_number = 0_u16;
     let mut retried_after_forbidden_quota = false;
+    let mut elapsed = Duration::ZERO;
     loop {
         let response = request()?;
         if response.status == 429 {
             retry_number = retry_number.saturating_add(1);
-            let elapsed = wait_before_retry(upstream_429_retry_delay(retry_number));
+            let quota_exhausted = is_official_quota_exhaustion(&response);
+            let delay = upstream_retry_delay(&response, retry_number, SystemTime::now())
+                .min(timeout.saturating_sub(elapsed));
+            elapsed = wait_before_retry(delay);
             if elapsed >= timeout {
-                let _ = handle_quota_event(&response, UpstreamQuotaEvent::RetryTimedOut);
+                if quota_exhausted {
+                    let _ = handle_quota_event(&response, UpstreamQuotaEvent::RetryTimedOut);
+                }
                 return Ok(response);
             }
-            let _ = handle_quota_event(&response, UpstreamQuotaEvent::Retry);
+            if quota_exhausted {
+                let _ = handle_quota_event(&response, UpstreamQuotaEvent::Retry);
+            }
             continue;
         }
         if !retried_after_forbidden_quota

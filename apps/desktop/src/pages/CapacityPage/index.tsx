@@ -370,7 +370,9 @@ export function CapacityPage({ language, notify, dark = false }: CapacityPagePro
             <div className={styles.quotaCopy}>
               <span className={styles.quotaKicker}>{copy.credits}</span>
               <h2>{resetCards.count === null ? "—" : `${resetCards.count}${language === "zh" ? " 张" : ""}`}</h2>
-              <span>{resetCards.label}</span>
+              <span className={styles.creditCountLabel}>{resetCards.label}</span>
+              {resetCards.expiry && <span className={`${styles.creditExpiry}${resetCards.expiry.urgent ? ` ${styles.creditExpirySoon}` : ""}`}
+                title={resetCards.expiry.title}>{resetCards.expiry.text}</span>}
               <p className={styles.creditMessage}>{resetCards.message}</p>
             </div>
           </article>

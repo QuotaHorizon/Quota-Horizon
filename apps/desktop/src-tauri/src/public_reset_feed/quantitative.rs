@@ -38,6 +38,8 @@ pub struct Forecast {
     #[serde(default)]
     community_coverage: Option<CommunityCoverage>,
     #[serde(default)]
+    community_diagnostics: Vec<CommunityDiagnostic>,
+    #[serde(default)]
     statements: Vec<Statement>,
     #[serde(default)]
     changes: Option<ForecastChanges>,
@@ -206,6 +208,104 @@ struct CommunityCoverage {
     supplementary_included: usize,
     supplementary_checked: usize,
     supplementary_weight: f64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommunityDiagnostic {
+    id: String,
+    target: String,
+    state: String,
+    reason: Option<String>,
+    observed_at: Option<f64>,
+    generated_at: Option<f64>,
+    read_failed: bool,
+    recent_votes: Option<usize>,
+    total_votes: Option<usize>,
+    minimum_recent_votes: usize,
+    observation_window_hours: f64,
+    latest_vote_at: Option<f64>,
+    window_start: Option<f64>,
+    window_end: Option<f64>,
+    question_kind: Option<String>,
+    unit: String,
+}
+
+fn clean_community_diagnostics(rows: &mut Vec<CommunityDiagnostic>) {
+    let mut seen = std::collections::BTreeSet::new();
+    rows.retain_mut(|c| {
+        if !matches!(
+            c.id.as_str(),
+            "date_poll" | "community_poll" | "didcodex_poll"
+        ) || !matches!(c.target.as_str(), "broad_quota_relief" | "automatic_reset")
+            || !matches!(c.state.as_str(), "included" | "excluded")
+            || c.minimum_recent_votes < 50
+            || c.minimum_recent_votes > 1_000_000
+            || !c.observation_window_hours.is_finite()
+            || !(0.0..=6.0001).contains(&c.observation_window_hours)
+            || c.recent_votes
+                .is_some_and(|n| n > c.total_votes.unwrap_or(n))
+            || (c.state == "included"
+                && !c.recent_votes.is_some_and(|n| n >= c.minimum_recent_votes))
+            || [
+                c.observed_at,
+                c.generated_at,
+                c.latest_vote_at,
+                c.window_start,
+                c.window_end,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|at| !epoch(at))
+            || (c.window_start.is_some()
+                && c.window_end.is_some()
+                && c.window_start >= c.window_end)
+            || !seen.insert(c.id.clone())
+        {
+            return false;
+        }
+        c.unit = if c.id == "didcodex_poll" {
+            "clicks"
+        } else {
+            "votes"
+        }
+        .into();
+        if !matches!(
+            c.question_kind.as_deref(),
+            Some("calendar_preference" | "probability_votes" | "interval_votes")
+        ) {
+            c.question_kind = None;
+        }
+        if c.state == "included" {
+            c.reason = None;
+        } else if !matches!(
+            c.reason.as_deref(),
+            Some(
+                "source_unavailable"
+                    | "forecast_unavailable"
+                    | "no_current_poll"
+                    | "target_mismatch"
+                    | "observation_stale"
+                    | "source_quality"
+                    | "empty_poll"
+                    | "no_recent_votes"
+                    | "vote_timing_unavailable"
+                    | "insufficient_recent_votes"
+                    | "no_usable_current_poll"
+                    | "duplicate_poll_round"
+                    | "poll_window_closed"
+                    | "poll_window_upcoming"
+                    | "unreviewed_calendar_question"
+                    | "calendar_window_closed_or_upcoming"
+                    | "calendar_event_already_observed"
+                    | "calendar_completion_time_unresolved"
+                    | "calendar_sampling_gap"
+                    | "unreviewed_calendar_units"
+                    | "calendar_vote_timing_unavailable"
+            )
+        ) {
+            c.reason = Some("source_quality".into());
+        }
+        true
+    });
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Community {
@@ -1160,6 +1260,7 @@ fn parse_forecast(path: &Path) -> Result<Consumer, String> {
                 "date_poll" | "community_poll" | "didcodex_poll"
             )
         });
+        clean_community_diagnostics(&mut f.community_diagnostics);
         for c in &mut f.community_inputs {
             if c.id != "didcodex_poll" {
                 c.mapping_kind = None;

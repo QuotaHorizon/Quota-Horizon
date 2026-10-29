@@ -101,6 +101,7 @@ pub(crate) struct UsageWindow {
 pub(crate) struct ResetCredit {
     pub(crate) issued_at: Option<String>,
     pub(crate) expires_at: Option<String>,
+    pub(crate) available: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -248,6 +249,17 @@ pub(crate) struct AppInfo {
     pub(crate) account_store: String,
     pub(crate) provider_store: String,
     pub(crate) version: String,
+    pub(crate) build: AppBuildInfo,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AppBuildInfo {
+    pub(crate) commit: Option<String>,
+    pub(crate) dirty: Option<bool>,
+    pub(crate) built_at_ms: Option<u64>,
+    pub(crate) platform: String,
+    pub(crate) arch: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

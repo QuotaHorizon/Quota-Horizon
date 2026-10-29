@@ -572,6 +572,134 @@
               "type": "string"
             }
           }
+        },
+        "community_diagnostics": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "target",
+              "state",
+              "reason",
+              "read_failed",
+              "minimum_recent_votes",
+              "observation_window_hours",
+              "question_kind",
+              "unit",
+              "observed_at",
+              "generated_at",
+              "latest_vote_at",
+              "window_start",
+              "window_end",
+              "recent_votes",
+              "total_votes"
+            ],
+            "properties": {
+              "id": {
+                "enum": [
+                  "date_poll",
+                  "didcodex_poll",
+                  "community_poll"
+                ]
+              },
+              "target": {
+                "enum": [
+                  "broad_quota_relief",
+                  "automatic_reset"
+                ]
+              },
+              "state": {
+                "enum": [
+                  "included",
+                  "excluded"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "read_failed": {
+                "type": "boolean"
+              },
+              "minimum_recent_votes": {
+                "type": "integer",
+                "minimum": 50
+              },
+              "observation_window_hours": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 6.0001
+              },
+              "question_kind": {
+                "enum": [
+                  "calendar_preference",
+                  "interval_votes",
+                  "probability_votes",
+                  null
+                ]
+              },
+              "unit": {
+                "enum": [
+                  "votes",
+                  "clicks"
+                ]
+              },
+              "observed_at": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "generated_at": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "latest_vote_at": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "window_start": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "window_end": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "recent_votes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "total_votes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            }
+          }
         }
       }
     },
@@ -629,7 +757,10 @@
           "maximum": 2
         },
         "without_community_probability": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "minimum": 0,
           "maximum": 1
         },

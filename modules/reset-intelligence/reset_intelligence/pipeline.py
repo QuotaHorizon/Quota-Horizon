@@ -15,6 +15,7 @@ from .signals import apply_comment_estimates
 from .lifecycle import cycle_issues, live_cycle
 from .sources import normalization_outdated
 from .sentiment import calendar_overlay
+from .community_diagnostics import initialize_community_diagnostics, record_community_diagnostic, public_community_diagnostics
 
 HOURS = list(range(1, 73))
 
@@ -93,6 +94,7 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                                         "private": name in (private_source_ids or set()) or (any(p.get("private") for p in obs.polls) if obs else False)})
         if obs:
             result["facts"].extend(f for f in obs.facts if f.get("kind") in ("statement", "structured_schedule") and f["at"] <= now)
+    initialize_community_diagnostics(result, observations, config, source_ids, private_source_ids)
     if not ledger or len(events) < 3 or not ledger.complete or ledger.issues:
         result["reason"] = "event_history_unavailable_or_incomplete"
         return result
@@ -181,19 +183,23 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
     for obs in observations.values():
         for poll in obs.polls:
             if poll["target"] != target:
+                record_community_diagnostic(result, obs, poll, "target_mismatch")
                 continue
             health = next(h for h in result["source_health"] if h["id"] == obs.source)
             if now - obs.observed_at > 1800 or obs.issues:
                 health["issues"].append("poll_observation_stale_or_excluded")
+                record_community_diagnostic(result, obs, poll, "observation_stale" if now - obs.observed_at > 1800 else "source_quality")
                 continue
             sampling = {}
             if poll["kind"] != "count_distribution":
                 poll, sampling = recent_ballot(store, obs.source, poll, now, half_life_hours=config.poll_half_life_hours)
                 if not poll["total"]:
                     health["issues"].append("empty_poll" if sampling["total_votes"] == 0 else sampling["sampling_state"])
+                    record_community_diagnostic(result, obs, poll, "empty_poll" if sampling["total_votes"] == 0 else sampling["sampling_state"], sampling)
                     continue
                 if poll["total"] < config.minimum_recent_votes:
                     health["issues"].append("insufficient_recent_votes")
+                    record_community_diagnostic(result, obs, poll, "insufficient_recent_votes", sampling)
                     continue
             if poll["kind"] == "calendar_preference":
                 converted, reason = calendar_overlay(poll, sampling, now, cycle.get("occurred_at", last_event_at),
@@ -206,10 +212,12 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
                 converted = ballot_curve(poll, now, HOURS, baseline, last_event_at, config)
             if converted is None:
                 health["issues"].append(reason or "no_usable_current_poll")
+                record_community_diagnostic(result, obs, poll, reason or "no_usable_current_poll", sampling)
                 continue
             fingerprint = digest({k: poll.get(k) for k in ("kind", "target", "population", "id", "start", "expires", "bins", "rows")})
             if fingerprint in seen_polls:
                 health["issues"].append("duplicate_poll_round")
+                record_community_diagnostic(result, obs, poll, "duplicate_poll_round", sampling)
                 continue
             seen_polls.add(fingerprint)
             terminal = (converted["coverage_hours"], converted["terminal_probability"]) if "terminal_probability" in converted else None
@@ -218,6 +226,7 @@ def forecast(store, now: float, target: str, config: ModelConfig | None = None,
             converted["fresh_until"] = min(obs.observed_at + 1800, poll["expires"])
             components.append({"id": obs.source, "family": "community", "dependency": poll["population"],
                                "probabilities": values, "metadata": converted, "private": poll.get("private", False)})
+            record_community_diagnostic(result, obs, poll, None, sampling)
 
     mixed = combine(components, config, informed_floor=informed_floor)
     result["combination_method"] = "baseline_plus_revisions"
@@ -286,7 +295,7 @@ def consumer_export(results: list[dict]) -> dict:
         without_community = result.get("counterfactuals", {}).get("without_community", [])
         item = {"target": result["target"], "status": result["status"],
                 "issued_at": iso(result["issued_at"]), "model_version": result["model_version"],
-                "evaluation_version": result["model_version"] + ":" + result["config_hash"],
+                "evaluation_version": result.get("evaluation_version") or result["model_version"] + ":" + result["config_hash"],
                 "last_event_at": result.get("last_event_at"),
                 "cycle": {k: result["cycle"].get(k) for k in
                           ("time_basis", "occurred_at", "confirmation_at", "invalidation_at", "references", "identity")}
@@ -305,6 +314,7 @@ def consumer_export(results: list[dict]) -> dict:
                 "event_count": result["event_count"], "sources": [], "community": None,
                 "family_weights": result.get("training", {}).get("weights", {}),
                 "community_inputs": [],
+                "community_diagnostics": public_community_diagnostics(result),
                 "changes": result.get("changes"),
                 "source_health": [{k: h.get(k) for k in ("id", "last_success", "generated_at", "error", "issues")}
                                   for h in result["source_health"] if not h["private"]],

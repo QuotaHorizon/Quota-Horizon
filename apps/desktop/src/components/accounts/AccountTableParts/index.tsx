@@ -9,6 +9,7 @@ import type {
 } from "../../../types";
 import { formatCompactTokenCount } from "../../../utils/tokenContext";
 import { shouldShowUsageError } from "../../../utils/usageErrors";
+import { resetCreditExpiryHint, summarizeResetCreditExpiry } from "../../../utils/resetCreditExpiry";
 import {
   DailyTokenUsageTooltip,
   EMPTY_TOKEN_TOTALS,
@@ -47,10 +48,24 @@ export function resetCreditsCount(state?: ResetCreditsLoadState) {
   return state?.status === "loaded" ? state.data.credits.length : null;
 }
 
-export function AccountResetCreditCount({ count, language }: { count: number | null; language: Language }) {
+export function AccountResetCreditCount({ state, language, onOpen, now = Date.now() }: {
+  state?: ResetCreditsLoadState;
+  language: Language;
+  onOpen: () => void;
+  now?: number;
+}) {
+  const count = resetCreditsCount(state);
   if (!count) return null;
   const label = language === "zh" ? `${count}重置卡` : `${count} reset card${count === 1 ? "" : "s"}`;
-  return <span className="account-reset-credit-count"><span aria-hidden="true">·</span>{label}</span>;
+  const expiry = state?.status === "loaded" ? resetCreditExpiryHint(
+    summarizeResetCreditExpiry(state.data.credits, now), count, language,
+    { saved: true, now, capturedAt: state.fetchedAt }) : null;
+  return <button type="button" className="account-reset-credit-count" title={expiry?.title}
+    aria-label={`${label} · ${expiry?.text ?? ""} · ${language === "zh" ? "查看详情" : "View details"}`}
+    onClick={(event) => { event.stopPropagation(); onOpen(); }}>
+    <span className="account-reset-credit-label"><span aria-hidden="true">·</span>{label}</span>
+    {expiry && <small>{expiry.text}</small>}
+  </button>;
 }
 
 export function CopyableAccountEmail({ email, displayEmail, t }: {

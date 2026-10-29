@@ -257,6 +257,12 @@ pub(crate) fn parse_reset_credits(payload: &Value) -> Result<ResetCreditsSummary
         .ok_or_else(|| "重置卡接口响应缺少 credits 列表".to_string())?;
     let mut result = credits
         .iter()
+        .filter(|credit| {
+            credit
+                .get("status")
+                .and_then(Value::as_str)
+                .is_none_or(|status| status.eq_ignore_ascii_case("available"))
+        })
         .map(|credit| ResetCredit {
             issued_at: normalized_timestamp(
                 credit
@@ -264,6 +270,10 @@ pub(crate) fn parse_reset_credits(payload: &Value) -> Result<ResetCreditsSummary
                     .or_else(|| credit.get("created_at")),
             ),
             expires_at: normalized_timestamp(credit.get("expires_at")),
+            available: credit
+                .get("status")
+                .and_then(Value::as_str)
+                .map(|status| status.eq_ignore_ascii_case("available")),
         })
         .collect::<Vec<_>>();
     result.sort_by(|left, right| left.expires_at.cmp(&right.expires_at));
@@ -402,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn returns_only_reset_credit_times() {
+    fn returns_only_reset_credit_times_and_availability() {
         let summary = parse_reset_credits(&json!({
             "available_count": 1,
             "credits": [{
@@ -423,6 +433,22 @@ mod tests {
             "2026-07-30T03:04:05+00:00"
         );
         assert!(serialized.to_string().find("must-not-leave-rust").is_none());
+        assert_eq!(serialized["credits"][0]["available"], true);
+    }
+
+    #[test]
+    fn reset_credit_availability_preserves_legacy_cards_and_excludes_inactive_cards() {
+        let summary = parse_reset_credits(&json!({"credits": [
+            {"status": "AVAILABLE", "expires_at": "2026-10-31T00:00:00Z"},
+            {"status": "used", "expires_at": "2026-11-01T00:00:00Z"},
+            {"status": "expired", "expires_at": "2026-11-01T00:00:00Z"},
+            {"status": "unknown", "expires_at": "2026-11-01T00:00:00Z"},
+            {"expires_at": "2026-11-02T00:00:00Z"}
+        ]}))
+        .unwrap();
+        assert_eq!(summary.credits.len(), 2);
+        assert_eq!(summary.credits[0].available, Some(true));
+        assert_eq!(summary.credits[1].available, None);
     }
 
     #[test]

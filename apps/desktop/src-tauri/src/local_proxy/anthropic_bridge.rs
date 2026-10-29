@@ -124,6 +124,8 @@ struct ParsedResponsesStream {
     text: String,
     tools: Vec<ParsedToolCall>,
     usage: Value,
+    incomplete_reason: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Default)]
@@ -134,25 +136,28 @@ struct ParsedToolCall {
 }
 
 fn parse_responses_sse(sse: &[u8]) -> ParsedResponsesStream {
-    let source = String::from_utf8_lossy(sse);
+    let source = String::from_utf8_lossy(sse).replace("\r\n", "\n");
     let mut parsed = ParsedResponsesStream {
         response_id: "resp_codex_switch".to_string(),
         usage: json!({ "input_tokens": 0, "output_tokens": 0 }),
         ..Default::default()
     };
+    let mut terminated = false;
     for block in source.split("\n\n") {
-        let Some(data) = block
+        let data = block
             .lines()
-            .find_map(|line| line.strip_prefix("data:"))
-        else {
-            continue;
-        };
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim_start)
+            .collect::<Vec<_>>()
+            .join("\n");
         let data = data.trim();
-        if data == "[DONE]" {
+        if data.is_empty() || data == "[DONE]" {
             continue;
         }
         let Ok(value) = serde_json::from_str::<Value>(data) else {
-            continue;
+            parsed.error = Some("Upstream response contained an invalid stream event".to_string());
+            terminated = true;
+            break;
         };
         match value.get("type").and_then(Value::as_str) {
             Some("response.created") => {
@@ -197,39 +202,98 @@ fn parse_responses_sse(sse: &[u8]) -> ParsedResponsesStream {
                     }
                 }
             }
-            Some("response.completed") => {
+            Some("response.completed" | "response.incomplete" | "response.failed") => {
                 if let Some(completed_usage) = value.pointer("/response/usage") {
                     parsed.usage = anthropic_usage(Some(completed_usage));
                 }
+                match value.get("type").and_then(Value::as_str) {
+                    Some("response.incomplete") => {
+                        let reason = value
+                            .pointer("/response/incomplete_details/reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown");
+                        parsed.incomplete_reason = Some(reason.to_string());
+                        if reason != "max_output_tokens" {
+                            parsed.error = Some(format!("Upstream response incomplete: {reason}"));
+                        }
+                    }
+                    Some("response.failed") => {
+                        parsed.error = Some(
+                            value
+                                .pointer("/response/error/message")
+                                .and_then(Value::as_str)
+                                .unwrap_or("Upstream response failed")
+                                .to_string(),
+                        );
+                    }
+                    _ => {}
+                }
+                terminated = true;
+                break;
+            }
+            Some("error") => {
+                parsed.error = Some(
+                    value
+                        .pointer("/error/message")
+                        .or_else(|| value.get("message"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("Upstream response failed")
+                        .to_string(),
+                );
+                terminated = true;
+                break;
             }
             _ => {}
         }
+    }
+    if !terminated {
+        parsed.error = Some("Upstream response stream ended before completion".to_string());
+    }
+    if parsed.incomplete_reason.is_some()
+        && parsed.error.is_none()
+        && parsed.tools.iter().any(|tool| {
+            !serde_json::from_str::<Value>(&tool.arguments).is_ok_and(|value| value.is_object())
+        })
+    {
+        parsed.error = Some("Upstream response stopped with incomplete tool arguments".to_string());
     }
     parsed
 }
 
 fn responses_sse_to_anthropic_message(sse: &[u8], model: &str) -> Value {
     let parsed = parse_responses_sse(sse);
+    if let Some(message) = parsed.error {
+        return json!({ "type": "error", "error": { "type": "api_error", "message": message } });
+    }
     let mut output = vec![json!({
         "type": "message",
         "content": [{ "type": "output_text", "text": parsed.text }]
     })];
-    output.extend(parsed.tools.iter().map(|tool| {
-        json!({
-            "type": "function_call",
-            "call_id": tool.id,
-            "name": tool.name,
-            "arguments": tool.arguments
-        })
-    }));
-    responses_to_anthropic(
+    output.extend(
+        parsed.tools.iter().filter(|tool| {
+            parsed.incomplete_reason.is_none()
+                || serde_json::from_str::<Value>(&tool.arguments).is_ok_and(|value| value.is_object())
+        }).map(|tool| {
+            json!({
+                "type": "function_call",
+                "call_id": tool.id,
+                "name": tool.name,
+                "arguments": tool.arguments
+            })
+        }),
+    );
+    let mut message = responses_to_anthropic(
         &json!({
             "id": parsed.response_id,
             "output": output,
             "usage": parsed.usage
         }),
         model,
-    )
+    );
+    if parsed.incomplete_reason.is_some() {
+        message["stop_reason"] = json!("max_tokens");
+    }
+    message
 }
 
 fn responses_sse_to_anthropic(sse: &[u8], model: &str) -> String {
@@ -253,9 +317,11 @@ fn responses_sse_to_anthropic(sse: &[u8], model: &str) -> String {
             "type": "content_block_delta", "index": index,
             "delta": { "type": "text_delta", "text": parsed.text }
         }));
-        push_anthropic_sse(&mut output, "content_block_stop", json!({
-            "type": "content_block_stop", "index": index
-        }));
+        if parsed.error.is_none() {
+            push_anthropic_sse(&mut output, "content_block_stop", json!({
+                "type": "content_block_stop", "index": index
+            }));
+        }
         index += 1;
     }
     for tool in &parsed.tools {
@@ -269,15 +335,24 @@ fn responses_sse_to_anthropic(sse: &[u8], model: &str) -> String {
             "type": "content_block_delta", "index": index,
             "delta": { "type": "input_json_delta", "partial_json": tool.arguments }
         }));
-        push_anthropic_sse(&mut output, "content_block_stop", json!({
-            "type": "content_block_stop", "index": index
-        }));
+        if parsed.error.is_none() {
+            push_anthropic_sse(&mut output, "content_block_stop", json!({
+                "type": "content_block_stop", "index": index
+            }));
+        }
         index += 1;
+    }
+    if let Some(message) = parsed.error {
+        push_anthropic_sse(&mut output, "error", json!({
+            "type": "error", "error": { "type": "api_error", "message": message }
+        }));
+        return output;
     }
     push_anthropic_sse(&mut output, "message_delta", json!({
         "type": "message_delta",
         "delta": {
-            "stop_reason": if parsed.tools.is_empty() { "end_turn" } else { "tool_use" },
+            "stop_reason": if parsed.incomplete_reason.is_some() { "max_tokens" }
+                else if parsed.tools.is_empty() { "end_turn" } else { "tool_use" },
             "stop_sequence": Value::Null
         },
         "usage": parsed.usage

@@ -576,6 +576,49 @@ fn consumer_preserves_exact_evaluation_identity_and_legacy_reports() {
     }
 }
 #[test]
+fn community_diagnostics_keep_recent_sample_and_strip_nonpublic_details() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("consumer.json");
+    let mut value = fixture();
+    let row = json!({"id":"date_poll", "target":"broad_quota_relief", "state":"excluded",
+        "reason":"insufficient_recent_votes", "observed_at":1793318400., "generated_at":1793318340.,
+        "read_failed":true, "recent_votes":18, "total_votes":1018, "minimum_recent_votes":50,
+        "observation_window_hours":6., "latest_vote_at":1793318100., "window_start":1793314800.,
+        "window_end":1793404800., "question_kind":"interval_votes", "unit":"votes",
+        "raw_url":"private-provenance-must-not-escape"});
+    let mut private = row.clone();
+    private["id"] = json!("private_signal");
+    value["forecasts"][0]["community_diagnostics"] = json!([row.clone(), private, row.clone()]);
+    fs::write(&path, value.to_string()).unwrap();
+    let parsed = parse_forecast(&path).unwrap();
+    let rows = &parsed.forecasts[0].community_diagnostics;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].recent_votes, Some(18));
+    assert_eq!(rows[0].total_votes, Some(1018));
+    assert!(rows[0].read_failed);
+    assert!(!serde_json::to_string(&parsed)
+        .unwrap()
+        .contains("private-provenance"));
+    for (field, bad) in [
+        ("recent_votes", json!(2000)),
+        ("minimum_recent_votes", json!(20)),
+        ("observation_window_hours", json!(24)),
+        ("window_end", json!(1)),
+        ("state", json!("included")),
+    ] {
+        let mut invalid = row.clone();
+        invalid[field] = bad;
+        value["forecasts"][0]["community_diagnostics"] = json!([invalid]);
+        fs::write(&path, value.to_string()).unwrap();
+        assert!(
+            parse_forecast(&path).unwrap().forecasts[0]
+                .community_diagnostics
+                .is_empty(),
+            "{field}"
+        );
+    }
+}
+#[test]
 fn announcement_context_retains_deadline_without_changing_probability() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("consumer.json");

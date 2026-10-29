@@ -27,13 +27,17 @@ def canonical_events(observation, target: str, now: float) -> list[Event]:
     return sorted((min(g, key=lambda e: (e.at, e.id)) for g in groups), key=lambda e: e.at)
 
 
-def matured(store, now: float, target: str, hours: int, config_hash: str | None = None) -> list[dict]:
+def matured(store, now: float, target: str, hours: int, config_hash: str | None = None,
+            evaluation_version: str | None = None) -> list[dict]:
+    from .identity import evaluation_identity
     obs = store.observations(now).get("event_ledger")
     events = canonical_events(obs, target, now)
     out, last_end = [], float("-inf")
     for f in store.forecasts(now, target):
         start, end = f["issued_at"], f["issued_at"] + hours * 3600
-        if f["model_version"] != MODEL_VERSION or (config_hash is not None and f["config_hash"] != config_hash):
+        if f["model_version"] != MODEL_VERSION or (evaluation_version is not None and evaluation_identity(f) != evaluation_version):
+            continue
+        if evaluation_version is None and config_hash is not None and f["config_hash"] != config_hash:
             continue
         # A reporting grace period and monitored coverage are required for zero
         # labels. Late discoveries can revise scores without rewriting forecasts.
@@ -53,10 +57,11 @@ def matured(store, now: float, target: str, hours: int, config_hash: str | None 
     return out
 
 
-def forward_report(store, now: float, target: str, config_hash: str | None = None) -> dict:
+def forward_report(store, now: float, target: str, config_hash: str | None = None,
+                   evaluation_version: str | None = None) -> dict:
     results = {}
     for h in (24, 48):
-        rows = matured(store, now, target, h, config_hash)
+        rows = matured(store, now, target, h, config_hash, evaluation_version)
         p, y = [r["p"] for r in rows], [r["label"] for r in rows]
         b = [r["baseline"] for r in rows]
         source_scores = {}
@@ -71,6 +76,7 @@ def forward_report(store, now: float, target: str, config_hash: str | None = Non
                            "paired_brier_difference_95": paired_block_interval([(a - c) ** 2 - (v - c) ** 2 for a, v, c in zip(p, b, y)])}
     return {"mode": "prospective_nonoverlapping", "target": target, "as_of": now,
             "config_hash": config_hash,
+            "evaluation_version": evaluation_version,
             "label_reporting_grace_hours": 3, "windows": results}
 
 

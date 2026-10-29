@@ -15,7 +15,7 @@ fn anthropic_token_probe_payload(body: &[u8]) -> UpstreamPayload {
             content_type: Some("text/event-stream; charset=utf-8".to_string()),
             response_headers: Vec::new(),
             body: UpstreamBody::Buffered(
-                responses_sse_to_anthropic(&[], model).into_bytes(),
+                responses_sse_to_anthropic(b"data: {\"type\":\"response.completed\"}\n\n", model).into_bytes(),
             ),
             token_usage_account: None,
         };
@@ -140,10 +140,13 @@ fn convert_responses_payload(
             token_usage_account: payload.token_usage_account,
         });
     }
-    let mut converted = json_payload(
-        payload.status,
-        responses_sse_to_anthropic_message(&response_body, model),
-    );
+    let message = responses_sse_to_anthropic_message(&response_body, model);
+    let status = if message.get("type").and_then(Value::as_str) == Some("error") {
+        502
+    } else {
+        payload.status
+    };
+    let mut converted = json_payload(status, message);
     converted.response_headers = payload.response_headers;
     converted.token_usage_account = payload.token_usage_account;
     Ok(converted)

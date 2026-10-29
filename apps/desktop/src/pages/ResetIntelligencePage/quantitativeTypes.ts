@@ -36,10 +36,21 @@ export interface QuantForecast {
     mapping_kind?: "sentiment_innovation" | "sentiment_level" | null; mapping_version?: string | null; reference_share?: number | null; recent_share?: number | null;
     log_odds_change?: number | null; repeat_sensitivity_units?: number | null; window_start?: number | null; window_end?: number | null; terminal_probability?: number | null }[];
   community_coverage?: { included: number; unavailable: number; supplementary_included: number; supplementary_checked: number; supplementary_weight: number } | null;
+  community_diagnostics?: CommunityDiagnostic[];
   changes?: QuantChanges | null;
   statements?: { id: string; at: number; url: string; original: string; translation_zh: string | null;
     stage: string | null; event_type: string | null; collector?: string | null; context: { text: string; url: string } | null;
     relevance?: string | null; is_reply?: boolean | null; parent?: {id: string; author: string; url: string; text: string | null} | null }[];
+}
+export interface CommunityDiagnostic {
+  id: "date_poll" | "didcodex_poll" | "community_poll";
+  target: ResetTarget; state: "included" | "excluded"; reason: string | null;
+  observed_at: number | null; generated_at: number | null; read_failed: boolean;
+  recent_votes: number | null; total_votes: number | null; minimum_recent_votes: number;
+  observation_window_hours: number; latest_vote_at: number | null;
+  window_start: number | null; window_end: number | null;
+  question_kind: "calendar_preference" | "probability_votes" | "interval_votes" | null;
+  unit: "clicks" | "votes";
 }
 export interface ForecastIdentity { source: string; version: string; track: "native" | "adapted" | "model" | "shadow" }
 export interface QuantLatest extends ForecastIdentity {
@@ -112,7 +123,12 @@ export interface QuantReport {
 export interface QuantitativeView {
   connected: boolean; checkedAt: string; forecastIssue: string | null; evaluationIssue: string | null;
   runtime?: { managed: boolean; state: "external" | "checking" | "starting" | "running" | "retrying";
-    checkedAt: string | null; retryAt: string | null; issue: string | null };
+    checkedAt: string | null; retryAt: string | null; issue: string | null;
+    health?: "healthy" | "collecting" | "evaluating" | "maintaining" | "degraded" | "stalled" | "recovering" | "starting" | "external" | null;
+    lastCaptureAt?: string | null; lastReportAt?: string | null;
+    storage?: {observerBytes: number; producerBytes?: number | null; logBytes: number; logLimitBytes: number;
+      maintenance: {module: "observer" | "producer"; phase: string; state?: string | null; error?: string | null}[]} | null;
+  };
   forecast: { schema_version: "reset-intelligence-consumer/1"; forecasts: QuantForecast[] } | null;
   evaluation: QuantReport | null;
   presentation?: { issuedAt: string; receivedAt: number; presentedAt: number | null; visible: boolean | null };

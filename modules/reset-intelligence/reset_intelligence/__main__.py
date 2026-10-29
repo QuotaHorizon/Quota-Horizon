@@ -20,6 +20,7 @@ from .sources import collect, configured_sources
 from .store import Store
 from .audit import source_audit
 from .changes import explain_change, previous_forecast
+from .identity import rule_identity
 
 
 def write_json(path: str, payload: dict):
@@ -97,6 +98,7 @@ def main(argv=None) -> int:
         implementation = digest({p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                                  for p in sorted(Path(__file__).parent.glob("*.py"))})
         full_config = {"model": asdict(config), "sources": specs, "implementation_hash": implementation,
+                       "evaluation_version": rule_identity(config, specs),
                        "runtime": {"python": ".".join(map(str, sys.version_info[:3])), "numpy": np.__version__}}
         if args.command == "replay":
             saved = store.config_at(now)
@@ -104,6 +106,8 @@ def main(argv=None) -> int:
                 parser.error("no configuration was known at the requested time")
             if saved.get("implementation_hash") != implementation:
                 parser.error("replay requires the implementation revision that issued the forecast")
+            if saved.get("runtime") != full_config["runtime"]:
+                parser.error("replay requires the numerical runtime that issued the forecast")
             full_config = saved
             config = ModelConfig(**saved["model"])
         config_hash = digest(full_config)
@@ -117,7 +121,7 @@ def main(argv=None) -> int:
             obs = store.observations(now).get("event_ledger")
             payload = {"as_of": iso(now), "targets": [
                 {"target": t, "retrospective": retrospective(canonical_events(obs, t, now), now, config),
-                 "prospective": forward_report(store, now, t, config_hash)} for t in targets]}
+                 "prospective": forward_report(store, now, t, config_hash, full_config.get("evaluation_version"))} for t in targets]}
             if args.output:
                 write_json(args.output, payload)
             print(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False))
@@ -126,6 +130,8 @@ def main(argv=None) -> int:
         private_ids = {s["id"] for s in full_config["sources"] if s["adapter"] == "count_market" or s.get("private")}
         results = [r for r in forecast_all(store, now, config, config_hash, source_ids, private_ids) if r["target"] in targets]
         for result in results:
+            # Old recorded builds retain their exact legacy identity on replay.
+            result["evaluation_version"] = full_config.get("evaluation_version") or result["model_version"] + ":" + config_hash
             result["changes"] = explain_change(result, previous_forecast(store, result))
         if args.command != "replay":
             for result in results:

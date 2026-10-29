@@ -302,6 +302,9 @@ mod tests {
                     summary_status: SummaryStatus::Available,
                     available_count: Some(99),
                     details_status: ResetCreditDetailsStatus::Complete,
+                    next_expires_at: None,
+                    known_expiry_count: 0,
+                    expiry_details_complete: false,
                 },
                 usage: DesktopUsageView {
                     availability: Availability::Complete,

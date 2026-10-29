@@ -8,6 +8,7 @@ export interface ReleaseUpdate {
   currentVersion: string;
   latestVersion: string | null;
   available: boolean;
+  state: "available" | "up_to_date" | "platform_pending" | "no_release" | "unsupported_platform";
   notes: string;
   url: string;
 }
@@ -21,7 +22,19 @@ function preferences(): Preference {
   } catch { return {}; }
 }
 export function shouldNotify(update: ReleaseUpdate, preference: Preference, now: number) {
-  return update.available && update.latestVersion !== preference.ignored && now >= (preference.laterUntil ?? 0);
+  return update.available && update.state === "available" && update.latestVersion !== preference.ignored && now >= (preference.laterUntil ?? 0);
+}
+
+export function releaseCheckMessage(update: ReleaseUpdate, language: Language) {
+  const zh = language === "zh";
+  switch (update.state) {
+    case "up_to_date": return zh ? "当前已是最新可用版本" : "You have the latest available version";
+    case "platform_pending": return zh ? `v${update.latestVersion} 已发布，本平台安装包尚未就绪` : `v${update.latestVersion} is published; the installer for this platform is not ready yet`;
+    case "no_release": return zh ? "暂未找到正式发布版本" : "No stable release is currently published";
+    case "unsupported_platform": return zh ? "当前平台暂无公开安装包" : "No public installer is available for this platform";
+    case "available": return zh ? `发现新版本 v${update.latestVersion}` : `Update available: v${update.latestVersion}`;
+    default: return zh ? "未能确认发布状态，请稍后重试" : "Unable to confirm release status. Please try again later";
+  }
 }
 
 export function ReleaseUpdateDialog({ update, language, onLater, onIgnore, onDownload }: {
@@ -51,21 +64,25 @@ export function ReleaseUpdateDialog({ update, language, onLater, onIgnore, onDow
   </div>;
 }
 
-export function ReleaseUpdates({ language, manualRequest, notify }: { language: Language; manualRequest: number; notify: (text: string) => void }) {
+export function ReleaseUpdates({ language, manualRequest, notify, onCheckingChange }: { language: Language; manualRequest: number; notify: (text: string) => void; onCheckingChange?: (checking: boolean) => void }) {
   const [update, setUpdate] = useState<ReleaseUpdate | null>(null);
-  const busy = useRef(false), alive = useRef(true), context = useRef({ language, notify });
-  context.current = { language, notify };
+  const busy = useRef(false), manualPending = useRef(false), alive = useRef(true), context = useRef({ language, notify, onCheckingChange });
+  context.current = { language, notify, onCheckingChange };
   const check = useCallback(async (manual: boolean) => {
-    if (busy.current || !("__TAURI_INTERNALS__" in window)) return;
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    // A manual request joins an ongoing automatic check instead of disappearing.
+    if (manual) manualPending.current = true;
+    if (busy.current) return;
     busy.current = true;
+    context.current.onCheckingChange?.(true);
     try {
       const result = await invoke<ReleaseUpdate>("check_release_update");
       if (!alive.current) return;
-      if (result.available && (manual || shouldNotify(result, preferences(), Date.now()))) setUpdate(result);
-      else if (manual) context.current.notify(context.current.language === "zh" ? "当前已是最新可用版本" : "You have the latest available version");
+      if (result.available && result.state === "available" && (manualPending.current || shouldNotify(result, preferences(), Date.now()))) setUpdate(result);
+      else if (manualPending.current) context.current.notify(releaseCheckMessage(result, context.current.language));
     } catch {
-      if (manual && alive.current) context.current.notify(context.current.language === "zh" ? "暂时无法检查更新，请稍后重试" : "Unable to check for updates. Please try again later.");
-    } finally { busy.current = false; }
+      if (manualPending.current && alive.current) context.current.notify(context.current.language === "zh" ? "暂时无法检查更新，请稍后重试" : "Unable to check for updates. Please try again later.");
+    } finally { busy.current = false; manualPending.current = false; if (alive.current) context.current.onCheckingChange?.(false); }
   }, []);
   useEffect(() => {
     alive.current = true;

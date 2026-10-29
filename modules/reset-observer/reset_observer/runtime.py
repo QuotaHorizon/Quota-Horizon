@@ -12,6 +12,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+import uuid
 
 from .benchmark import freeze_grid, initialize, settle_all
 from .contracts import Policy, digest, iso
@@ -20,6 +21,8 @@ from .diagnostics import runtime_gap
 from .importers import intelligence_database, json_lines
 from .reporting import ReportCache, build_report, html_report
 from .store import Store, storage_upgrade_step
+from .health import mark_progress, process_identity, worker_health, public_health, consider_recovery
+from .bounded_log import compact_log, managed_log
 
 
 def atomic_write(path, text):
@@ -141,6 +144,7 @@ def run_once(args, config, refresh=False, evaluator=None):
     policy = Policy(**config.get("policy", {}))
     store = Store(args.db)
     try:
+        mark_progress(store, "capture", "collecting")
         initialize(store, time.time(), policy)
         from .reaction import initialize as initialize_reaction
         initialize_reaction(store, time.time())
@@ -256,6 +260,7 @@ def run_once(args, config, refresh=False, evaluator=None):
                 "phase_seconds": timings,
             },
         )
+        mark_progress(store, "capture", "idle", success=True)
         if evaluator is None:
             result = evaluate(args, policy, now, evidence, runtime, preference_features)
         else:
@@ -282,6 +287,7 @@ def evaluate(args, policy, now, evidence, runtime, preference_features=None, rep
     """
     store = Store(args.db)
     try:
+        mark_progress(store, "evaluation", "evaluating")
         phase = time.monotonic()
         revisions = settle_all(store, now, policy, evidence)
         from .preferences import settle as settle_preferences
@@ -327,11 +333,15 @@ def evaluate(args, policy, now, evidence, runtime, preference_features=None, rep
         from .retention import reclaim_cache_pages
         maintain_raw_cache(store.db, now)
         reclaim_cache_pages(store)
+        mark_progress(store, "evaluation", "idle", success=True)
         return {
             "state": report["state"],
             "settlement_updates": revisions,
             "summary": report["summary"],
         }
+    except Exception as exc:
+        mark_progress(store, "evaluation", "failed", error=type(exc).__name__)
+        raise
     finally:
         store.close()
 
@@ -381,6 +391,11 @@ class BackgroundEvaluation:
 
 def maintain_storage(args):
     """The capture and evaluation connections are idle during this step."""
+    store = Store(args.db)
+    try:
+        mark_progress(store, "capture", "maintaining")
+    finally:
+        store.close()
     def retire():
         from .retention import retain_reports, retain_auxiliary_forecasts
         store = Store(args.db)
@@ -396,6 +411,7 @@ def maintain_storage(args):
     try:
         if store.get("storage_maintenance") != result:
             store.put("storage_maintenance", result)
+        mark_progress(store, "capture", "idle")
     finally:
         store.close()
     return result
@@ -458,7 +474,7 @@ def launch_signature(args, config):
 
 
 def watch(args, config):
-    with exclusive(args.db):
+    with exclusive(args.db), managed_log(args.db, getattr(args, "managed_log", False)):
         revision = bundled_revision()
         atomic_write(
             worker_path(args.db),
@@ -467,6 +483,9 @@ def watch(args, config):
                     "revision": revision,
                     "pid": os.getpid(),
                     "launch_signature": launch_signature(args, config),
+                    "managed": revision is not None,
+                    "owner_nonce": uuid.uuid4().hex,
+                    "process_identity": process_identity(os.getpid()),
                 }
             ),
         )
@@ -517,6 +536,7 @@ def watch(args, config):
                     # Keep collecting after a transient provider/parse failure.
                     # Logs contain categories only, not responses or private URLs.
                     with_store = Store(args.db)
+                    mark_progress(with_store, "capture", "failed", error=type(exc).__name__)
                     with_store.put(
                         "heartbeat",
                         {
@@ -593,13 +613,20 @@ def start(args):
         ):
             stop_path(args.db).touch()
             return {"state": "restarting"}
-        return {"state": "already_running"}
+        health = worker_health(args.db, getattr(args, "producer_db", None))
+        recovery = consider_recovery(args, previous, health, expected, revision)
+        if recovery == "recovering":
+            health["health"] = "recovering"
+        if revision is None or not previous.get("managed"):
+            health["health"] = "external" if health["health"] == "healthy" else health["health"]
+        return {"state": "restarting" if recovery == "recovering" else "already_running", **public_health(health)}
     command = [
         sys.executable,
         *(["-I", "-B", "-X", "utf8"] if bundled_revision() else []),
         "-m",
         "reset_observer",
         "watch",
+        "--managed-log",
         "--db",
         str(Path(args.db).resolve()),
     ]
@@ -609,6 +636,7 @@ def start(args):
             command.extend(["--" + name.replace("_", "-"), str(Path(value).resolve())])
     log_path = Path(str(Path(args.db).resolve()) + ".log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    compact_log(log_path)
     with log_path.open("ab") as log:
         process = subprocess.Popen(
             command,
@@ -620,7 +648,9 @@ def start(args):
             close_fds=True,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
-    return started_worker(process, args.db, log_path)
+    result = started_worker(process, args.db, log_path)
+    return {**result, **public_health(worker_health(args.db, getattr(args, "producer_db", None))),
+            "health": "starting"}
 
 
 def started_worker(process, db, log_path, timeout=3.0):
@@ -643,7 +673,7 @@ def started_worker(process, db, log_path, timeout=3.0):
         time.sleep(0.05)
 
 
-def status(db):
+def status(db, producer_db=None):
     if not Path(db).is_file():
         return {"state": "not_started"}
     store = Store(db, read_only=True)
@@ -653,6 +683,7 @@ def status(db):
         report = store.report_at(time.time())
         return {
             "state": "running" if active else "stopped",
+            **public_health(worker_health(db, producer_db)),
             "heartbeat": heartbeat,
             "heartbeat_age_seconds": time.time() - heartbeat["at"]
             if heartbeat

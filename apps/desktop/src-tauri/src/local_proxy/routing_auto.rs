@@ -36,27 +36,48 @@ fn credential_can_trigger_auto_switch(account: &TokenUsageAccount) -> bool {
 }
 
 fn is_official_quota_exhaustion(payload: &UpstreamPayload) -> bool {
-    if payload.status == 429 {
-        return true;
-    }
-    if payload.status != 403 {
+    if !matches!(payload.status, 403 | 429) {
         return false;
     }
     let UpstreamBody::Buffered(body) = &payload.body else {
         return false;
     };
-    let message = String::from_utf8_lossy(body).to_ascii_lowercase();
-    [
-        "quota",
-        "usage_limit",
-        "rate_limit",
-        "rate limit",
-        "limit reached",
-        "额度",
-        "配额",
-    ]
-    .iter()
-    .any(|signal| message.contains(signal))
+    let Ok(error) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    // HTTP 429 also covers transient request/token rate limits. Only explicit
+    // machine-readable quota codes may mutate account routing or eligibility.
+    ["/error/code", "/error/type", "/code", "/type"]
+        .iter()
+        .filter_map(|path| error.pointer(path).and_then(Value::as_str))
+        .any(|code| {
+            matches!(
+                code,
+                "insufficient_quota"
+                    | "usage_limit_reached"
+                    | "quota_exceeded"
+                    | "quota_exhausted"
+                    | "billing_hard_limit_reached"
+            )
+        })
+}
+
+fn upstream_retry_delay(response: &UpstreamPayload, retry_number: u16, now: SystemTime) -> Duration {
+    let retry_after = response.response_headers.iter().find_map(|(name, value)| {
+        name.eq_ignore_ascii_case("retry-after").then_some(value.trim())
+    });
+    retry_after
+        .and_then(|value| {
+            value.parse::<u64>().ok().map(Duration::from_secs).or_else(|| {
+                chrono::DateTime::parse_from_rfc2822(value).ok().map(|date| {
+                    let now: chrono::DateTime<chrono::Utc> = now.into();
+                    date.signed_duration_since(now).to_std().unwrap_or_default()
+                })
+            })
+        })
+        // A zero/past retry date still yields a bounded pause, never a busy loop.
+        .map(|delay| delay.max(Duration::from_secs(1)))
+        .unwrap_or_else(|| upstream_429_retry_delay(retry_number))
 }
 
 fn auto_switch_official_account<R: Runtime>(
@@ -309,6 +330,7 @@ fn account_to_disable_after_429_timeout<'a>(
     settings: &AppSettings,
 ) -> Option<&'a str> {
     if response.status != 429
+        || !is_official_quota_exhaustion(response)
         || !state.auto_switch_on_quota_exhaustion
         || !state.auto_disable_unreachable_accounts
         || !settings.auto_disable_status_codes.contains(&429)

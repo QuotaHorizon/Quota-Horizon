@@ -90,11 +90,12 @@ def import_model(store, payload, now, variants=None):
         raise ValueError("unsupported producer contract")
     if not payload.get("curve"):
         return 0
-    version = payload["model_version"] + ":" + payload["config_hash"]
+    version = payload.get("evaluation_version") or payload["model_version"] + ":" + payload["config_hash"]
     common = dict(version=version, target=payload["target"], origin=payload["issued_at"],
                   generated_at=payload["issued_at"], available_at=now, expires_at=payload["valid_until"])
     issues = [] if payload["status"] == "current" else ["producer_not_current"]
-    metadata = {"inputs_hash": payload["inputs_hash"], "training_state": payload["training"]["state"],
+    metadata = {"inputs_hash": payload["inputs_hash"], "build_config_hash": payload["config_hash"],
+                "training_state": payload["training"]["state"],
                 "upstream_issued_at": payload["issued_at"], "last_reset_at": payload.get("last_event_at"),
                 "cycle": payload.get("cycle")}
     records = [Forecast(source="horizon", track="model", points=[[p["hours"], p["probability"]] for p in payload["curve"]],

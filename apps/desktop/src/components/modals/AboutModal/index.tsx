@@ -1,11 +1,15 @@
+import { useState } from "react";
 import {
+  Copy,
   MessageSquareText,
   RotateCcw,
   Server,
   ShieldCheck,
   X,
 } from "lucide-react";
-import type { Translate } from "../../../i18n";
+import type { Language, Translate } from "../../../i18n";
+import type { AppBuildInfo } from "../../../types";
+import { buildIdentity, buildInfoText } from "./buildInfo";
 import styles from "./index.module.less";
 
 interface AboutModalProps {
@@ -15,6 +19,9 @@ interface AboutModalProps {
   onCheckUpdate: () => void;
   checkUpdateLabel: string;
   version: string;
+  build?: AppBuildInfo;
+  language: Language;
+  checkingUpdate?: boolean;
   t: Translate;
 }
 
@@ -25,8 +32,18 @@ export function AboutModal({
   onCheckUpdate,
   checkUpdateLabel,
   version,
+  build,
+  language,
+  checkingUpdate = false,
   t,
 }: AboutModalProps) {
+  const zh = language === "zh";
+  const identity = buildIdentity(build, language);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const copyBuild = async () => {
+    try { await navigator.clipboard.writeText(buildInfoText(version, build)); setCopyState("copied"); }
+    catch { setCopyState("failed"); }
+  };
   const principles = [
     {
       icon: <ShieldCheck size={18} />,
@@ -93,11 +110,18 @@ export function AboutModal({
             <div>
               <span>{t("about.currentVersion")}</span>
               <b>v{version}</b>
+              <small>{identity.source}</small>
+              {identity.platform && <small>{identity.platform}</small>}
+              <small>{zh ? "构建 " : "Built "}{identity.builtAt ?? (zh ? "时间未记录" : "time unavailable")}</small>
             </div>
+            <button type="button" className="about-copy-build" onClick={() => void copyBuild()}>
+              <Copy size={14} />{copyState === "copied" ? (zh ? "已复制" : "Copied") : (zh ? "复制版本信息" : "Copy version info")}
+            </button>
           </div>
+          {copyState === "failed" && <p className="about-copy-status" role="status">{zh ? "复制失败，请重试" : "Could not copy. Please try again."}</p>}
 
           <div className="about-actions">
-            <button type="button" onClick={onCheckUpdate}><RotateCcw size={15} />{checkUpdateLabel}</button>
+            <button type="button" onClick={onCheckUpdate} disabled={checkingUpdate} aria-busy={checkingUpdate}><RotateCcw size={15} className={checkingUpdate ? "spin" : undefined} />{checkingUpdate ? (zh ? "正在检查…" : "Checking…") : checkUpdateLabel}</button>
             <button type="button" onClick={onFeedback}>
               <MessageSquareText size={15} />
               {t("help.feedback")}

@@ -1,4 +1,16 @@
+mod build_identity;
+
 fn main() {
+    let manifest = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo manifest directory"),
+    );
+    build_identity::emit(
+        manifest
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .expect("workspace root"),
+    );
     tauri_build::build();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         build_macos_lifecycle();

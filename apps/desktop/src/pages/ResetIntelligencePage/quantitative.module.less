@@ -65,3 +65,8 @@
 
 @container radar (max-width:600px) { .card, .hero, .intelligence { padding: 16px; }.hero { grid-template-columns: 1fr; }.chart { padding-top: 12px; border-top: 1px solid var(--line); } }
 .evaluationStats strong small { font-size: 10px; font-weight: 400; color: var(--muted); }
+.ballotStatus { display: grid; gap: 8px; margin-top: 10px; }
+.ballotStatus > div { padding: 9px 0; border-top: 1px solid var(--line); min-width: 0; }
+.ballotStatus > div > div { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; }
+.ballotStatus b { color: var(--ink); font-weight: 550; }
+.ballotStatus small { display: block; font-size: 10px; line-height: 1.8; overflow-wrap: anywhere; }

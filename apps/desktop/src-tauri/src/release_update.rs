@@ -13,8 +13,47 @@ pub struct ReleaseUpdate {
     current_version: String,
     latest_version: Option<String>,
     available: bool,
+    state: ReleaseState,
     notes: String,
     url: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ReleaseState {
+    Available,
+    UpToDate,
+    PlatformPending,
+    NoRelease,
+    UnsupportedPlatform,
+}
+
+fn release_state(
+    latest: [u64; 3],
+    installed: [u64; 3],
+    platform: &str,
+    ready: bool,
+) -> ReleaseState {
+    if !matches!(platform, "macos" | "windows") {
+        ReleaseState::UnsupportedPlatform
+    } else if latest <= installed {
+        ReleaseState::UpToDate
+    } else if ready {
+        ReleaseState::Available
+    } else {
+        ReleaseState::PlatformPending
+    }
+}
+
+fn no_release(current: &str) -> ReleaseUpdate {
+    ReleaseUpdate {
+        current_version: current.into(),
+        latest_version: None,
+        available: false,
+        state: ReleaseState::NoRelease,
+        notes: String::new(),
+        url: RELEASES.into(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -54,6 +93,9 @@ fn stable_version(value: &str) -> Option<[u64; 3]> {
 }
 
 fn interpret(release: Release, current: &str, platform: &str) -> Result<ReleaseUpdate, String> {
+    if release.draft || release.prerelease {
+        return Ok(no_release(current));
+    }
     let latest = stable_version(&release.tag_name).ok_or("invalid_release_version")?;
     let installed = stable_version(current).ok_or("invalid_current_version")?;
     let suffix = match platform {
@@ -65,10 +107,12 @@ fn interpret(release: Release, current: &str, platform: &str) -> Result<ReleaseU
         .assets
         .iter()
         .any(|a| a.name.ends_with(suffix) && a.state == "uploaded" && a.size > 0);
+    let state = release_state(latest, installed, platform, ready);
     Ok(ReleaseUpdate {
         current_version: current.into(),
         latest_version: Some(release.tag_name.trim_start_matches('v').into()),
-        available: !release.draft && !release.prerelease && ready && latest > installed,
+        available: state == ReleaseState::Available,
+        state,
         notes: release
             .body
             .unwrap_or_default()
@@ -98,13 +142,7 @@ fn fetch() -> Result<ReleaseUpdate, String> {
         return fetch_web_release(&client);
     }
     if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(ReleaseUpdate {
-            current_version: env!("CARGO_PKG_VERSION").into(),
-            latest_version: None,
-            available: false,
-            notes: String::new(),
-            url: RELEASES.into(),
-        });
+        return Ok(no_release(env!("CARGO_PKG_VERSION")));
     }
     let response = response
         .error_for_status()
@@ -140,10 +178,12 @@ fn interpret_web_release(
         .skip(1)
         .filter_map(|s| s.split('"').next())
         .any(|path| path.starts_with(&prefix) && path.ends_with(suffix));
+    let state = release_state(version, installed, platform, ready);
     Ok(ReleaseUpdate {
         current_version: current.into(),
         latest_version: Some(tag.trim_start_matches('v').into()),
-        available: ready && version > installed,
+        available: state == ReleaseState::Available,
+        state,
         notes: String::new(),
         url: format!("{RELEASES}/tag/{tag}"),
     })
@@ -156,6 +196,9 @@ fn fetch_web_release(client: &reqwest::blocking::Client) -> Result<ReleaseUpdate
         .get(format!("{RELEASES}/latest"))
         .send()
         .map_err(|_| "update_network_unavailable")?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(no_release(env!("CARGO_PKG_VERSION")));
+    }
     if !response.status().is_redirection() {
         return Err("update_service_unavailable".into());
     }
@@ -286,6 +329,64 @@ mod tests {
             )
             .unwrap()
             .available
+        );
+    }
+    #[test]
+    fn reports_publication_and_platform_readiness_without_claiming_current_is_latest() {
+        assert_eq!(no_release("0.2.0").state, ReleaseState::NoRelease);
+        assert_eq!(
+            interpret(release("v0.3.0", "App.exe"), "0.2.0", "macos")
+                .unwrap()
+                .state,
+            ReleaseState::PlatformPending
+        );
+        assert_eq!(
+            interpret(release("v0.3.0", "App.dmg"), "0.2.0", "macos")
+                .unwrap()
+                .state,
+            ReleaseState::Available
+        );
+        assert_eq!(
+            interpret(release("v0.2.0", "App.dmg"), "0.2.0", "macos")
+                .unwrap()
+                .state,
+            ReleaseState::UpToDate
+        );
+        assert_eq!(
+            interpret(release("v0.1.0", "App.dmg"), "0.2.0", "macos")
+                .unwrap()
+                .state,
+            ReleaseState::UpToDate
+        );
+        assert_eq!(
+            interpret(release("v0.3.0", "App.dmg"), "0.2.0", "linux")
+                .unwrap()
+                .state,
+            ReleaseState::UnsupportedPlatform
+        );
+        let mut pending = release("v0.3.0", "App.exe");
+        pending.assets[0].state = "uploading".into();
+        assert_eq!(
+            interpret(pending, "0.2.0", "windows").unwrap().state,
+            ReleaseState::PlatformPending
+        );
+        let mut prerelease = release("v0.3.0-rc.1", "App.exe");
+        prerelease.prerelease = true;
+        assert_eq!(
+            interpret(prerelease, "0.2.0", "windows").unwrap().state,
+            ReleaseState::NoRelease
+        );
+        assert_eq!(
+            interpret_web_release("v0.3.0", "", "0.2.0", "windows")
+                .unwrap()
+                .state,
+            ReleaseState::PlatformPending
+        );
+        assert_eq!(
+            interpret_web_release("v0.2.0", "", "0.2.0", "windows")
+                .unwrap()
+                .state,
+            ReleaseState::UpToDate
         );
     }
     #[test]

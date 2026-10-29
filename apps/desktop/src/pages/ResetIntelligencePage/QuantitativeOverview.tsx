@@ -8,6 +8,7 @@ import { publicEvidenceTime } from "./presentation";
 import { EvidenceLink } from "./ArchiveView";
 import { TiboBriefing } from "./TiboBriefing";
 import { CommunityForecasts } from "./CommunityForecasts";
+import { CommunityInputStatus, communityQuestion } from "./CommunityInputStatus";
 import { CalendarSentiment } from "./CalendarSentiment";
 import { ProbabilityCurve, QuantitativeTrend } from "./QuantitativeTrend";
 import { ModuleRuntimeStatus } from "./ModuleRuntimeStatus";
@@ -134,10 +135,12 @@ function Community({ view, language, now }: { view: QuantitativeView; language: 
             {c.mapping_kind ? (zh ? " · 已折减重复点击影响" : " · repeated-click sensitivity applied")
               : `${zh ? " · 有效样本 " : " · Effective sample "}${c.effective_votes?.toFixed(1) ?? "—"}`}</span>
           {c.latest_vote_at != null && <small>{zh ? "最近检测到新增票：" : "Latest new ballots observed: "}{publicEvidenceTime(new Date(c.latest_vote_at * 1000).toISOString(), language)}</small>}
+          {f.community_diagnostics?.filter(d => d.id === c.id).map(d => <small key={d.id}>{communityQuestion(d, language)}</small>)}
           <small>{zh ? "原期限还剩 " : "Original window remaining: "}{c.coverage_hours?.toFixed(1) ?? "—"}h{c.coverage_hours != null && c.coverage_hours < 48 ? c.mapping_kind ? (zh ? " · 仅修正该时段" : " · adjustment scoped to this window") : (zh ? " · 超出期限接历史基准" : " · baseline after deadline") : ""}</small>
           {c.terminal_probability != null && c.window_end != null && <small>{zh ? "原期限内预估 " : "Estimate by original deadline "}{percent(c.terminal_probability)} · <time dateTime={new Date(c.window_end * 1000).toISOString()}>{publicEvidenceTime(new Date(c.window_end * 1000).toISOString(), language)}</time></small>}</div>
         <div><strong>{percent(c.weight)}</strong><small>{zh ? "实际权重" : "Applied weight"}</small><span>24h {percent(c.probability_24h)}<br />48h {percent(c.probability_48h)}</span></div>
       </div>)}
+      <CommunityInputStatus forecast={f} language={language} />
       {f.community_coverage && <p className={styles.coverage}>{zh ? `${f.community_coverage.included} 项有效 · ${f.community_coverage.unavailable} 项待新数据或质量达标` : `${f.community_coverage.included} eligible · ${f.community_coverage.unavailable} awaiting fresh or qualifying data`}
         {f.community_coverage.supplementary_checked > 0 && <span>{zh ? `补充社区指标：${f.community_coverage.supplementary_included}/${f.community_coverage.supplementary_checked} 项纳入，权重 ` : `Supplementary community indicators: ${f.community_coverage.supplementary_included}/${f.community_coverage.supplementary_checked} admitted, weight `}{percent(f.community_coverage.supplementary_weight)}</span>}</p>}
     </section>)}</div></details>
