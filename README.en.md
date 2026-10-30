@@ -30,7 +30,7 @@ Both installers include the forecasting and evaluation modules; collection start
 
 ## Interface
 
-These previews use actual product components with synthetic data.
+These screenshots use actual product components. Menu, account and history previews use synthetic data; the radar uses a snapshot of collected public information.
 
 **Menu-bar popover**: quota, reset countdowns and access to accounts.
 
@@ -40,7 +40,7 @@ These previews use actual product components with synthetic data.
 
 ![Account overview](docs/images/accounts-preview.en.png)
 
-**Reset radar**: combined outlook, 24h probability candlesticks and source comparisons, community inputs and full statements.
+**Reset radar** (2026-10-30 snapshot): combined outlook, 24h probability candlesticks and source comparisons, community inputs and full statements.
 
 ![Reset radar](docs/images/reset-radar-preview.en.png)
 
