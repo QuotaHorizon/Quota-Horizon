@@ -36,7 +36,7 @@ These previews use actual product components with synthetic data.
 
 <img src="docs/images/menu-popover-preview.en.png" alt="Menu-bar popover" width="460">
 
-**Account overview**: quota, plan type and reset times for each account.
+**Account overview**: quota, plan type, reset times and reset-card expiry for each account.
 
 ![Account overview](docs/images/accounts-preview.en.png)
 

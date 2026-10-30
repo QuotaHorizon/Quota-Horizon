@@ -10,7 +10,7 @@ import { LiveSourcesView } from "../pages/ResetIntelligencePage/LiveSourcesPanel
 import { ResetNoticeChip } from "../components/CapacityPopover/ResetNoticeChip";
 import { quantitativeFixture } from "./quantitativeFixture";
 import type { PublicResetTimeline, RadarView } from "../pages/ResetIntelligencePage/types";
-import type { Account } from "../types";
+import type { Account, ResetCreditsLoadState } from "../types";
 import { LANGUAGE_STORAGE_KEY, translate } from "../i18n";
 import { applyThemeColor, DEFAULT_THEME_COLOR } from "../utils/theme";
 import "antd/dist/reset.css";
@@ -32,8 +32,8 @@ const noop = () => undefined;
 const unchanged = async () => false;
 const noIds = async () => [];
 const accounts: Account[] = [
-  { plan: "Pro", remaining: 72.4, short: null, email: "research@example.com" },
-  { plan: "Plus", remaining: 81, short: 94, email: "studio@example.com" },
+  { plan: "Pro", remaining: 72.4, short: null, email: "a@example.com" },
+  { plan: "Plus", remaining: 81, short: 94, email: "b@example.com" },
   { plan: "Plus", remaining: 36.8, short: 62, email: "writing@example.com" },
 ].map((sample, index) => ({
   id: `synthetic-account-${index}`, email: sample.email, note: "", expiresAt: "",
@@ -49,6 +49,15 @@ const accounts: Account[] = [
     fetchedAt: new Date().toISOString(),
   },
 }));
+const resetCredits: Record<string, ResetCreditsLoadState> = {
+  "synthetic-account-0": { status: "loaded", fetchedAt: observed, data: { credits: [
+    { available: true, issuedAt: new Date(now - 2 * 86400_000).toISOString(), expiresAt: new Date(now + 3 * 3600_000).toISOString() },
+    { available: true, issuedAt: new Date(now - 86400_000).toISOString(), expiresAt: new Date(now + 2 * 86400_000).toISOString() },
+  ] } },
+  "synthetic-account-1": { status: "loaded", fetchedAt: observed, data: { credits: [
+    { available: true, issuedAt: new Date(now - 86400_000).toISOString(), expiresAt: new Date(now + 86400_000).toISOString() },
+  ] } },
+};
 const timeline: PublicResetTimeline = {
   quantitative: query.get("quant") ? quantitativeFixture(now, query.get("quant") === "scored") : undefined,
   sources: [
@@ -150,7 +159,7 @@ function Preview() {
             insights={timeline.insights} now={now} language={language} onOpen={noop} /></div>}</>
         : <AccountsPage active accounts={accounts} providers={[]} loading={false} busyAccountId={null}
           refreshingAccountIds={[]} refreshingAll={false} refreshProgress={null} localProxy={null} proxyBusy={false}
-          resetCredits={{}} onAdd={noop} onSwitch={noop} onDeactivate={noop} onRollbackLastChange={noop}
+          resetCredits={resetCredits} onAdd={noop} onSwitch={noop} onDeactivate={noop} onRollbackLastChange={noop}
           rollbackLastChangeBusy={false} onCopyAuthJson={noop} onRefresh={noop} onRefreshAll={noop} onDelete={noop}
           onConsumeQuotaMany={noIds} onDeleteMany={noIds} onEnableMany={noIds} onDisableMany={noIds}
           onAutoSwitchEnabledChange={noop} autoSwitchBusyAccountId={null}
