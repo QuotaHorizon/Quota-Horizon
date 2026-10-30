@@ -36,7 +36,7 @@ QuotaHorizon 还会自动汇集重置预测和相关公开发言，方便随时�
 
 <img src="docs/images/menu-popover-preview.png" alt="菜单栏弹窗" width="460">
 
-**多账号总览**：各账号的额度、套餐和重置时间。
+**多账号总览**：各账号的额度、套餐、重置时间和重置卡到期状态。
 
 ![多账号总览](docs/images/accounts-preview.png)
 
